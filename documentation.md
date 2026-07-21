@@ -251,6 +251,17 @@ formed a contiguous chain, the move/undo/redo diffs carried interaction IDs,
 validation succeeded, and shutdown was clean. Canonical insertion and grouped
 movement are therefore proven reversible for this pilot representation.
 
+The trim run, `pilot-session-013.jsonl`, passed canonical resize and reversible
+hash restoration. A grouped resize changed both linked AV clips from 240 to 108
+frames and their source end from 239 to 107. Undo restored the exact pre-trim
+hash and redo restored the trimmed hash. An unintended 90-frame composition
+was also inserted earlier in the session and was represented correctly in the
+chain. Kdenlive temporarily displayed a not-responding prompt during the
+interactive trim, then recovered and closed normally. Undo/redo snapshot and
+diff events followed their history events within approximately 0–1 ms, while
+the pause occurred before the resize commit boundary; current evidence points
+to the interactive Kdenlive trim path rather than JSON serialization.
+
 ### Privacy and security
 
 The collector can reveal editor behavior, project structure, local file paths,

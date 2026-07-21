@@ -12,6 +12,7 @@
 #include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QKeyEvent>
 #include <QKeySequence>
 #include <QMenu>
 #include <QMouseEvent>
@@ -19,6 +20,7 @@
 #include <QShortcutEvent>
 #include <QSysInfo>
 #include <QTimer>
+#include <QToolButton>
 #include <QUuid>
 #include <QWidget>
 
@@ -102,10 +104,16 @@ void VideoPathRecorder::recordCommand(QAction *action, bool checked)
         return;
     }
     QString source = QStringLiteral("programmatic_or_unknown");
+    QString interactionId = QUuid::createUuid().toString(QUuid::WithoutBraces);
     if (m_lastShortcut.isValid() && m_lastShortcut.elapsed() < 500) {
         source = QStringLiteral("keyboard");
+        interactionId = m_lastInputInteractionId;
     } else if (m_lastMenuClick.isValid() && m_lastMenuClick.elapsed() < 500) {
         source = QStringLiteral("menu");
+        interactionId = m_lastInputInteractionId;
+    } else if (m_lastToolbarClick.isValid() && m_lastToolbarClick.elapsed() < 500) {
+        source = QStringLiteral("toolbar");
+        interactionId = m_lastInputInteractionId;
     }
     QString commandId = action->objectName();
     if (commandId.isEmpty()) {
@@ -119,7 +127,7 @@ void VideoPathRecorder::recordCommand(QAction *action, bool checked)
     }
     QJsonObject event;
     event.insert(QStringLiteral("event_type"), QStringLiteral("ui.command"));
-    event.insert(QStringLiteral("interaction_id"), QUuid::createUuid().toString(QUuid::WithoutBraces));
+    event.insert(QStringLiteral("interaction_id"), interactionId);
     event.insert(QStringLiteral("command_id"), commandId);
     event.insert(QStringLiteral("label"), label);
     event.insert(QStringLiteral("source"), source);
@@ -127,6 +135,27 @@ void VideoPathRecorder::recordCommand(QAction *action, bool checked)
     event.insert(QStringLiteral("shortcuts"), shortcuts);
     event.insert(QStringLiteral("focus"), describeObject(QApplication::focusWidget()));
     writeEvent(event);
+}
+
+void VideoPathRecorder::recordShortcut(const QKeySequence &sequence, bool ambiguous)
+{
+    const QString portableSequence = sequence.toString(QKeySequence::PortableText);
+    if (portableSequence.isEmpty()) {
+        return;
+    }
+    if (m_lastShortcut.isValid() && m_lastShortcut.elapsed() < 100 && m_lastShortcutSequence == portableSequence) {
+        return;
+    }
+    m_lastShortcut.restart();
+    m_lastShortcutSequence = portableSequence;
+    m_lastInputInteractionId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    QJsonObject shortcutEvent;
+    shortcutEvent.insert(QStringLiteral("event_type"), QStringLiteral("ui.shortcut"));
+    shortcutEvent.insert(QStringLiteral("interaction_id"), m_lastInputInteractionId);
+    shortcutEvent.insert(QStringLiteral("key_sequence"), portableSequence);
+    shortcutEvent.insert(QStringLiteral("ambiguous"), ambiguous);
+    shortcutEvent.insert(QStringLiteral("focus"), describeObject(QApplication::focusWidget()));
+    writeEvent(shortcutEvent);
 }
 
 QString VideoPathRecorder::describeObject(const QObject *object)
@@ -139,10 +168,33 @@ QString VideoPathRecorder::describeObject(const QObject *object)
                           : QStringLiteral("%1#%2").arg(QString::fromLatin1(object->metaObject()->className()), name);
 }
 
-bool VideoPathRecorder::belongsToTimeline(const QObject *object)
+bool VideoPathRecorder::isTimelineCanvasTarget(const QObject *object)
 {
+    if (!object || !QString::fromLatin1(object->metaObject()->className()).contains(QStringLiteral("QQuick"))) {
+        return false;
+    }
     for (const QObject *current = object; current; current = current->parent()) {
         if (describeObject(current).contains(QStringLiteral("timeline"), Qt::CaseInsensitive)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool VideoPathRecorder::hasMenuAncestor(const QObject *object)
+{
+    for (const QObject *current = object; current; current = current->parent()) {
+        if (qobject_cast<const QMenu *>(current)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool VideoPathRecorder::hasToolButtonAncestor(const QObject *object)
+{
+    for (const QObject *current = object; current; current = current->parent()) {
+        if (qobject_cast<const QToolButton *>(current)) {
             return true;
         }
     }
@@ -153,21 +205,25 @@ bool VideoPathRecorder::eventFilter(QObject *watched, QEvent *event)
 {
     if (event->type() == QEvent::ChildAdded || event->type() == QEvent::Show) {
         QTimer::singleShot(0, this, &VideoPathRecorder::attachActions);
+    } else if (event->type() == QEvent::KeyPress) {
+        const auto *key = static_cast<QKeyEvent *>(event);
+        const bool hasShortcutModifier = key->modifiers().testAnyFlags(Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier);
+        const bool isFunctionKey = key->key() >= Qt::Key_F1 && key->key() <= Qt::Key_F35;
+        if (!key->isAutoRepeat() && (hasShortcutModifier || isFunctionKey)) {
+            recordShortcut(QKeySequence(QKeyCombination(key->modifiers(), Qt::Key(key->key()))), false);
+        }
     } else if (event->type() == QEvent::Shortcut) {
         const auto *shortcut = static_cast<QShortcutEvent *>(event);
-        m_lastShortcut.restart();
-        QJsonObject shortcutEvent;
-        shortcutEvent.insert(QStringLiteral("event_type"), QStringLiteral("ui.shortcut"));
-        shortcutEvent.insert(QStringLiteral("interaction_id"), QUuid::createUuid().toString(QUuid::WithoutBraces));
-        shortcutEvent.insert(QStringLiteral("key_sequence"), shortcut->key().toString(QKeySequence::PortableText));
-        shortcutEvent.insert(QStringLiteral("ambiguous"), shortcut->isAmbiguous());
-        shortcutEvent.insert(QStringLiteral("focus"), describeObject(QApplication::focusWidget()));
-        writeEvent(shortcutEvent);
-    } else if (event->type() == QEvent::MouseButtonRelease && qobject_cast<QMenu *>(watched)) {
+        recordShortcut(shortcut->key(), shortcut->isAmbiguous());
+    } else if (event->type() == QEvent::MouseButtonPress && hasMenuAncestor(watched)) {
         m_lastMenuClick.restart();
+        m_lastInputInteractionId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    } else if (event->type() == QEvent::MouseButtonPress && hasToolButtonAncestor(watched)) {
+        m_lastToolbarClick.restart();
+        m_lastInputInteractionId = QUuid::createUuid().toString(QUuid::WithoutBraces);
     }
 
-    if (belongsToTimeline(watched) && (event->type() == QEvent::MouseButtonPress || event->type() == QEvent::MouseButtonRelease)) {
+    if (isTimelineCanvasTarget(watched) && (event->type() == QEvent::MouseButtonPress || event->type() == QEvent::MouseButtonRelease)) {
         const auto *mouse = static_cast<QMouseEvent *>(event);
         if (event->type() == QEvent::MouseButtonPress) {
             m_pointerInteractionId = QUuid::createUuid().toString(QUuid::WithoutBraces);

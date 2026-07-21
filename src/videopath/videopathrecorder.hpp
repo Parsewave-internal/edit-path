@@ -18,6 +18,8 @@
 class QFile;
 class QAction;
 class QApplication;
+class QKeyEvent;
+class QKeySequence;
 
 /** Append-only recorder for software-independent Video Path events. */
 class VideoPathRecorder : public QObject
@@ -40,9 +42,12 @@ private:
     void writeSessionEnd();
     void attachActions();
     void recordCommand(QAction *action, bool checked);
+    void recordShortcut(const QKeySequence &sequence, bool ambiguous);
     bool eventFilter(QObject *watched, QEvent *event) override;
     static QString describeObject(const QObject *object);
-    static bool belongsToTimeline(const QObject *object);
+    static bool isTimelineCanvasTarget(const QObject *object);
+    static bool hasMenuAncestor(const QObject *object);
+    static bool hasToolButtonAncestor(const QObject *object);
 
     mutable QMutex m_mutex;
     std::unique_ptr<QFile> m_file;
@@ -51,6 +56,9 @@ private:
     QSet<QAction *> m_actions;
     QElapsedTimer m_lastShortcut;
     QElapsedTimer m_lastMenuClick;
+    QElapsedTimer m_lastToolbarClick;
+    QString m_lastInputInteractionId;
+    QString m_lastShortcutSequence;
     QString m_pointerInteractionId;
     QPointF m_pointerStart;
     QString m_pointerTarget;

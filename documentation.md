@@ -132,6 +132,24 @@ Version 1 semantic outcome event was emitted. The next iteration must improve
 input-source correlation, narrow gesture targeting to the QML timeline canvas,
 and explicitly test a known shortcut.
 
+## Version 2.1: input correlation and gesture filtering
+
+Version 2.1 addresses the three defects found in session `005`:
+
+- modified-key and function-key presses are captured centrally and deduplicated
+  against Qt shortcut events without recording typed text;
+- menu and toolbar mouse presses establish the input source before the action
+  fires, allowing commands to be classified as `menu`, `toolbar`, `keyboard`,
+  or `programmatic_or_unknown`;
+- the shortcut and resulting command share an interaction ID;
+- gestures are accepted only from Qt Quick objects whose ancestry belongs to
+  the timeline, excluding widget-based toolbars and combo boxes.
+
+The Version 2.1 acceptance test must deliberately invoke one menu command, one
+toolbar command, and `Ctrl+Z`, then click and drag on the timeline. The expected
+record contains each source classification, a `ui.shortcut` paired to its
+keyboard `ui.command`, only QML timeline gesture targets, and `session.end`.
+
 ### Privacy and security
 
 The collector can reveal editor behavior, project structure, local file paths,

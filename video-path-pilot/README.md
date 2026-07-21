@@ -19,7 +19,7 @@ The pilot is based on upstream Kdenlive revision
 Version 2 interaction events:
 
 - `ui.command` for discovered Qt actions;
-- `ui.shortcut` without raw typed text;
+- `ui.shortcut` for modified/function keys without raw typed text;
 - `ui.gesture` for timeline clicks and drags;
 - `session.end` on normal application exit.
 

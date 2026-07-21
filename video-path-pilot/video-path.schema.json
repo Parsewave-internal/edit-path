@@ -36,7 +36,7 @@
     "label": { "type": "string" },
     "interaction_id": { "type": "string", "minLength": 1 },
     "command_id": { "type": "string", "minLength": 1 },
-    "source": { "enum": ["keyboard", "menu", "programmatic_or_unknown"] },
+    "source": { "enum": ["keyboard", "menu", "toolbar", "programmatic_or_unknown"] },
     "shortcuts": { "type": "array", "items": { "type": "string" } },
     "key_sequence": { "type": "string" },
     "gesture": { "enum": ["click", "drag"] },

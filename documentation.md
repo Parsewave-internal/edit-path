@@ -243,6 +243,14 @@ clip instances: a video item on track 3 and an audio item on track 2. Both were
 719 frames. This proves canonical insertion outcome capture; movement and
 reversible hash restoration remain separate acceptance gates.
 
+The movement run, `pilot-session-012.jsonl`, passed the remaining movement and
+reversibility gates. After insertion added linked audio/video instances at
+frame 431, a grouped move updated both to frame 892. Undo restored the exact
+post-insertion hash and redo restored the exact post-move hash. All four diffs
+formed a contiguous chain, the move/undo/redo diffs carried interaction IDs,
+validation succeeded, and shutdown was clean. Canonical insertion and grouped
+movement are therefore proven reversible for this pilot representation.
+
 ### Privacy and security
 
 The collector can reveal editor behavior, project structure, local file paths,

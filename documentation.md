@@ -159,6 +159,16 @@ plausible event-queue storm when a file dialog was opened. Action discovery is
 now child-event-only and debounced so at most one scan is pending. This is a
 preventive recorder fix; the available evidence does not prove sole causation.
 
+The follow-up run, `pilot-session-007.jsonl`, completed normally with 40 valid
+events and a clean `session.end`; the hang did not recur. It recorded one menu
+command, one toolbar command, five timeline-only Qt Quick gestures (two clicks
+and three drags), undo and redo history outcomes, and modified-key shortcuts.
+This passes the core Version 2.1 capture gate. It also exposed two remaining
+quality defects: modifier keys were emitted as noise (`Ctrl+Control` and
+`Ctrl+Shift+Shift`), and shortcut events were not linked to their undo/redo
+history outcome by interaction ID. These should be corrected before state-diff
+development.
+
 ### Privacy and security
 
 The collector can reveal editor behavior, project structure, local file paths,

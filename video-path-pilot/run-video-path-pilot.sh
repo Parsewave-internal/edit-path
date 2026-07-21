@@ -34,6 +34,9 @@ export LD_LIBRARY_PATH="$craft_root/lib:$craft_root/usr/lib/x86_64-linux-gnu${LD
 export PKG_CONFIG_PATH="$craft_root/lib/pkgconfig:$craft_root/share/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
 export FONTCONFIG_FILE="$craft_root/etc/fonts/fonts.conf"
 export FONTCONFIG_PATH="$craft_root/etc/fonts"
+export MLT_PREFIX="$craft_root"
+export MLT_DATA="$craft_root/share/mlt-7"
+export MLT_REPOSITORY="$craft_root/lib/mlt-7"
 export KDENLIVE_VIDEO_PATH_LOG=$log_path
 
 exec "$binary"

@@ -180,6 +180,12 @@ same `interaction_id`, preserving the causal link. Other normalization and
 source cleanup remain offline responsibilities so state-diff work is not
 delayed.
 
+The confirmation run, `pilot-session-008.jsonl`, passed Version 2.2 acceptance.
+It contained 11 valid events and a clean `session.end`. No modifier-only noise
+was present. Two `Ctrl+Z` shortcuts and one `Ctrl+Shift+Z` shortcut each shared
+their interaction ID with the corresponding `history.undo` or `history.redo`
+outcome. The causal shortcut-cleanup milestone is therefore complete.
+
 ### Privacy and security
 
 The collector can reveal editor behavior, project structure, local file paths,

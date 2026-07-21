@@ -234,4 +234,3 @@ void VideoPathRecorder::writeSessionEnd()
     event.insert(QStringLiteral("reason"), QStringLiteral("application.quit"));
     writeEvent(event);
 }
-

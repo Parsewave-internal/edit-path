@@ -4,4 +4,3 @@
 {"event_type":"ui.gesture","interaction_id":"example-interaction-3","gesture":"drag","target":"TimelineWidget","button":1,"start_global":{"x":400,"y":600},"end_global":{"x":650,"y":600},"modifiers":0,"schema_version":"0.2.0","session_id":"example-session","sequence":4,"event_id":"example-event-4","timestamp_utc":"2026-07-21T10:00:02.000Z"}
 {"event_type":"action","action":"clip.move","timeline_id":"example-timeline","parameters":{"clip_id":7,"from_track_id":2,"from_timeline_frame":0,"to_track_id":2,"to_timeline_frame":100,"native_id_scope":"session"},"schema_version":"0.2.0","session_id":"example-session","sequence":5,"event_id":"example-event-5","timestamp_utc":"2026-07-21T10:00:02.010Z"}
 {"event_type":"session.end","reason":"application.quit","schema_version":"0.2.0","session_id":"example-session","sequence":6,"event_id":"example-event-6","timestamp_utc":"2026-07-21T10:00:03.000Z"}
-

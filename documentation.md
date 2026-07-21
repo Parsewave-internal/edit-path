@@ -194,4 +194,3 @@ python3 video-path-pilot/validate_video_path.py \
 Update this file whenever the recorder architecture, event schema, acceptance
 results, known limitations, build/run procedure, or roadmap changes. Do not
 erase failed experiments; document what was attempted and why it changed.
-

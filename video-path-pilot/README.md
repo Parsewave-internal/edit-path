@@ -115,4 +115,3 @@ limitations documented in `documentation.md`.
 The next gate is not broader instrumentation. It is persistent identities plus
 a replay test proving that the six pilot operations reconstruct the same
 timeline state.
-

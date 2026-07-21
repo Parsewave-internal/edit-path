@@ -56,4 +56,3 @@ private:
     QString m_pointerTarget;
     int m_pointerButton{0};
 };
-

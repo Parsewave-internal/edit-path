@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/video-path/0.1.0/event.schema.json",
+  "title": "Video Path pilot event",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "session_id",
+    "sequence",
+    "event_id",
+    "timestamp_utc",
+    "event_type"
+  ],
+  "properties": {
+    "schema_version": { "const": "0.1.0" },
+    "session_id": { "type": "string", "minLength": 1 },
+    "sequence": { "type": "integer", "minimum": 1 },
+    "event_id": { "type": "string", "minLength": 1 },
+    "timestamp_utc": { "type": "string", "format": "date-time" },
+    "event_type": {
+      "enum": ["session.start", "action", "history"]
+    },
+    "action": {
+      "enum": [
+        "clip.insert",
+        "clip.move",
+        "clip.trim",
+        "clip.split",
+        "clip.delete",
+        "history.undo",
+        "history.redo"
+      ]
+    },
+    "timeline_id": { "type": "string" },
+    "parameters": { "type": "object" },
+    "label": { "type": "string" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "event_type": { "const": "action" } } },
+      "then": { "required": ["action", "timeline_id", "parameters"] }
+    },
+    {
+      "if": { "properties": { "event_type": { "const": "history" } } },
+      "then": { "required": ["action", "label"] }
+    }
+  ],
+  "additionalProperties": true
+}

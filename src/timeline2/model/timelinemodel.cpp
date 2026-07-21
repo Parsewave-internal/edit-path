@@ -22,9 +22,10 @@
 #include "kdenlivesettings.h"
 #include "profiles/profilemodel.hpp"
 #include "snapmodel.hpp"
-#include "timeline2/view/previewmanager.h"
 #include "timeline2/view/dialogs/autotrackcreationdialog.h"
+#include "timeline2/view/previewmanager.h"
 #include "timelinefunctions.hpp"
+#include "videopath/videopathrecorder.hpp"
 
 #include "monitor/monitormanager.h"
 
@@ -32,6 +33,7 @@
 #include <QApplication>
 #include <QCryptographicHash>
 #include <QDebug>
+#include <QJsonObject>
 #include <QModelIndex>
 #include <QThread>
 #include <mlt++/MltConsumer.h>
@@ -1422,6 +1424,8 @@ bool TimelineModel::requestClipMove(int clipId, int trackId, int position, bool 
     QWriteLocker locker(&m_lock);
     TRACE(clipId, trackId, position, updateView, logUndo, invalidateTimeline);
     Q_ASSERT(m_allClips.count(clipId) > 0);
+    const int videoPathOldTrackId = getClipTrackId(clipId);
+    const int videoPathOldPosition = m_allClips[clipId]->getPosition();
     if (m_allClips[clipId]->getPosition() == position && getClipTrackId(clipId) == trackId) {
         TRACE_RES(true);
         return true;
@@ -1447,6 +1451,14 @@ bool TimelineModel::requestClipMove(int clipId, int trackId, int position, bool 
                TimelineModel::MoveSuccess;
     if (res && logUndo) {
         PUSH_UNDO(undo, redo, i18n("Move clip"));
+        QJsonObject parameters;
+        parameters.insert(QStringLiteral("clip_id"), clipId);
+        parameters.insert(QStringLiteral("from_track_id"), videoPathOldTrackId);
+        parameters.insert(QStringLiteral("from_timeline_frame"), videoPathOldPosition);
+        parameters.insert(QStringLiteral("to_track_id"), getClipTrackId(clipId));
+        parameters.insert(QStringLiteral("to_timeline_frame"), m_allClips[clipId]->getPosition());
+        parameters.insert(QStringLiteral("native_id_scope"), QStringLiteral("session"));
+        VideoPathRecorder::instance().recordAction(QStringLiteral("clip.move"), m_uuid.toString(QUuid::WithoutBraces), parameters);
     }
     TRACE_RES(res);
     return res;
@@ -2046,6 +2058,15 @@ bool TimelineModel::requestClipInsertion(const QString &binClipId, int trackId, 
     if (result) {
         if (logUndo) {
             PUSH_UNDO(undo, redo, i18n("Insert Clip"));
+            QJsonObject parameters;
+            parameters.insert(QStringLiteral("asset_reference"), binClipId);
+            parameters.insert(QStringLiteral("clip_id"), id);
+            parameters.insert(QStringLiteral("track_id"), getClipTrackId(id));
+            parameters.insert(QStringLiteral("timeline_start_frame"), getItemPosition(id));
+            parameters.insert(QStringLiteral("source_start_frame"), getClipIn(id));
+            parameters.insert(QStringLiteral("duration_frames"), getItemPlaytime(id));
+            parameters.insert(QStringLiteral("native_id_scope"), QStringLiteral("session"));
+            VideoPathRecorder::instance().recordAction(QStringLiteral("clip.insert"), m_uuid.toString(QUuid::WithoutBraces), parameters);
         }
     }
     else if (logUndo) {
@@ -2613,6 +2634,10 @@ bool TimelineModel::requestItemDeletion(int itemId, bool logUndo)
     QWriteLocker locker(&m_lock);
     TRACE(itemId, logUndo);
     Q_ASSERT(isItem(itemId));
+    const bool videoPathIsClip = isClip(itemId);
+    const int videoPathTrackId = videoPathIsClip ? getClipTrackId(itemId) : -1;
+    const int videoPathPosition = videoPathIsClip ? getItemPosition(itemId) : -1;
+    const int videoPathDuration = videoPathIsClip ? getItemPlaytime(itemId) : -1;
     QString actionLabel;
     bool singleSelectOperation = m_singleSelectionMode && m_currentSelection.find(itemId) != m_currentSelection.end();
     if (!singleSelectOperation && m_groups->isInGroup(itemId)) {
@@ -2646,6 +2671,15 @@ bool TimelineModel::requestItemDeletion(int itemId, bool logUndo)
     }
     if (res && logUndo) {
         PUSH_UNDO(undo, redo, actionLabel);
+        if (videoPathIsClip && !singleSelectOperation) {
+            QJsonObject parameters;
+            parameters.insert(QStringLiteral("clip_id"), itemId);
+            parameters.insert(QStringLiteral("track_id"), videoPathTrackId);
+            parameters.insert(QStringLiteral("timeline_start_frame"), videoPathPosition);
+            parameters.insert(QStringLiteral("duration_frames"), videoPathDuration);
+            parameters.insert(QStringLiteral("native_id_scope"), QStringLiteral("session"));
+            VideoPathRecorder::instance().recordAction(QStringLiteral("clip.delete"), m_uuid.toString(QUuid::WithoutBraces), parameters);
+        }
     }
     TRACE_RES(res);
     return res;
@@ -4190,6 +4224,10 @@ int TimelineModel::requestItemResize(int itemId, int size, bool right, bool logU
     QWriteLocker locker(&m_lock);
     TRACE(itemId, size, right, logUndo, snapDistance, allowSingleResize)
     Q_ASSERT(isItem(itemId));
+    const bool videoPathIsClip = isClip(itemId);
+    const int videoPathOldPosition = videoPathIsClip ? getItemPosition(itemId) : -1;
+    const int videoPathOldDuration = videoPathIsClip ? getItemPlaytime(itemId) : -1;
+    const int videoPathOldSourceStart = videoPathIsClip ? getClipIn(itemId) : -1;
     if (size <= 0) {
         // cppcheck-suppress unknownMacro
         TRACE_RES(-1)
@@ -4508,6 +4546,19 @@ int TimelineModel::requestItemResize(int itemId, int size, bool right, bool logU
         }
     }
     int res = result ? size : -1;
+    if (result && logUndo && videoPathIsClip) {
+        QJsonObject parameters;
+        parameters.insert(QStringLiteral("clip_id"), itemId);
+        parameters.insert(QStringLiteral("edge"), right ? QStringLiteral("end") : QStringLiteral("start"));
+        parameters.insert(QStringLiteral("before_timeline_start_frame"), videoPathOldPosition);
+        parameters.insert(QStringLiteral("before_source_start_frame"), videoPathOldSourceStart);
+        parameters.insert(QStringLiteral("before_duration_frames"), videoPathOldDuration);
+        parameters.insert(QStringLiteral("after_timeline_start_frame"), getItemPosition(itemId));
+        parameters.insert(QStringLiteral("after_source_start_frame"), getClipIn(itemId));
+        parameters.insert(QStringLiteral("after_duration_frames"), getItemPlaytime(itemId));
+        parameters.insert(QStringLiteral("native_id_scope"), QStringLiteral("session"));
+        VideoPathRecorder::instance().recordAction(QStringLiteral("clip.trim"), m_uuid.toString(QUuid::WithoutBraces), parameters);
+    }
     TRACE_RES(res)
     return res;
 }

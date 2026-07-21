@@ -17,6 +17,9 @@ packaging/flatpak/.flatpak-builder
 .cache
 .clangd
 compile_commands.json
+__pycache__/
+*.pyc
+/pilot-session-*.jsonl
 
 # VSCode
 .vscode/

@@ -4,6 +4,7 @@
 */
 
 #include "undohelper.hpp"
+#include "videopath/videopathrecorder.hpp"
 #ifdef CRASH_AUTO_TEST
 #include "logger.hpp"
 #endif
@@ -25,6 +26,7 @@ void FunctionalUndoCommand::undo()
     Logger::log_undo(true);
 #endif
     m_undone = true;
+    VideoPathRecorder::instance().recordHistory(QStringLiteral("undo"), text());
     bool res = m_undo();
     Q_ASSERT(res);
     QUndoCommand::undo();
@@ -36,6 +38,7 @@ void FunctionalUndoCommand::redo()
 #ifdef CRASH_AUTO_TEST
         Logger::log_undo(false);
 #endif
+        VideoPathRecorder::instance().recordHistory(QStringLiteral("redo"), text());
         bool res = m_redo();
         Q_ASSERT(res);
     }

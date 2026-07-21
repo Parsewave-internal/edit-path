@@ -77,6 +77,7 @@ list(APPEND kdenlive_SRCS
     mltconnection.cpp
     statusbarmessagelabel.cpp
     undohelper.cpp
+    videopath/videopathrecorder.cpp
     glaxnimatelauncher.cpp
     filefilter.cpp
     powermanagementinterface.cpp
@@ -369,4 +370,3 @@ add_dependencies(kdenlive all_qmllint)
 
 ecm_finalize_qml_module(kdenliveLib
     DESTINATION ${KDE_INSTALL_QMLDIR})
-

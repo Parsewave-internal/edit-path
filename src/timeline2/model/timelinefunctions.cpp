@@ -27,6 +27,7 @@ SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-KDE-Accepted-GPL
 #include "timelineitemmodel.hpp"
 #include "trackmodel.hpp"
 #include "transitions/transitionsrepository.hpp"
+#include "videopath/videopathrecorder.hpp"
 
 #include <KIO/RenameDialog>
 #include <KLocalizedString>
@@ -34,6 +35,7 @@ SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-KDE-Accepted-GPL
 #include <QApplication>
 #include <QDebug>
 #include <QInputDialog>
+#include <QJsonObject>
 #include <QSemaphore>
 #include <unordered_map>
 
@@ -250,6 +252,11 @@ bool TimelineFunctions::requestClipCut(std::shared_ptr<TimelineItemModel> timeli
         local_refresh();
         UPDATE_UNDO_REDO_NOLOCK(local_refresh, local_refresh, undo, redo);
         pCore->pushUndo(undo, redo, i18n("Cut clip"));
+        QJsonObject parameters;
+        parameters.insert(QStringLiteral("clip_id"), clipId);
+        parameters.insert(QStringLiteral("timeline_frame"), position);
+        parameters.insert(QStringLiteral("native_id_scope"), QStringLiteral("session"));
+        VideoPathRecorder::instance().recordAction(QStringLiteral("clip.split"), timeline->uuid().toString(QUuid::WithoutBraces), parameters);
     }
     TRACE_RES(result);
     return result;

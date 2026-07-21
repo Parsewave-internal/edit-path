@@ -485,6 +485,28 @@ language in `video-path-pilot/VOCABULARY.md`, and the machine contract in
 `video-path-pilot/sample.schema.json`. Automated tests cover branch compaction,
 normalization, asset binding, hashes, and package validation.
 
+### No-terminal GUI enhancement
+
+Editor feedback changed the delivery requirement: the MVP must not expose a
+terminal workflow. A native Qt 6 Widgets application now wraps the tested
+collector engine without duplicating its business logic. The window supports
+new/existing sample selection, prompt and plan entry, project profile, ordered
+asset picking, instrumented Kdenlive launch, rationale notes, project/render
+selection, final review, finalization, validation, and visible task status.
+
+The implementation lives under `video-path-pilot/gui/`. The clickable
+`run-collector-app.sh` launcher builds the GUI on first use against the same
+Craft Qt environment used by Kdenlive and then launches it without requiring
+typed commands. Python remains an internal runtime implementation detail;
+editors do not type or see collector commands.
+
+This iteration uses the GitHub feature branch `feature/gui-collector-mvp` so
+the working command-based MVP remains stable on `video-path-pilot`. It should
+be reviewed through a pull request before merge. The current launcher is
+shareable among Linux machines with the project and Craft dependencies; a
+self-contained AppImage or installer is a separate distribution gate before
+sharing outside that controlled environment.
+
 ### Privacy and security
 
 The collector can reveal editor behavior, project structure, local file paths,

@@ -15,6 +15,19 @@ format and language are in `sample.schema.json` and `VOCABULARY.md`.
 
 ## MVP collector
 
+The editor-facing interface is a native Qt desktop app. On Linux, double-click:
+
+```text
+video-path-pilot/run-collector-app.sh
+```
+
+Choose **Run** if the file manager asks whether to display or execute the file.
+The app provides forms and file pickers for the complete workflow; no terminal
+commands are required. The launcher uses the existing Craft/Qt environment and
+builds the small GUI automatically on first use.
+
+The underlying command interface remains available to developers and tests:
+
 ```bash
 python3 video-path-pilot/sample_collector.py --help
 ```

@@ -3,10 +3,40 @@
 
 # Editor workflow for the two-sample MVP
 
-Use a fresh directory for every sample. Do not reuse a crashed or incomplete
-recording. Commands below are run from the repository root.
+The normal editor workflow is entirely graphical. Double-click
+`run-collector-app.sh` in the `video-path-pilot` folder and choose **Run** if
+Linux asks whether to display or execute it. The first launch builds the small
+collector window automatically; subsequent launches open directly.
 
-## 1. Initialize
+Use a fresh directory for every sample. Do not reuse a crashed or incomplete
+recording.
+
+## Graphical workflow
+
+1. Click **Create New Sample**.
+2. Choose a new sample folder and enter editor ID, prompt, initial plan, project
+   profile, and source asset files. Their displayed order becomes
+   `asset_001`, `asset_002`, and so on.
+3. Click **Create Sample**, then **Launch Instrumented Kdenlive**.
+4. In Kdenlive, create a blank project with the displayed profile and import
+   files from the sample's `assets/` directory in filename order.
+5. Edit normally. In the collector window, use **Save Creative Decision** for
+   meaningful choices—not every click.
+6. Save the Kdenlive project, render the final video, and close Kdenlive
+   normally.
+7. In the collector, select the saved project and rendered video, write the
+   final review, and click **Finalize and Validate**.
+8. Watch the output completely and review `sample.json` before client delivery.
+
+If Kdenlive crashes or is force-quit, create a fresh sample rather than reusing
+the incomplete raw recording.
+
+## Command-line fallback for developers
+
+The commands below remain available for diagnosis and automated testing. Hired
+editors do not need to use them.
+
+### Initialize
 
 ```bash
 python3 video-path-pilot/sample_collector.py init \
@@ -19,7 +49,7 @@ python3 video-path-pilot/sample_collector.py init \
 
 The command copies and hashes assets. It never modifies the originals.
 
-## 2. Launch and edit
+### Launch and edit
 
 ```bash
 python3 video-path-pilot/sample_collector.py launch \
@@ -44,7 +74,7 @@ python3 video-path-pilot/sample_collector.py note \
 Render the final video, then close Kdenlive normally. A force-quit makes the
 sample incomplete and it should be recollected.
 
-## 3. Finalize
+### Finalize
 
 ```bash
 python3 video-path-pilot/sample_collector.py finalize \
@@ -58,7 +88,7 @@ Finalization validates the raw session, copies the native project and render,
 hashes every artifact, removes undone work from the accepted branch, creates
 `sample.json`, and validates the completed package.
 
-## 4. Human review before client delivery
+### Human review before client delivery
 
 Watch `output/final.*` completely. Open `sample.json` and verify that assets,
 operation order, frames, prompt, plan, notes, and output are plausible. The MVP

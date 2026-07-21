@@ -491,8 +491,18 @@ template <typename AssetType> QStringList AbstractAssetsRepository<AssetType>::q
     auto separator = u':';
 #endif
     for (const auto dir : qTokenize(qtDataDirsEnv, separator)) {
-        dirs.push_back(QDir::cleanPath(dir.toString() + "/kdenlive/" + assetLocation));
+        const QString root = QDir::cleanPath(dir.toString());
+        const QString installedPath = QDir::cleanPath(root + "/kdenlive/" + assetLocation);
+        if (QDir(installedPath).exists()) {
+            dirs.push_back(installedPath);
+        }
+        // A build-tree launcher points QT_DATA_DIRS directly at Kdenlive's
+        // source data directory, where effects/transitions are not nested
+        // below another "kdenlive" directory.
+        const QString sourcePath = QDir::cleanPath(root + QLatin1Char('/') + assetLocation);
+        if (QDir(sourcePath).exists() && !dirs.contains(sourcePath)) {
+            dirs.push_back(sourcePath);
+        }
     }
     return dirs;
 }
-

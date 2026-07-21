@@ -351,6 +351,16 @@ validator now requires exactly one final `session.end` and explicitly reports
 missing termination as an incomplete crashed/force-quit session. The fade test
 is deferred rather than immediately repeated.
 
+The voluntary retry, `pilot-session-022.jsonl`, reproduced the fade crash. It
+ends after one QML fade-handle click and before any Adjust Fade command,
+effect-state diff or recorder snapshot. Source tracing found that the build-tree
+launcher did not set `QT_DATA_DIRS`; effect discovery therefore searched
+`/kdenlive/effects` while built-in fade definitions reside in the checkout's
+`data/effects`. The asset resolver now supports a source data root as well as
+the installed `share/kdenlive` layout, and the launcher points it at the
+checkout data directory. This is the leading cause, pending a post-fix startup
+and fade check; the evidence still places both crashes before serialization.
+
 ### Privacy and security
 
 The collector can reveal editor behavior, project structure, local file paths,

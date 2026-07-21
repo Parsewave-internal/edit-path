@@ -37,6 +37,7 @@ export FONTCONFIG_PATH="$craft_root/etc/fonts"
 export MLT_PREFIX="$craft_root"
 export MLT_DATA="$craft_root/share/mlt-7"
 export MLT_REPOSITORY="$craft_root/lib/mlt-7"
+export QT_DATA_DIRS="$source_root/data${QT_DATA_DIRS:+:$QT_DATA_DIRS}"
 export KDENLIVE_VIDEO_PATH_LOG=$log_path
 
 exec "$binary"

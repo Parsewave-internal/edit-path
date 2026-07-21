@@ -79,6 +79,9 @@ void VideoPathRecorder::recordHistory(const QString &operation, const QString &l
     event.insert(QStringLiteral("event_type"), QStringLiteral("history"));
     event.insert(QStringLiteral("action"), QStringLiteral("history.%1").arg(operation));
     event.insert(QStringLiteral("label"), label);
+    if (m_lastShortcut.isValid() && m_lastShortcut.elapsed() < 1000 && !m_lastInputInteractionId.isEmpty()) {
+        event.insert(QStringLiteral("interaction_id"), m_lastInputInteractionId);
+    }
     writeEvent(event);
 }
 
@@ -219,9 +222,10 @@ bool VideoPathRecorder::eventFilter(QObject *watched, QEvent *event)
         scheduleActionDiscovery();
     } else if (event->type() == QEvent::KeyPress) {
         const auto *key = static_cast<QKeyEvent *>(event);
+        const bool isModifierOnly = key->key() == Qt::Key_Control || key->key() == Qt::Key_Shift || key->key() == Qt::Key_Alt || key->key() == Qt::Key_Meta;
         const bool hasShortcutModifier = key->modifiers().testAnyFlags(Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier);
         const bool isFunctionKey = key->key() >= Qt::Key_F1 && key->key() <= Qt::Key_F35;
-        if (!key->isAutoRepeat() && (hasShortcutModifier || isFunctionKey)) {
+        if (!key->isAutoRepeat() && !isModifierOnly && (hasShortcutModifier || isFunctionKey)) {
             recordShortcut(QKeySequence(QKeyCombination(key->modifiers(), Qt::Key(key->key()))), false);
         }
     } else if (event->type() == QEvent::Shortcut) {

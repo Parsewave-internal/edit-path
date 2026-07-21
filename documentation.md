@@ -169,6 +169,17 @@ quality defects: modifier keys were emitted as noise (`Ctrl+Control` and
 history outcome by interaction ID. These should be corrected before state-diff
 development.
 
+## Version 2.2: causal shortcut cleanup
+
+Version 2.2 makes only the capture-time corrections that cannot be recovered
+reliably offline. Standalone Control, Shift, Alt, and Meta key presses are no
+longer emitted as shortcuts. Deliberate repeated shortcuts remain in the event
+stream; broad deduplication belongs in the dataset parser. When undo or redo is
+executed within one second of a shortcut, the history outcome now carries the
+same `interaction_id`, preserving the causal link. Other normalization and
+source cleanup remain offline responsibilities so state-diff work is not
+delayed.
+
 ### Privacy and security
 
 The collector can reveal editor behavior, project structure, local file paths,

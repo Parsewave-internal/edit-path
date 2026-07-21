@@ -334,6 +334,13 @@ restored its exact prior hash, and redo restored the no-mix hash. Validation
 and normal shutdown succeeded, so same-track mix creation, deletion and
 reversibility are accepted.
 
+The speed run, `pilot-session-020.jsonl`, passed. Changing speed to 150 percent
+updated both linked video and audio instances from speed `1.0` and 200 frames
+to speed `1.5` and 133 frames, with source end changing from 199 to 132. Undo
+restored the exact post-insertion hash and redo restored the exact speed-change
+hash. The chain validated and shutdown was clean, so linked clip speed changes
+and reversibility are accepted.
+
 ### Privacy and security
 
 The collector can reveal editor behavior, project structure, local file paths,

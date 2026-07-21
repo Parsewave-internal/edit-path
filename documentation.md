@@ -341,6 +341,16 @@ restored the exact post-insertion hash and redo restored the exact speed-change
 hash. The chain validated and shutdown was clean, so linked clip speed changes
 and reversibility are accepted.
 
+The audio-fade run, `pilot-session-021.jsonl`, ended in an unexpected Kdenlive
+exit. Its five complete JSONL records stop immediately after clip insertion;
+there is no fade gesture, fade commit, undo/redo or `session.end`, and no system
+core dump was available. The run is inconclusive and provides no evidence that
+snapshot serialization caused the exit. It exposed a validation gap: a
+structurally parseable crash fragment was previously reported as valid. The
+validator now requires exactly one final `session.end` and explicitly reports
+missing termination as an incomplete crashed/force-quit session. The fade test
+is deferred rather than immediately repeated.
+
 ### Privacy and security
 
 The collector can reveal editor behavior, project structure, local file paths,

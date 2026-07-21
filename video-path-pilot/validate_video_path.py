@@ -41,6 +41,8 @@ def validate(path: Path) -> list[str]:
     expected_sequence = 1
     seen_event_ids: set[str] = set()
     event_count = 0
+    session_end_count = 0
+    last_event_type: str | None = None
     timeline_hashes: dict[str, str] = {}
 
     with path.open("r", encoding="utf-8") as stream:
@@ -86,12 +88,17 @@ def validate(path: Path) -> list[str]:
                 seen_event_ids.add(event_id)
 
             event_type = event.get("event_type")
+            last_event_type = event_type
             if event_count == 1 and event_type != "session.start":
                 errors.append(f"{prefix}: first event must be session.start")
             if event_count > 1 and event_type == "session.start":
                 errors.append(f"{prefix}: duplicate session.start")
             if event_type not in ALLOWED_EVENT_TYPES:
                 errors.append(f"{prefix}: unknown event_type {event_type!r}")
+            if event_type == "session.end":
+                session_end_count += 1
+                if session_end_count > 1:
+                    errors.append(f"{prefix}: duplicate session.end")
             if event_type in {"action", "history"}:
                 action = event.get("action")
                 if action not in ALLOWED_ACTIONS:
@@ -155,6 +162,10 @@ def validate(path: Path) -> list[str]:
 
     if event_count == 0:
         errors.append("file has no events")
+    elif session_end_count == 0:
+        errors.append("incomplete session: missing session.end (application may have crashed or been force-quit)")
+    elif last_event_type != "session.end":
+        errors.append("session.end must be the final event")
     return errors
 
 

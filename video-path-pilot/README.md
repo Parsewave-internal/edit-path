@@ -5,14 +5,25 @@ SPDX-License-Identifier: GPL-3.0-only
 
 # Kdenlive Video Path Pilot
 
-This fork records a small, software-independent subset of editing operations as
+This fork records a hybrid stream of Qt commands, shortcuts, timeline gestures,
+and a small software-independent subset of semantic editing operations as
 newline-delimited JSON (JSONL). It is a feasibility pilot, not a complete
-training-data collector.
+training-data collector. See `documentation.md` for the complete development
+history, architecture, test results, limitations, and roadmap.
 
 The pilot is based on upstream Kdenlive revision
 `7de2ed9902b4288797a7781498546389a482a39e`.
 
 ## Recorded operations
+
+Version 2 interaction events:
+
+- `ui.command` for discovered Qt actions;
+- `ui.shortcut` without raw typed text;
+- `ui.gesture` for timeline clicks and drags;
+- `session.end` on normal application exit.
+
+Version 1 semantic events retained as outcome signals:
 
 - `clip.insert`
 - `clip.move` for a committed single-clip move
@@ -83,7 +94,9 @@ python3 video-path-pilot/validate_video_path.py /absolute/path/session.jsonl
 8. Exit Kdenlive and run the validator.
 
 The JSONL should have a single `session.start`, contiguous sequence numbers,
-and the expected actions in editor order.
+UI command/shortcut/gesture events in editor order, and `session.end` after a
+normal exit. Semantic actions may still be absent due to the Version 1 coverage
+limitations documented in `documentation.md`.
 
 ## Known gaps
 
@@ -102,3 +115,4 @@ and the expected actions in editor order.
 The next gate is not broader instrumentation. It is persistent identities plus
 a replay test proving that the six pilot operations reconstruct the same
 timeline state.
+

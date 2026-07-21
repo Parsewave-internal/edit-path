@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://example.invalid/video-path/0.1.0/event.schema.json",
-  "title": "Video Path pilot event",
+  "$id": "https://example.invalid/video-path/0.2.0/event.schema.json",
+  "title": "Video Path hybrid pilot event",
   "type": "object",
   "required": [
     "schema_version",
@@ -12,13 +12,13 @@
     "event_type"
   ],
   "properties": {
-    "schema_version": { "const": "0.1.0" },
+    "schema_version": { "enum": ["0.1.0", "0.2.0"] },
     "session_id": { "type": "string", "minLength": 1 },
     "sequence": { "type": "integer", "minimum": 1 },
     "event_id": { "type": "string", "minLength": 1 },
     "timestamp_utc": { "type": "string", "format": "date-time" },
     "event_type": {
-      "enum": ["session.start", "action", "history"]
+      "enum": ["session.start", "session.end", "action", "history", "ui.command", "ui.shortcut", "ui.gesture"]
     },
     "action": {
       "enum": [
@@ -33,7 +33,16 @@
     },
     "timeline_id": { "type": "string" },
     "parameters": { "type": "object" },
-    "label": { "type": "string" }
+    "label": { "type": "string" },
+    "interaction_id": { "type": "string", "minLength": 1 },
+    "command_id": { "type": "string", "minLength": 1 },
+    "source": { "enum": ["keyboard", "menu", "programmatic_or_unknown"] },
+    "shortcuts": { "type": "array", "items": { "type": "string" } },
+    "key_sequence": { "type": "string" },
+    "gesture": { "enum": ["click", "drag"] },
+    "target": { "type": "string" },
+    "start_global": { "$ref": "#/$defs/point" },
+    "end_global": { "$ref": "#/$defs/point" }
   },
   "allOf": [
     {
@@ -43,7 +52,28 @@
     {
       "if": { "properties": { "event_type": { "const": "history" } } },
       "then": { "required": ["action", "label"] }
+    },
+    {
+      "if": { "properties": { "event_type": { "const": "ui.command" } } },
+      "then": { "required": ["interaction_id", "command_id", "label", "source", "shortcuts"] }
+    },
+    {
+      "if": { "properties": { "event_type": { "const": "ui.shortcut" } } },
+      "then": { "required": ["interaction_id", "key_sequence"] }
+    },
+    {
+      "if": { "properties": { "event_type": { "const": "ui.gesture" } } },
+      "then": { "required": ["interaction_id", "gesture", "target", "start_global", "end_global"] }
     }
   ],
+  "$defs": {
+    "point": {
+      "type": "object",
+      "required": ["x", "y"],
+      "properties": { "x": { "type": "number" }, "y": { "type": "number" } },
+      "additionalProperties": false
+    }
+  },
   "additionalProperties": true
 }
+

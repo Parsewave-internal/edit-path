@@ -21,6 +21,16 @@ ALLOWED_ACTIONS = {
     "history.redo",
 }
 
+ALLOWED_EVENT_TYPES = {
+    "session.start",
+    "session.end",
+    "action",
+    "history",
+    "ui.command",
+    "ui.shortcut",
+    "ui.gesture",
+}
+
 
 def validate(path: Path) -> list[str]:
     errors: list[str] = []
@@ -52,7 +62,7 @@ def validate(path: Path) -> list[str]:
                 if field not in event:
                     errors.append(f"{prefix}: missing {field}")
 
-            if event.get("schema_version") != "0.1.0":
+            if event.get("schema_version") not in {"0.1.0", "0.2.0"}:
                 errors.append(f"{prefix}: unsupported schema_version")
             if session_id is None:
                 session_id = event.get("session_id")
@@ -76,6 +86,8 @@ def validate(path: Path) -> list[str]:
                 errors.append(f"{prefix}: first event must be session.start")
             if event_count > 1 and event_type == "session.start":
                 errors.append(f"{prefix}: duplicate session.start")
+            if event_type not in ALLOWED_EVENT_TYPES:
+                errors.append(f"{prefix}: unknown event_type {event_type!r}")
             if event_type in {"action", "history"}:
                 action = event.get("action")
                 if action not in ALLOWED_ACTIONS:
@@ -87,8 +99,25 @@ def validate(path: Path) -> list[str]:
                     errors.append(f"{prefix}: action requires parameters object")
             elif event_type == "history" and not isinstance(event.get("label"), str):
                 errors.append(f"{prefix}: history event requires label")
-            elif event_type not in {"session.start", "action", "history"}:
-                errors.append(f"{prefix}: unknown event_type {event_type!r}")
+            elif event_type == "ui.command":
+                for field in ("interaction_id", "command_id", "label", "source"):
+                    if not isinstance(event.get(field), str):
+                        errors.append(f"{prefix}: ui.command requires string {field}")
+                if not isinstance(event.get("shortcuts"), list):
+                    errors.append(f"{prefix}: ui.command requires shortcuts array")
+            elif event_type == "ui.shortcut":
+                if not isinstance(event.get("interaction_id"), str):
+                    errors.append(f"{prefix}: ui.shortcut requires interaction_id")
+                if not isinstance(event.get("key_sequence"), str):
+                    errors.append(f"{prefix}: ui.shortcut requires key_sequence")
+            elif event_type == "ui.gesture":
+                for field in ("interaction_id", "gesture", "target"):
+                    if not isinstance(event.get(field), str):
+                        errors.append(f"{prefix}: ui.gesture requires string {field}")
+                for field in ("start_global", "end_global"):
+                    point = event.get(field)
+                    if not isinstance(point, dict) or not all(isinstance(point.get(axis), (int, float)) for axis in ("x", "y")):
+                        errors.append(f"{prefix}: ui.gesture requires numeric {field}.x/y")
 
     if event_count == 0:
         errors.append("file has no events")
@@ -114,3 +143,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

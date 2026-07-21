@@ -16,6 +16,7 @@ SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-KDE-Accepted-GPL
 // Required for MacOS definition of MLT_LC_NAME
 #include "lib/localeHandling.h"
 #include "render/renderrequest.h"
+#include "videopath/videopathrecorder.hpp"
 #include <config-kdenlive.h>
 #include <project/projectmanager.h>
 
@@ -247,6 +248,7 @@ int main(int argc, char *argv[])
     KIconTheme::initTheme();
 
     Application app(argc, argv);
+    VideoPathRecorder::instance().initialize(&app);
 
     // Default to org.kde.desktop style unless the user forces another style
     if (qEnvironmentVariableIsEmpty("QT_QUICK_CONTROLS_STYLE")) {
@@ -587,3 +589,4 @@ int main(int argc, char *argv[])
     }
     return result;
 }
+

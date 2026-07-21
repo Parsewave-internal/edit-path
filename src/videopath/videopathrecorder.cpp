@@ -52,11 +52,19 @@ QJsonObject canonicalXmlElement(const QDomElement &element)
     result.insert(QStringLiteral("attributes"), serializedAttributes);
 
     QJsonArray children;
-    for (QDomElement child = element.firstChildElement(); !child.isNull(); child = child.nextSiblingElement()) {
-        children.append(canonicalXmlElement(child));
+    QString textContent;
+    for (QDomNode child = element.firstChild(); !child.isNull(); child = child.nextSibling()) {
+        if (child.isElement()) {
+            children.append(canonicalXmlElement(child.toElement()));
+        } else if (child.isText() || child.isCDATASection()) {
+            textContent.append(child.nodeValue());
+        }
     }
     if (!children.isEmpty()) {
         result.insert(QStringLiteral("children"), children);
+    }
+    if (!textContent.isEmpty()) {
+        result.insert(QStringLiteral("text"), textContent);
     }
     return result;
 }

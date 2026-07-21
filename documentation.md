@@ -296,6 +296,15 @@ serialized effect; undo removed it and redo restored the exact post-addition
 hash. The run did not contain a deletion redo or a committed numeric effect
 parameter change, so those two gates remain untested rather than failed.
 
+The parameter follow-up, `pilot-session-016.jsonl`, was valid and closed
+normally. It captured adding the Adecorrelate effect and repeated exact hash
+changes while disabling and enabling its effect stack. Inspection revealed
+that the canonical XML conversion preserved property element names and
+attributes but omitted their text-node values, where effect parameter values
+are stored. Version 3.1 was corrected to serialize direct text and CDATA nodes
+as deterministic `text` fields. Numeric parameter capture therefore requires a
+new acceptance run with the corrected binary.
+
 ### Privacy and security
 
 The collector can reveal editor behavior, project structure, local file paths,

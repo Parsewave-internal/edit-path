@@ -382,6 +382,15 @@ same hash. No lock click occurred in this run, but session 017 had already
 captured repeated V1 lock/unlock changes with exact alternating hashes.
 Together the runs accept canonical mute, visibility and lock state capture.
 
+The track-structure run, `pilot-session-025.jsonl`, passed deletion and
+restoration. Its late baseline already contained the newly inserted A3/V3
+pair, so insertion was folded into the checkpoint rather than emitted as a
+separate diff. Deleting the pair removed both tracks and deterministically
+shifted the positions of A2, A1, V1 and V2. Undo restored the exact six-track
+hash and redo restored the exact four-track hash. Track removal, reindexing and
+undo reconstruction are accepted; explicit creation is represented by the
+baseline and inverse added entities.
+
 ### Privacy and security
 
 The collector can reveal editor behavior, project structure, local file paths,

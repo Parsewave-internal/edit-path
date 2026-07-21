@@ -262,6 +262,31 @@ diff events followed their history events within approximately 0–1 ms, while
 the pause occurred before the resize commit boundary; current evidence points
 to the interactive Kdenlive trim path rather than JSON serialization.
 
+## Version 3.1: expanded edit coverage
+
+Version 3.1 extends the canonical snapshot instead of adding separate hooks for
+each editing tool. Clip effect stacks now include ordered effects and all
+serialized parameters, including animation/keyframe strings. Track and master
+effect stacks are represented in the same form. Compositions now include their
+software asset ID and complete parameter JSON in addition to placement and
+duration. XML-derived effect data is converted to deterministic JSON with
+sorted attribute names before hashing.
+
+The existing central undo boundary already observes committed split, delete,
+ripple delete, speed, fade, track, effect and transition commands. With the
+expanded snapshot, these operations produce a `state.diff` whenever their
+canonical outcome changes. Clip effects appear inside the changed clip, track
+effects inside the changed track, master effects as the `master_effect` entity,
+and transitions as compositions. Undo and redo must restore the exact earlier
+hash as in the Version 3 tests.
+
+The first Version 3.1 acceptance run should remain focused: insert one video
+clip, split it, delete one resulting section, undo and redo the delete, then add
+one readily available effect to the remaining clip and change one numeric
+parameter. Undo and redo the parameter change and close normally. This proves
+structural commands and parameterized effect state before testing transitions,
+keyframes, speed, audio and track-level effects separately.
+
 ### Privacy and security
 
 The collector can reveal editor behavior, project structure, local file paths,

@@ -6,6 +6,8 @@
 #include "videopathrecorder.hpp"
 
 #include "core.h"
+#include "assets/model/assetparametermodel.hpp"
+#include "effects/effectstack/model/effectstackmodel.hpp"
 #include "mainwindow.h"
 #include "timeline2/model/timelinemodel.hpp"
 #include "timeline2/view/timelinewidget.h"
@@ -15,6 +17,7 @@
 #include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QDateTime>
+#include <QDomDocument>
 #include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -29,6 +32,49 @@
 #include <QToolButton>
 #include <QUuid>
 #include <QWidget>
+
+namespace {
+QJsonObject canonicalXmlElement(const QDomElement &element)
+{
+    QJsonObject result;
+    result.insert(QStringLiteral("name"), element.tagName());
+
+    QMap<QString, QString> sortedAttributes;
+    const QDomNamedNodeMap attributes = element.attributes();
+    for (int index = 0; index < attributes.count(); ++index) {
+        const QDomAttr attribute = attributes.item(index).toAttr();
+        sortedAttributes.insert(attribute.name(), attribute.value());
+    }
+    QJsonObject serializedAttributes;
+    for (auto iterator = sortedAttributes.cbegin(); iterator != sortedAttributes.cend(); ++iterator) {
+        serializedAttributes.insert(iterator.key(), iterator.value());
+    }
+    result.insert(QStringLiteral("attributes"), serializedAttributes);
+
+    QJsonArray children;
+    for (QDomElement child = element.firstChildElement(); !child.isNull(); child = child.nextSiblingElement()) {
+        children.append(canonicalXmlElement(child));
+    }
+    if (!children.isEmpty()) {
+        result.insert(QStringLiteral("children"), children);
+    }
+    return result;
+}
+
+QJsonArray canonicalEffectStack(const std::shared_ptr<EffectStackModel> &stack)
+{
+    QJsonArray effects;
+    if (!stack) {
+        return effects;
+    }
+    QDomDocument document;
+    const QDomElement root = stack->toXml(document);
+    for (QDomElement effect = root.firstChildElement(); !effect.isNull(); effect = effect.nextSiblingElement()) {
+        effects.append(canonicalXmlElement(effect));
+    }
+    return effects;
+}
+}
 
 VideoPathRecorder &VideoPathRecorder::instance()
 {
@@ -110,6 +156,7 @@ QJsonObject VideoPathRecorder::currentTimelineSnapshot() const
         track.insert(QStringLiteral("kind"), model->isAudioTrack(trackId) ? QStringLiteral("audio") : QStringLiteral("video"));
         track.insert(QStringLiteral("tag"), model->getTrackTagById(trackId));
         track.insert(QStringLiteral("locked"), model->trackIsLocked(trackId));
+        track.insert(QStringLiteral("effects"), canonicalEffectStack(model->getTrackEffectStackModel(trackId)));
         tracks.append(track);
     }
 
@@ -142,6 +189,7 @@ QJsonObject VideoPathRecorder::currentTimelineSnapshot() const
             clip.insert(QStringLiteral("speed"), model->getClipSpeed(itemId));
             clip.insert(QStringLiteral("clip_state"), int(state.first));
             clip.insert(QStringLiteral("clip_type"), int(state.second));
+            clip.insert(QStringLiteral("effects"), canonicalEffectStack(model->getClipEffectStackModel(itemId)));
             clips.append(clip);
         } else if (model->isComposition(itemId)) {
             QJsonObject composition;
@@ -149,6 +197,11 @@ QJsonObject VideoPathRecorder::currentTimelineSnapshot() const
             composition.insert(QStringLiteral("track_native_id"), model->getCompositionTrackId(itemId));
             composition.insert(QStringLiteral("timeline_start_frame"), model->getCompositionPosition(itemId));
             composition.insert(QStringLiteral("duration_frames"), model->getCompositionPlaytime(itemId));
+            const auto parameters = model->getCompositionParameterModel(itemId);
+            if (parameters) {
+                composition.insert(QStringLiteral("asset_id"), parameters->getAssetId());
+                composition.insert(QStringLiteral("parameters"), parameters->toJson().object());
+            }
             compositions.append(composition);
         }
     }
@@ -159,6 +212,10 @@ QJsonObject VideoPathRecorder::currentTimelineSnapshot() const
     snapshot.insert(QStringLiteral("tracks"), tracks);
     snapshot.insert(QStringLiteral("clips"), clips);
     snapshot.insert(QStringLiteral("compositions"), compositions);
+    QJsonObject masterEffects;
+    masterEffects.insert(QStringLiteral("native_id"), 0);
+    masterEffects.insert(QStringLiteral("effects"), canonicalEffectStack(model->getMasterEffectStackModel()));
+    snapshot.insert(QStringLiteral("master_effects"), QJsonArray{masterEffects});
     return snapshot;
 }
 
@@ -206,6 +263,7 @@ QJsonObject VideoPathRecorder::diffSnapshots(const QJsonObject &before, const QJ
     compareEntities(QStringLiteral("tracks"));
     compareEntities(QStringLiteral("clips"));
     compareEntities(QStringLiteral("compositions"));
+    compareEntities(QStringLiteral("master_effects"));
     QJsonObject diff;
     diff.insert(QStringLiteral("changes"), changes);
     if (before.value(QStringLiteral("duration_frames")) != after.value(QStringLiteral("duration_frames"))) {

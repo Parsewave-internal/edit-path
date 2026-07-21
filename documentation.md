@@ -375,6 +375,13 @@ with audio `muted` and video `hidden` state. Track order, kind, label, lock and
 effects were already present. Small read-only TimelineModel accessors expose
 the existing TrackModel state without changing editing behavior.
 
+The track-state run, `pilot-session-024.jsonl`, passed audio mute and video
+visibility. A1 changed muted false→true→false and returned to the exact
+post-insertion hash. V1 changed hidden false→true→false and returned to that
+same hash. No lock click occurred in this run, but session 017 had already
+captured repeated V1 lock/unlock changes with exact alternating hashes.
+Together the runs accept canonical mute, visibility and lock state capture.
+
 ### Privacy and security
 
 The collector can reveal editor behavior, project structure, local file paths,

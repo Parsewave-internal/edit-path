@@ -370,6 +370,11 @@ This functionally confirms source-tree asset loading and accepts audio fade
 creation/state capture; a dedicated fade-duration undo/redo cycle is no longer
 required for the pilot because effect reversibility was established separately.
 
+Before the formal track-state test, the canonical track object was extended
+with audio `muted` and video `hidden` state. Track order, kind, label, lock and
+effects were already present. Small read-only TimelineModel accessors expose
+the existing TrackModel state without changing editing behavior.
+
 ### Privacy and security
 
 The collector can reveal editor behavior, project structure, local file paths,

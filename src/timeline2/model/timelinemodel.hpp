@@ -973,6 +973,8 @@ public:
     int getClipEndAt(int tid, int pos, int playlist) const;
     /** @brief returns true if the track trackId is Locked */
     bool trackIsLocked(int trackid) const;
+    bool trackIsMuted(int trackId) const;
+    bool trackIsHidden(int trackId) const;
     /** @brief returns this timeline's subtitle model */
     std::shared_ptr<SubtitleModel> getSubtitleModel();
     /** @brief returns this timeline's guide model */

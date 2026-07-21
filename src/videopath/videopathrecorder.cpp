@@ -164,6 +164,8 @@ QJsonObject VideoPathRecorder::currentTimelineSnapshot() const
         track.insert(QStringLiteral("kind"), model->isAudioTrack(trackId) ? QStringLiteral("audio") : QStringLiteral("video"));
         track.insert(QStringLiteral("tag"), model->getTrackTagById(trackId));
         track.insert(QStringLiteral("locked"), model->trackIsLocked(trackId));
+        track.insert(QStringLiteral("muted"), model->trackIsMuted(trackId));
+        track.insert(QStringLiteral("hidden"), model->trackIsHidden(trackId));
         track.insert(QStringLiteral("effects"), canonicalEffectStack(model->getTrackEffectStackModel(trackId)));
         tracks.append(track);
     }

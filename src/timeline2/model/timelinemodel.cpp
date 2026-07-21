@@ -8371,6 +8371,18 @@ bool TimelineModel::trackIsLocked(int trackId) const
     return getTrackById_const(trackId)->isLocked();
 }
 
+bool TimelineModel::trackIsMuted(int trackId) const
+{
+    Q_ASSERT(isTrack(trackId));
+    return getTrackById_const(trackId)->isMute();
+}
+
+bool TimelineModel::trackIsHidden(int trackId) const
+{
+    Q_ASSERT(isTrack(trackId));
+    return getTrackById_const(trackId)->isHidden();
+}
+
 const QUuid TimelineModel::uuid() const
 {
     return m_uuid;

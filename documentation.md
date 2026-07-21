@@ -224,6 +224,16 @@ correctly found no represented timeline-state change. The next test must drag
 an imported clip from Project Bin onto V1 before moving, trimming, undoing, and
 redoing it.
 
+The follow-up `pilot-session-010.jsonl` captured a semantic `clip.insert` and
+timeline gestures, then Kdenlive exited unexpectedly during a trim attempt. It
+had no `state.diff`. Investigation showed that most timeline operations use the
+`PUSH_UNDO` macro, which pushes directly to `DocUndoStack` and bypasses
+`Core::pushUndo`; the original Version 3 boundary was therefore incomplete.
+Commit-time state capture has been moved to `DocUndoStack::push`, the actual
+shared boundary, and the redundant Core capture removed. The unexpected exit
+occurred before any state-diff capture ran, so available evidence does not tie
+it to snapshot serialization. No core dump was available.
+
 ### Privacy and security
 
 The collector can reveal editor behavior, project structure, local file paths,

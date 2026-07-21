@@ -4,6 +4,7 @@
 */
 
 #include "docundostack.hpp"
+#include "videopath/videopathrecorder.hpp"
 #include <QUndoCommand>
 #include <QUndoGroup>
 
@@ -19,4 +20,5 @@ void DocUndoStack::push(QUndoCommand *cmd)
         Q_EMIT invalidate(index());
     }
     QUndoStack::push(cmd);
+    VideoPathRecorder::instance().captureTimelineChange(cmd->text(), QStringLiteral("commit"));
 }

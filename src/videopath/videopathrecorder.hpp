@@ -40,6 +40,7 @@ private:
     void writeEvent(QJsonObject event);
     void writeSessionStart();
     void writeSessionEnd();
+    void scheduleActionDiscovery();
     void attachActions();
     void recordCommand(QAction *action, bool checked);
     void recordShortcut(const QKeySequence &sequence, bool ambiguous);
@@ -54,6 +55,7 @@ private:
     QString m_sessionId;
     qint64 m_sequence{0};
     QSet<QAction *> m_actions;
+    bool m_actionDiscoveryScheduled{false};
     QElapsedTimer m_lastShortcut;
     QElapsedTimer m_lastMenuClick;
     QElapsedTimer m_lastToolbarClick;

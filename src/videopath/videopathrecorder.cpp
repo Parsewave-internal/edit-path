@@ -60,7 +60,7 @@ void VideoPathRecorder::initialize(QApplication *application)
     }
     application->installEventFilter(this);
     connect(application, &QCoreApplication::aboutToQuit, this, &VideoPathRecorder::writeSessionEnd);
-    QTimer::singleShot(0, this, &VideoPathRecorder::attachActions);
+    scheduleActionDiscovery();
 }
 
 void VideoPathRecorder::recordAction(const QString &action, const QString &timelineId, const QJsonObject &parameters)
@@ -80,6 +80,18 @@ void VideoPathRecorder::recordHistory(const QString &operation, const QString &l
     event.insert(QStringLiteral("action"), QStringLiteral("history.%1").arg(operation));
     event.insert(QStringLiteral("label"), label);
     writeEvent(event);
+}
+
+void VideoPathRecorder::scheduleActionDiscovery()
+{
+    if (m_actionDiscoveryScheduled) {
+        return;
+    }
+    m_actionDiscoveryScheduled = true;
+    QTimer::singleShot(0, this, [this]() {
+        m_actionDiscoveryScheduled = false;
+        attachActions();
+    });
 }
 
 void VideoPathRecorder::attachActions()
@@ -203,8 +215,8 @@ bool VideoPathRecorder::hasToolButtonAncestor(const QObject *object)
 
 bool VideoPathRecorder::eventFilter(QObject *watched, QEvent *event)
 {
-    if (event->type() == QEvent::ChildAdded || event->type() == QEvent::Show) {
-        QTimer::singleShot(0, this, &VideoPathRecorder::attachActions);
+    if (event->type() == QEvent::ChildAdded) {
+        scheduleActionDiscovery();
     } else if (event->type() == QEvent::KeyPress) {
         const auto *key = static_cast<QKeyEvent *>(event);
         const bool hasShortcutModifier = key->modifiers().testAnyFlags(Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier);

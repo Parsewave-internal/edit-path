@@ -150,6 +150,15 @@ toolbar command, and `Ctrl+Z`, then click and drag on the timeline. The expected
 record contains each source classification, a `ui.shortcut` paired to its
 keyboard `ui.command`, only QML timeline gesture targets, and `session.end`.
 
+The first Version 2.1 run, `pilot-session-006.jsonl`, was force-terminated after
+Kdenlive became unresponsive. Its valid seven-event prefix correctly classified
+one menu and two toolbar commands, but ended shortly after Add Clip or Folder
+and before shortcut/gesture coverage. No core dump was available. The recorder
+was scheduling full QAction discovery on every Qt show/child event, creating a
+plausible event-queue storm when a file dialog was opened. Action discovery is
+now child-event-only and debounced so at most one scan is pending. This is a
+preventive recorder fix; the available evidence does not prove sole causation.
+
 ### Privacy and security
 
 The collector can reveal editor behavior, project structure, local file paths,

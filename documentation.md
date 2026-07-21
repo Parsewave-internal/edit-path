@@ -305,6 +305,16 @@ are stored. Version 3.1 was corrected to serialize direct text and CDATA nodes
 as deterministic `text` fields. Numeric parameter capture therefore requires a
 new acceptance run with the corrected binary.
 
+The corrected run, `pilot-session-017.jsonl`, was valid and closed normally.
+It confirmed that effect property text is now present: Adenorm serialized its
+level as `-351`, thread count as `0`, and position mode as `frame`. Transform
+also recorded effect-zone parameters, first adding an in/out range of 0–90 and
+then committing successive out values of 91, 92 and 93. The run additionally
+captured effect addition/removal, stack enable/disable, track locking and clip
+duplication. Its three shortcut events were effect or track controls rather
+than undo/redo, so parameter serialization is accepted but reversible
+parameter editing remains an optional follow-up gate.
+
 ### Privacy and security
 
 The collector can reveal editor behavior, project structure, local file paths,

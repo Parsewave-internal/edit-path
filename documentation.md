@@ -234,6 +234,15 @@ shared boundary, and the redundant Core capture removed. The unexpected exit
 occurred before any state-diff capture ran, so available evidence does not tie
 it to snapshot serialization. No core dump was available.
 
+The isolated insertion run, `pilot-session-011.jsonl`, passed the corrected
+Version 3 commit boundary. It produced a clean hash chain from a zero-clip
+checkpoint to one `Insert Clip` state diff and closed normally. Because the
+source contained audio and video, the diff correctly added two linked native
+clip instances: a video item on track 3 and an audio item on track 2. Both were
+240 frames with source range 0–239 and the timeline duration changed from 0 to
+719 frames. This proves canonical insertion outcome capture; movement and
+reversible hash restoration remain separate acceptance gates.
+
 ### Privacy and security
 
 The collector can reveal editor behavior, project structure, local file paths,

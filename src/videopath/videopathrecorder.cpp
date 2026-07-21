@@ -170,6 +170,7 @@ QJsonObject VideoPathRecorder::currentTimelineSnapshot() const
 
     QJsonArray clips;
     QJsonArray compositions;
+    QJsonArray mixes;
     auto items = model->getItemsInRange(-1, 0, -1, true);
     QList<int> itemIds(items.begin(), items.end());
     std::sort(itemIds.begin(), itemIds.end(), [model](int left, int right) {
@@ -199,6 +200,17 @@ QJsonObject VideoPathRecorder::currentTimelineSnapshot() const
             clip.insert(QStringLiteral("clip_type"), int(state.second));
             clip.insert(QStringLiteral("effects"), canonicalEffectStack(model->getClipEffectStackModel(itemId)));
             clips.append(clip);
+            if (model->getMixDuration(itemId) > 0) {
+                QDomDocument document;
+                const QDomElement mixElement = model->getMixXml(document, itemId);
+                if (!mixElement.isNull()) {
+                    QJsonObject mix;
+                    mix.insert(QStringLiteral("native_id"), itemId);
+                    mix.insert(QStringLiteral("track_native_id"), model->getClipTrackId(itemId));
+                    mix.insert(QStringLiteral("parameters"), canonicalXmlElement(mixElement));
+                    mixes.append(mix);
+                }
+            }
         } else if (model->isComposition(itemId)) {
             QJsonObject composition;
             composition.insert(QStringLiteral("native_id"), itemId);
@@ -220,6 +232,7 @@ QJsonObject VideoPathRecorder::currentTimelineSnapshot() const
     snapshot.insert(QStringLiteral("tracks"), tracks);
     snapshot.insert(QStringLiteral("clips"), clips);
     snapshot.insert(QStringLiteral("compositions"), compositions);
+    snapshot.insert(QStringLiteral("mixes"), mixes);
     QJsonObject masterEffects;
     masterEffects.insert(QStringLiteral("native_id"), 0);
     masterEffects.insert(QStringLiteral("effects"), canonicalEffectStack(model->getMasterEffectStackModel()));
@@ -230,7 +243,7 @@ QJsonObject VideoPathRecorder::currentTimelineSnapshot() const
 QJsonObject VideoPathRecorder::diffSnapshots(const QJsonObject &before, const QJsonObject &after)
 {
     QJsonArray changes;
-    const auto compareEntities = [&changes, &before, &after](const QString &entity) {
+    const auto compareEntities = [&changes, &before, &after](const QString &entity, const QString &singular) {
         QHash<int, QJsonObject> previous;
         QHash<int, QJsonObject> current;
         for (const auto &value : before.value(entity).toArray()) {
@@ -250,7 +263,7 @@ QJsonObject VideoPathRecorder::diffSnapshots(const QJsonObject &before, const QJ
         std::sort(ids.begin(), ids.end());
         for (int id : ids) {
             QJsonObject change;
-            change.insert(QStringLiteral("entity"), entity.chopped(1));
+            change.insert(QStringLiteral("entity"), singular);
             change.insert(QStringLiteral("native_id"), id);
             if (!previous.contains(id)) {
                 change.insert(QStringLiteral("change"), QStringLiteral("added"));
@@ -268,10 +281,11 @@ QJsonObject VideoPathRecorder::diffSnapshots(const QJsonObject &before, const QJ
             changes.append(change);
         }
     };
-    compareEntities(QStringLiteral("tracks"));
-    compareEntities(QStringLiteral("clips"));
-    compareEntities(QStringLiteral("compositions"));
-    compareEntities(QStringLiteral("master_effects"));
+    compareEntities(QStringLiteral("tracks"), QStringLiteral("track"));
+    compareEntities(QStringLiteral("clips"), QStringLiteral("clip"));
+    compareEntities(QStringLiteral("compositions"), QStringLiteral("composition"));
+    compareEntities(QStringLiteral("mixes"), QStringLiteral("mix"));
+    compareEntities(QStringLiteral("master_effects"), QStringLiteral("master_effect"));
     QJsonObject diff;
     diff.insert(QStringLiteral("changes"), changes);
     if (before.value(QStringLiteral("duration_frames")) != after.value(QStringLiteral("duration_frames"))) {

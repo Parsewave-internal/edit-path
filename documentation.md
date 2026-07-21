@@ -315,6 +315,16 @@ duplication. Its three shortcut events were effect or track controls rather
 than undo/redo, so parameter serialization is accepted but reversible
 parameter editing remains an optional follow-up gate.
 
+The transition run, `pilot-session-018.jsonl`, was valid and eventually created
+a same-track mix after selection and source-handle difficulties. The original
+snapshot represented the associated clip extensions but emitted no composition
+entity because Kdenlive stores same-track mixes in `TrackModel`, separately
+from regular cross-track compositions. Version 3.1 now exposes that existing
+read-only mix XML through `TimelineModel` and records a dedicated `mix` entity.
+It includes the transition asset, first and second clip IDs, track IDs,
+mix start/end/offset and every parameter value. Regular compositions remain
+separate. A corrected run is required to accept mix creation and resizing.
+
 ### Privacy and security
 
 The collector can reveal editor behavior, project structure, local file paths,

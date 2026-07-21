@@ -7960,6 +7960,16 @@ int TimelineModel::getMixDuration(int cid) const
     return 0;
 }
 
+QDomElement TimelineModel::getMixXml(QDomDocument &document, int cid) const
+{
+    Q_ASSERT(isClip(cid));
+    const int trackId = m_allClips.at(cid)->getCurrentTrackId();
+    if (trackId < 0 || !getTrackById_const(trackId)->hasStartMix(cid)) {
+        return {};
+    }
+    return getTrackById_const(trackId)->mixXml(document, cid);
+}
+
 std::pair<int, int> TimelineModel::getMixInOut(int cid) const
 {
     Q_ASSERT(isClip(cid));

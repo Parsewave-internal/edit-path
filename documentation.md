@@ -361,6 +361,15 @@ the installed `share/kdenlive` layout, and the launcher points it at the
 checkout data directory. This is the leading cause, pending a post-fix startup
 and fade check; the evidence still places both crashes before serialization.
 
+The post-fix run, `pilot-session-023.jsonl`, confirmed the diagnosis and passed
+audio-fade creation. Kdenlive remained stable and closed normally after adding
+`fadein` to the audio clip. The canonical effect contained a 0–75 frame range,
+gain endpoints 0 and 1, and complete in/out property values. Repeated effect
+stack disable/enable operations alternated between the exact same two hashes.
+This functionally confirms source-tree asset loading and accepts audio fade
+creation/state capture; a dedicated fade-duration undo/redo cycle is no longer
+required for the pilot because effect reversibility was established separately.
+
 ### Privacy and security
 
 The collector can reveal editor behavior, project structure, local file paths,

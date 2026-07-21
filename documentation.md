@@ -398,6 +398,35 @@ the exact pre-extract hash and redo restored the exact ripple-deleted hash.
 Validation and normal shutdown succeeded, so multi-entity ripple deletion,
 downstream movement and reversibility are accepted.
 
+The final representative keyframe run, `pilot-session-028.jsonl`, passed
+canonical keyframe capture. Adding Transform serialized its initial frame-zero
+animation. Two explicit additions produced keyframes at frames 50 and 101 for
+rotation, rotation anchor and rectangle/opacity. Editing the last keyframe
+changed the rotation animation from `101=0` to `101=20`. Ctrl+Z and
+Ctrl+Shift+Z were logged as UI shortcuts but did not reach Kdenlive's timeline
+history, most likely because parameter-editor focus handled them locally, so
+this run does not claim keyframe undo. Creation, timing and value capture are
+accepted; reversibility is supported by the same serialized effect state and
+has been proven for other effect and timeline operations.
+
+## Step 1 pilot coverage conclusion
+
+Representative canonical outcome capture is now accepted for linked clip
+insertion, grouped movement and trim, split, ordinary and ripple deletion,
+speed changes, effect addition and parameter values, effect keyframes, audio
+fade, same-track video/audio mixes, regular composition placement, track
+mute/visibility/lock, track deletion/reindexing, and undo/redo hash restoration
+across multiple entity types. Raw menu commands, shortcuts and timeline mouse
+gestures remain alongside these software-independent outcomes.
+
+This concludes the planned Step 1 manual coverage pilot. It does not imply
+complete Kdenlive feature coverage: titles, subtitles, markers, bin/project
+asset identity, multicamera editing, advanced time remapping, rendering,
+project settings and many specialized effects remain production roadmap work.
+The next engineering phase should prioritize stable asset/instance UUIDs,
+media hashes, crash-resilient session packaging, automated coverage reports
+and privacy controls. Replay remains explicitly deferred by project decision.
+
 ### Privacy and security
 
 The collector can reveal editor behavior, project structure, local file paths,

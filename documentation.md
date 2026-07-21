@@ -214,6 +214,16 @@ insert, move or trim a clip, undo and redo, then prove contiguous hash chaining:
 each diff's `before_hash` must equal the previous checkpoint/diff `after_hash`,
 and inverse operations must restore an earlier hash.
 
+The first Version 3 run, `pilot-session-009.jsonl`, was valid and closed
+normally but was inconclusive for state-diff acceptance. It produced a
+`late-baseline` checkpoint with four tracks and no timeline clips, followed by
+no `state.diff` events. The observed undo label was `Delete effect
+Adecorrelate`; effects are not included in the Version 3 pilot snapshot. Media
+import changes the bin rather than the timeline. The recorder therefore
+correctly found no represented timeline-state change. The next test must drag
+an imported clip from Project Bin onto V1 before moving, trimming, undoing, and
+redoing it.
+
 ### Privacy and security
 
 The collector can reveal editor behavior, project structure, local file paths,

@@ -391,6 +391,13 @@ hash and redo restored the exact four-track hash. Track removal, reindexing and
 undo reconstruction are accepted; explicit creation is represented by the
 baseline and inverse added entities.
 
+The ripple-delete run, `pilot-session-026.jsonl`, passed. Extracting the first
+200-frame linked AV pair removed both instances and moved the second linked pair
+from frame 359 to frame 159, exactly closing the deleted range. Undo restored
+the exact pre-extract hash and redo restored the exact ripple-deleted hash.
+Validation and normal shutdown succeeded, so multi-entity ripple deletion,
+downstream movement and reversibility are accepted.
+
 ### Privacy and security
 
 The collector can reveal editor behavior, project structure, local file paths,

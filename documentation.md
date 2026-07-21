@@ -117,6 +117,21 @@ valid prefix without `session.end`, which is useful diagnostic information.
 
 The validator accepts both so historical pilot sessions remain inspectable.
 
+### Version 2 manual test result
+
+The first GUI test, `pilot-session-005.jsonl`, produced 33 valid schema `0.2.0`
+events: one `session.start`, 13 `ui.command`, 18 `ui.gesture`, and one clean
+`session.end`. Commands included media import, Razor, Slip, Ripple, Insert and
+Normal modes, overwrite-to-in-point, and playback controls. Two drags and 16
+clicks were paired successfully.
+
+This is a partial acceptance pass. No `ui.shortcut` was observed, all commands
+were classified as `programmatic_or_unknown`, and the timeline ancestry test
+also classified some toolbar buttons and combo boxes as timeline gestures. No
+Version 1 semantic outcome event was emitted. The next iteration must improve
+input-source correlation, narrow gesture targeting to the QML timeline canvas,
+and explicitly test a known shortcut.
+
 ### Privacy and security
 
 The collector can reveal editor behavior, project structure, local file paths,

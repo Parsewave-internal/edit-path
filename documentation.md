@@ -287,6 +287,15 @@ parameter. Undo and redo the parameter change and close normally. This proves
 structural commands and parameterized effect state before testing transitions,
 keyframes, speed, audio and track-level effects separately.
 
+The first expanded-coverage run, `pilot-session-015.jsonl`, was valid and
+closed normally. Splitting a linked AV clip produced two shortened original
+instances and two new instances with contiguous source ranges. Deleting the
+new linked pair and undoing that deletion restored the exact pre-delete hash.
+Adding the Transform effect updated the selected video clip from zero to one
+serialized effect; undo removed it and redo restored the exact post-addition
+hash. The run did not contain a deletion redo or a committed numeric effect
+parameter change, so those two gates remain untested rather than failed.
+
 ### Privacy and security
 
 The collector can reveal editor behavior, project structure, local file paths,

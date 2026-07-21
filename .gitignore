@@ -1,0 +1,25 @@
+# SPDX-FileCopyrightText: none
+# SPDX-License-Identifier: CC0-1.0
+*~
+# restrict the rule for build folders to the root
+# level to avoid exclusion of eg. timeline2/model/builders/
+/build*/
+
+CMakeLists.txt.user*
+*.kdev4
+	*.patch
+packaging/flatpak/.flatpak-builder
+
+# Jetbrains IDE like CLion
+.idea
+
+# clangd tooling
+.cache
+.clangd
+compile_commands.json
+
+# VSCode
+.vscode/
+
+# Artefacts from running KDE CI locally
+kde-ci-reports/*

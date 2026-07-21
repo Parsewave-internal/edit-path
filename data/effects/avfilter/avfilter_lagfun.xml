@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<!DOCTYPE kpartgui>
+<effect xmlns="https://www.kdenlive.org" tag="avfilter.lagfun" id="avfilter.lagfun">
+    <name>Lag Fun</name>
+    <description><![CDATA[Slowly update darker pixels.<br>
+        <b><i>Note</i></b>: This effect does not reset during playback due to frame buffer issues but renders correctly.]]></description>
+    <author>libavfilter</author>
+    <parameter type="fixed" name="av.planes" default="1">
+        <name>Planes</name>
+    </parameter>
+    <parameter type="float" name="av.decay" default="0.95" min="0" max="1" decimals="2">
+        <name>Decay</name>
+    </parameter>
+</effect>

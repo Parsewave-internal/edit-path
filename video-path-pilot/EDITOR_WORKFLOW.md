@@ -1,0 +1,66 @@
+<!-- SPDX-FileCopyrightText: 2026 Video Path Pilot contributors -->
+<!-- SPDX-License-Identifier: GPL-3.0-only -->
+
+# Editor workflow for the two-sample MVP
+
+Use a fresh directory for every sample. Do not reuse a crashed or incomplete
+recording. Commands below are run from the repository root.
+
+## 1. Initialize
+
+```bash
+python3 video-path-pilot/sample_collector.py init \
+  /home/tenali/parsewave/samples/sample_001 \
+  --editor-id editor_001 \
+  --prompt "Create a 20-second energetic product montage." \
+  --plan "Select the strongest moments, establish context, accelerate the cuts, and end on the product." \
+  /path/to/video-a.mp4 /path/to/video-b.mp4 /path/to/music.wav
+```
+
+The command copies and hashes assets. It never modifies the originals.
+
+## 2. Launch and edit
+
+```bash
+python3 video-path-pilot/sample_collector.py launch \
+  /home/tenali/parsewave/samples/sample_001
+```
+
+In Kdenlive, create a blank project with the requested resolution and frame
+rate. Import files from the sample's `assets/` folder **in filename order**.
+Edit normally. Save the project outside the sample or directly as
+`internal/final.kdenlive`.
+
+Add a rationale note when making a meaningful creative decision (not for every
+click). Open another terminal and run:
+
+```bash
+python3 video-path-pilot/sample_collector.py note \
+  /home/tenali/parsewave/samples/sample_001 \
+  --reason "The opening felt slow." \
+  --decision "Used three short detail shots before the wide shot to create momentum."
+```
+
+Render the final video, then close Kdenlive normally. A force-quit makes the
+sample incomplete and it should be recollected.
+
+## 3. Finalize
+
+```bash
+python3 video-path-pilot/sample_collector.py finalize \
+  /home/tenali/parsewave/samples/sample_001 \
+  --project /path/to/saved-project.kdenlive \
+  --output /path/to/rendered-video.mp4 \
+  --review "The output follows the prompt; pacing and audio ending were checked."
+```
+
+Finalization validates the raw session, copies the native project and render,
+hashes every artifact, removes undone work from the accepted branch, creates
+`sample.json`, and validates the completed package.
+
+## 4. Human review before client delivery
+
+Watch `output/final.*` completely. Open `sample.json` and verify that assets,
+operation order, frames, prompt, plan, notes, and output are plausible. The MVP
+marks every sample `needs_human_review`; a reviewer should record approval in
+the client-delivery notes. Do not send local caches or unrelated project files.

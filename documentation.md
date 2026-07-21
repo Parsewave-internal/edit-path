@@ -427,6 +427,64 @@ The next engineering phase should prioritize stable asset/instance UUIDs,
 media hashes, crash-resilient session packaging, automated coverage reports
 and privacy controls. Replay remains explicitly deferred by project decision.
 
+## MVP sample collector (Version 4)
+
+The project has moved from instrumentation research to a concrete product
+gate: current editors will use an MVP collector to create two complete samples,
+and the client will review those samples before production engineering or
+hiring is scaled. A dataset item is consistently called a **sample** and its
+primary client-facing representation is `sample.json`.
+
+`video-path-pilot/sample_collector.py` implements the lifecycle. `init` creates
+a new workspace, copies and hashes inputs, and captures the prompt, frame rate,
+editor identity, and pre-edit plan. `launch` starts the instrumented Kdenlive
+with crash-resilient JSONL evidence. `note` records selective creative reasons
+and decisions. `finalize` requires a normally closed recording, native project,
+rendered video, and editor review; it hashes the artifacts, normalizes the
+successful branch, writes `sample.json`, and runs the quality gate.
+
+```text
+sample_001/
+├── sample.json
+├── assets/
+├── output/final.*
+├── internal/
+│   ├── collector-metadata.json
+│   ├── rationale.jsonl
+│   └── final.kdenlive
+└── evidence/raw-events.jsonl
+```
+
+The native project is internal evidence for diagnosis, recovery, and future
+normalizer improvements. There is no `initial.kdenlive`: editors begin from a
+blank project and the recorder establishes the canonical baseline. The final
+video is mandatory because it is the target artifact and enables human review.
+
+`normalize_sample.py` removes undone or abandoned commands from the clean path
+while retaining them in raw evidence. Accepted operations use integer frames,
+software-independent entity names, sample-local canonical IDs, before/after
+changes, resulting state hashes, and pointers to raw events. Kdenlive labels
+are isolated under `extensions.kdenlive`. Ambiguous outcomes deliberately use
+reviewable terms such as `clip.trim_or_split`, `effect.change`, or
+`timeline.change` until two real samples show which distinctions are reliable.
+
+The controlled MVP's main compromise is asset binding. Bin import does not yet
+carry persistent asset UUIDs, so native references are mapped to copied assets
+by first use. Editors must import `asset_001`, `asset_002`, and so on in filename
+order. The assumption is emitted as `quality.asset_binding_method`, and
+unresolved references fail validation. Production collection requires
+persistent IDs or deterministic saved-project resolution.
+
+The quality gate requires prompt and plan, rational frame rate, hashed inputs,
+at least one accepted operation, no unresolved assets, complete raw termination,
+a hashed project and render, and final editor review. Each result remains
+`needs_human_review`; structural validity is not creative approval.
+
+Operational instructions are in `video-path-pilot/EDITOR_WORKFLOW.md`, the
+language in `video-path-pilot/VOCABULARY.md`, and the machine contract in
+`video-path-pilot/sample.schema.json`. Automated tests cover branch compaction,
+normalization, asset binding, hashes, and package validation.
+
 ### Privacy and security
 
 The collector can reveal editor behavior, project structure, local file paths,

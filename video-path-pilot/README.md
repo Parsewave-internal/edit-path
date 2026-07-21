@@ -5,11 +5,24 @@ SPDX-License-Identifier: GPL-3.0-only
 
 # Kdenlive Video Path Pilot
 
-This fork records a hybrid stream of Qt commands, shortcuts, timeline gestures,
-and a small software-independent subset of semantic editing operations as
-newline-delimited JSON (JSONL). It is a feasibility pilot, not a complete
-training-data collector. See `documentation.md` for the complete development
-history, architecture, test results, limitations, and roadmap.
+This fork includes an MVP training-sample collector around the Kdenlive
+recorder. It packages the prompt, hashed assets, editor plan and rationale,
+accepted software-independent edit path, final render, native project, and raw
+audit evidence into one sample directory.
+
+For the two-sample client trial, begin with `EDITOR_WORKFLOW.md`. The clean
+format and language are in `sample.schema.json` and `VOCABULARY.md`.
+
+## MVP collector
+
+```bash
+python3 video-path-pilot/sample_collector.py --help
+```
+
+`init` creates a workspace, `launch` starts the recorder, `note` captures an
+occasional creative decision, and `finalize` normalizes and validates
+`sample.json`. Undo/redo remains in evidence but is removed from the clean
+successful trajectory.
 
 The pilot is based on upstream Kdenlive revision
 `7de2ed9902b4288797a7781498546389a482a39e`.
@@ -102,18 +115,18 @@ limitations documented in `documentation.md`.
 
 ## Known gaps
 
-- Asset import is not yet recorded; `clip.insert.asset_reference` is Kdenlive's
-  bin reference rather than a content-addressed asset identity.
+- Asset import is not yet recorded. In the controlled MVP, copied assets must
+  be imported in filename order and native references are bound by first use.
 - Native IDs do not survive project reload or independent replay.
-- Group moves, selection deletes, compositions, transitions, effects,
-  keyframes, audio mixing, captions, color operations, and project checkpoints
-  are not covered.
+- Titles, subtitles, markers, bin identity, multicamera editing, advanced time
+  remapping, render settings, and specialized effects are not yet covered.
 - Undo/redo capture currently covers `FunctionalUndoCommand`; specialized Qt
   undo commands may not emit history events.
-- There is no replay engine or canonical timeline-state hash yet.
+- There is no replay engine. Canonical timeline hashes exist, but production
+  still requires persistent entity identities.
 - The log contains file-system and project-derived identifiers. Treat it as
   potentially sensitive editor data.
 
-The next gate is not broader instrumentation. It is persistent identities plus
-a replay test proving that the six pilot operations reconstruct the same
-timeline state.
+The immediate gate is two complete human-reviewed samples for client feedback.
+Persistent IDs and deterministic project-file asset resolution come before
+scaling collection.

@@ -6,6 +6,7 @@
 #pragma once
 
 #include <QElapsedTimer>
+#include <QHash>
 #include <QJsonObject>
 #include <QMutex>
 #include <QObject>
@@ -31,6 +32,8 @@ public:
     bool isEnabled() const;
     void recordAction(const QString &action, const QString &timelineId, const QJsonObject &parameters);
     void recordHistory(const QString &operation, const QString &label);
+    void captureTimelineCheckpoint(const QString &label);
+    void captureTimelineChange(const QString &label, const QString &boundary);
 
 private:
     VideoPathRecorder();
@@ -44,6 +47,8 @@ private:
     void attachActions();
     void recordCommand(QAction *action, bool checked);
     void recordShortcut(const QKeySequence &sequence, bool ambiguous);
+    QJsonObject currentTimelineSnapshot() const;
+    static QJsonObject diffSnapshots(const QJsonObject &before, const QJsonObject &after);
     bool eventFilter(QObject *watched, QEvent *event) override;
     static QString describeObject(const QObject *object);
     static bool isTimelineCanvasTarget(const QObject *object);
@@ -57,6 +62,7 @@ private:
     QSet<QAction *> m_actions;
     bool m_actionDiscoveryScheduled{false};
     QElapsedTimer m_lastShortcut;
+    QElapsedTimer m_lastInteraction;
     QElapsedTimer m_lastMenuClick;
     QElapsedTimer m_lastToolbarClick;
     QString m_lastInputInteractionId;
@@ -65,4 +71,5 @@ private:
     QPointF m_pointerStart;
     QString m_pointerTarget;
     int m_pointerButton{0};
+    QHash<QString, QJsonObject> m_lastSnapshots;
 };

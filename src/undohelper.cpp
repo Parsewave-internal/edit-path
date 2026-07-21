@@ -26,9 +26,10 @@ void FunctionalUndoCommand::undo()
     Logger::log_undo(true);
 #endif
     m_undone = true;
-    VideoPathRecorder::instance().recordHistory(QStringLiteral("undo"), text());
     bool res = m_undo();
     Q_ASSERT(res);
+    VideoPathRecorder::instance().recordHistory(QStringLiteral("undo"), text());
+    VideoPathRecorder::instance().captureTimelineChange(text(), QStringLiteral("undo"));
     QUndoCommand::undo();
 }
 
@@ -38,9 +39,10 @@ void FunctionalUndoCommand::redo()
 #ifdef CRASH_AUTO_TEST
         Logger::log_undo(false);
 #endif
-        VideoPathRecorder::instance().recordHistory(QStringLiteral("redo"), text());
         bool res = m_redo();
         Q_ASSERT(res);
+        VideoPathRecorder::instance().recordHistory(QStringLiteral("redo"), text());
+        VideoPathRecorder::instance().captureTimelineChange(text(), QStringLiteral("redo"));
     }
     QUndoCommand::redo();
 }

@@ -5,9 +5,15 @@
 
 #include "videopathrecorder.hpp"
 
+#include "core.h"
+#include "mainwindow.h"
+#include "timeline2/model/timelinemodel.hpp"
+#include "timeline2/view/timelinewidget.h"
+
 #include <QAction>
 #include <QApplication>
 #include <QCoreApplication>
+#include <QCryptographicHash>
 #include <QDateTime>
 #include <QFile>
 #include <QJsonArray>
@@ -85,6 +91,180 @@ void VideoPathRecorder::recordHistory(const QString &operation, const QString &l
     writeEvent(event);
 }
 
+QJsonObject VideoPathRecorder::currentTimelineSnapshot() const
+{
+    if (!pCore || !pCore->window() || !pCore->window()->getCurrentTimeline()) {
+        return {};
+    }
+    const auto model = pCore->window()->getCurrentTimeline()->model();
+    if (!model) {
+        return {};
+    }
+
+    QJsonArray tracks;
+    for (int position = 0; position < model->getTracksCount(); ++position) {
+        const int trackId = model->getTrackIndexFromPosition(position);
+        QJsonObject track;
+        track.insert(QStringLiteral("native_id"), trackId);
+        track.insert(QStringLiteral("position"), position);
+        track.insert(QStringLiteral("kind"), model->isAudioTrack(trackId) ? QStringLiteral("audio") : QStringLiteral("video"));
+        track.insert(QStringLiteral("tag"), model->getTrackTagById(trackId));
+        track.insert(QStringLiteral("locked"), model->trackIsLocked(trackId));
+        tracks.append(track);
+    }
+
+    QJsonArray clips;
+    QJsonArray compositions;
+    auto items = model->getItemsInRange(-1, 0, -1, true);
+    QList<int> itemIds(items.begin(), items.end());
+    std::sort(itemIds.begin(), itemIds.end(), [model](int left, int right) {
+        const int leftTrack = model->getItemTrackId(left);
+        const int rightTrack = model->getItemTrackId(right);
+        if (leftTrack != rightTrack) {
+            return leftTrack < rightTrack;
+        }
+        const int leftPosition = model->getItemPosition(left);
+        const int rightPosition = model->getItemPosition(right);
+        return leftPosition == rightPosition ? left < right : leftPosition < rightPosition;
+    });
+    for (int itemId : itemIds) {
+        if (model->isClip(itemId)) {
+            const auto inOut = model->getClipInOut(itemId);
+            const auto state = model->getClipState(itemId);
+            QJsonObject clip;
+            clip.insert(QStringLiteral("native_id"), itemId);
+            clip.insert(QStringLiteral("asset_reference"), model->getClipBinId(itemId));
+            clip.insert(QStringLiteral("track_native_id"), model->getClipTrackId(itemId));
+            clip.insert(QStringLiteral("timeline_start_frame"), model->getClipPosition(itemId));
+            clip.insert(QStringLiteral("duration_frames"), model->getClipPlaytime(itemId));
+            clip.insert(QStringLiteral("source_start_frame"), inOut.first);
+            clip.insert(QStringLiteral("source_end_frame"), inOut.second);
+            clip.insert(QStringLiteral("speed"), model->getClipSpeed(itemId));
+            clip.insert(QStringLiteral("clip_state"), int(state.first));
+            clip.insert(QStringLiteral("clip_type"), int(state.second));
+            clips.append(clip);
+        } else if (model->isComposition(itemId)) {
+            QJsonObject composition;
+            composition.insert(QStringLiteral("native_id"), itemId);
+            composition.insert(QStringLiteral("track_native_id"), model->getCompositionTrackId(itemId));
+            composition.insert(QStringLiteral("timeline_start_frame"), model->getCompositionPosition(itemId));
+            composition.insert(QStringLiteral("duration_frames"), model->getCompositionPlaytime(itemId));
+            compositions.append(composition);
+        }
+    }
+
+    QJsonObject snapshot;
+    snapshot.insert(QStringLiteral("timeline_id"), model->uuid().toString(QUuid::WithoutBraces));
+    snapshot.insert(QStringLiteral("duration_frames"), model->duration());
+    snapshot.insert(QStringLiteral("tracks"), tracks);
+    snapshot.insert(QStringLiteral("clips"), clips);
+    snapshot.insert(QStringLiteral("compositions"), compositions);
+    return snapshot;
+}
+
+QJsonObject VideoPathRecorder::diffSnapshots(const QJsonObject &before, const QJsonObject &after)
+{
+    QJsonArray changes;
+    const auto compareEntities = [&changes, &before, &after](const QString &entity) {
+        QHash<int, QJsonObject> previous;
+        QHash<int, QJsonObject> current;
+        for (const auto &value : before.value(entity).toArray()) {
+            const auto object = value.toObject();
+            previous.insert(object.value(QStringLiteral("native_id")).toInt(), object);
+        }
+        for (const auto &value : after.value(entity).toArray()) {
+            const auto object = value.toObject();
+            current.insert(object.value(QStringLiteral("native_id")).toInt(), object);
+        }
+        QList<int> ids = previous.keys();
+        for (int id : current.keys()) {
+            if (!ids.contains(id)) {
+                ids.append(id);
+            }
+        }
+        std::sort(ids.begin(), ids.end());
+        for (int id : ids) {
+            QJsonObject change;
+            change.insert(QStringLiteral("entity"), entity.chopped(1));
+            change.insert(QStringLiteral("native_id"), id);
+            if (!previous.contains(id)) {
+                change.insert(QStringLiteral("change"), QStringLiteral("added"));
+                change.insert(QStringLiteral("after"), current.value(id));
+            } else if (!current.contains(id)) {
+                change.insert(QStringLiteral("change"), QStringLiteral("removed"));
+                change.insert(QStringLiteral("before"), previous.value(id));
+            } else if (previous.value(id) != current.value(id)) {
+                change.insert(QStringLiteral("change"), QStringLiteral("updated"));
+                change.insert(QStringLiteral("before"), previous.value(id));
+                change.insert(QStringLiteral("after"), current.value(id));
+            } else {
+                continue;
+            }
+            changes.append(change);
+        }
+    };
+    compareEntities(QStringLiteral("tracks"));
+    compareEntities(QStringLiteral("clips"));
+    compareEntities(QStringLiteral("compositions"));
+    QJsonObject diff;
+    diff.insert(QStringLiteral("changes"), changes);
+    if (before.value(QStringLiteral("duration_frames")) != after.value(QStringLiteral("duration_frames"))) {
+        diff.insert(QStringLiteral("duration_before"), before.value(QStringLiteral("duration_frames")));
+        diff.insert(QStringLiteral("duration_after"), after.value(QStringLiteral("duration_frames")));
+    }
+    return diff;
+}
+
+void VideoPathRecorder::captureTimelineCheckpoint(const QString &label)
+{
+    const QJsonObject snapshot = currentTimelineSnapshot();
+    if (snapshot.isEmpty()) {
+        return;
+    }
+    const QByteArray canonical = QJsonDocument(snapshot).toJson(QJsonDocument::Compact);
+    const QString timelineId = snapshot.value(QStringLiteral("timeline_id")).toString();
+    m_lastSnapshots.insert(timelineId, snapshot);
+    QJsonObject event;
+    event.insert(QStringLiteral("event_type"), QStringLiteral("state.checkpoint"));
+    event.insert(QStringLiteral("label"), label);
+    event.insert(QStringLiteral("timeline_id"), timelineId);
+    event.insert(QStringLiteral("state_hash"), QString::fromLatin1(QCryptographicHash::hash(canonical, QCryptographicHash::Sha256).toHex()));
+    event.insert(QStringLiteral("snapshot"), snapshot);
+    writeEvent(event);
+}
+
+void VideoPathRecorder::captureTimelineChange(const QString &label, const QString &boundary)
+{
+    const QJsonObject after = currentTimelineSnapshot();
+    if (after.isEmpty()) {
+        return;
+    }
+    const QString timelineId = after.value(QStringLiteral("timeline_id")).toString();
+    if (!m_lastSnapshots.contains(timelineId)) {
+        captureTimelineCheckpoint(QStringLiteral("late-baseline"));
+        return;
+    }
+    const QJsonObject before = m_lastSnapshots.value(timelineId);
+    const QByteArray beforeJson = QJsonDocument(before).toJson(QJsonDocument::Compact);
+    const QByteArray afterJson = QJsonDocument(after).toJson(QJsonDocument::Compact);
+    if (beforeJson == afterJson) {
+        return;
+    }
+    QJsonObject event;
+    event.insert(QStringLiteral("event_type"), QStringLiteral("state.diff"));
+    event.insert(QStringLiteral("label"), label);
+    event.insert(QStringLiteral("boundary"), boundary);
+    event.insert(QStringLiteral("timeline_id"), timelineId);
+    event.insert(QStringLiteral("before_hash"), QString::fromLatin1(QCryptographicHash::hash(beforeJson, QCryptographicHash::Sha256).toHex()));
+    event.insert(QStringLiteral("after_hash"), QString::fromLatin1(QCryptographicHash::hash(afterJson, QCryptographicHash::Sha256).toHex()));
+    event.insert(QStringLiteral("diff"), diffSnapshots(before, after));
+    if (m_lastInteraction.isValid() && m_lastInteraction.elapsed() < 2000 && !m_lastInputInteractionId.isEmpty()) {
+        event.insert(QStringLiteral("interaction_id"), m_lastInputInteractionId);
+    }
+    writeEvent(event);
+    m_lastSnapshots.insert(timelineId, after);
+}
+
 void VideoPathRecorder::scheduleActionDiscovery()
 {
     if (m_actionDiscoveryScheduled) {
@@ -149,6 +329,8 @@ void VideoPathRecorder::recordCommand(QAction *action, bool checked)
     event.insert(QStringLiteral("checked"), checked);
     event.insert(QStringLiteral("shortcuts"), shortcuts);
     event.insert(QStringLiteral("focus"), describeObject(QApplication::focusWidget()));
+    m_lastInputInteractionId = interactionId;
+    m_lastInteraction.restart();
     writeEvent(event);
 }
 
@@ -164,6 +346,7 @@ void VideoPathRecorder::recordShortcut(const QKeySequence &sequence, bool ambigu
     m_lastShortcut.restart();
     m_lastShortcutSequence = portableSequence;
     m_lastInputInteractionId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    m_lastInteraction.restart();
     QJsonObject shortcutEvent;
     shortcutEvent.insert(QStringLiteral("event_type"), QStringLiteral("ui.shortcut"));
     shortcutEvent.insert(QStringLiteral("interaction_id"), m_lastInputInteractionId);
@@ -258,6 +441,8 @@ bool VideoPathRecorder::eventFilter(QObject *watched, QEvent *event)
             gesture.insert(QStringLiteral("start_global"), start);
             gesture.insert(QStringLiteral("end_global"), end);
             gesture.insert(QStringLiteral("modifiers"), int(mouse->modifiers()));
+            m_lastInputInteractionId = m_pointerInteractionId;
+            m_lastInteraction.restart();
             writeEvent(gesture);
             m_pointerInteractionId.clear();
         }

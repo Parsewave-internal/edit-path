@@ -38,6 +38,7 @@ SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-KDE-Accepted-GPL
 #include "timeline2/model/timelineitemmodel.hpp"
 #include "timeline2/view/timelinecontroller.h"
 #include "timeline2/view/timelinewidget.h"
+#include "videopath/videopathrecorder.hpp"
 #include <mlt++/MltRepository.h>
 
 #include <KIO/OpenFileManagerWindowJob>
@@ -1401,11 +1402,13 @@ void Core::profileChanged()
 void Core::pushUndo(const Fun &undo, const Fun &redo, const QString &text)
 {
     undoStack()->push(new FunctionalUndoCommand(undo, redo, text));
+    VideoPathRecorder::instance().captureTimelineChange(text, QStringLiteral("commit"));
 }
 
 void Core::pushUndo(QUndoCommand *command)
 {
     undoStack()->push(command);
+    VideoPathRecorder::instance().captureTimelineChange(command->text(), QStringLiteral("commit"));
 }
 
 int Core::undoIndex() const

@@ -18,7 +18,7 @@
     "event_id": { "type": "string", "minLength": 1 },
     "timestamp_utc": { "type": "string", "format": "date-time" },
     "event_type": {
-      "enum": ["session.start", "session.end", "action", "history", "ui.command", "ui.shortcut", "ui.gesture"]
+      "enum": ["session.start", "session.end", "action", "history", "ui.command", "ui.shortcut", "ui.gesture", "state.checkpoint", "state.diff"]
     },
     "action": {
       "enum": [
@@ -42,7 +42,13 @@
     "gesture": { "enum": ["click", "drag"] },
     "target": { "type": "string" },
     "start_global": { "$ref": "#/$defs/point" },
-    "end_global": { "$ref": "#/$defs/point" }
+    "end_global": { "$ref": "#/$defs/point" },
+    "state_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "before_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "after_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "snapshot": { "type": "object" },
+    "diff": { "type": "object" },
+    "boundary": { "enum": ["commit", "undo", "redo"] }
   },
   "allOf": [
     {
@@ -64,6 +70,14 @@
     {
       "if": { "properties": { "event_type": { "const": "ui.gesture" } } },
       "then": { "required": ["interaction_id", "gesture", "target", "start_global", "end_global"] }
+    },
+    {
+      "if": { "properties": { "event_type": { "const": "state.checkpoint" } } },
+      "then": { "required": ["timeline_id", "label", "state_hash", "snapshot"] }
+    },
+    {
+      "if": { "properties": { "event_type": { "const": "state.diff" } } },
+      "then": { "required": ["timeline_id", "label", "boundary", "before_hash", "after_hash", "diff"] }
     }
   ],
   "$defs": {

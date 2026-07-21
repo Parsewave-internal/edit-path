@@ -22,6 +22,8 @@ Version 2 interaction events:
 - `ui.shortcut` for modified/function keys without raw typed text;
 - `ui.gesture` for timeline clicks and drags;
 - `session.end` on normal application exit.
+- `state.checkpoint` for the canonical timeline baseline;
+- `state.diff` after committed edits, undo, and redo.
 
 Version 1 semantic events retained as outcome signals:
 

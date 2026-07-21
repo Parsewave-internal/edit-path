@@ -566,6 +566,7 @@ int main(int argc, char *argv[])
         result = EXIT_CLEAN_RESTART;
     } else {
         pCore->initGUI(parser.value(mltPathOption), app.url, clipsToLoad);
+        VideoPathRecorder::instance().captureTimelineCheckpoint(QStringLiteral("gui.ready"));
         result = app.exec();
     }
     Core::clean();

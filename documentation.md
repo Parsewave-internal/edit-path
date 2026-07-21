@@ -186,6 +186,34 @@ was present. Two `Ctrl+Z` shortcuts and one `Ctrl+Shift+Z` shortcut each shared
 their interaction ID with the corresponding `history.undo` or `history.redo`
 outcome. The causal shortcut-cleanup milestone is therefore complete.
 
+## Version 3: canonical timeline state differences
+
+Version 3 adds an outcome layer at Kdenlive's central undo-command boundary.
+After the GUI initializes, the recorder writes a `state.checkpoint` containing
+a canonical snapshot and SHA-256 state hash. After successful committed
+commands, undo, and redo, it serializes the current state again and writes a
+`state.diff` only when the canonical state changed.
+
+The pilot snapshot contains the active timeline ID and duration; tracks in
+timeline order with kind, tag, lock state and native ID; clips in deterministic
+order with asset reference, track, timeline position, duration, source in/out,
+speed and clip state/type; and basic composition placement. Each diff contains
+entity-level `added`, `removed`, and `updated` records with before/after values,
+plus before/after state hashes and duration changes. A recent UI interaction ID
+is attached when causality can be established within two seconds.
+
+This boundary is broader than Version 1's leaf hooks because successful edits
+from timeline, bin, effects, keyframes, markers, subtitles, and other systems
+generally converge at `Core::pushUndo`. Functional undo and redo are captured
+after their state mutation completes.
+
+Version 3 remains a pilot canonicalization. Native IDs are session-scoped;
+effects, keyframes, subtitles, markers, groups, transitions/mix parameters and
+asset content hashes are not yet fully represented. The acceptance test is to
+insert, move or trim a clip, undo and redo, then prove contiguous hash chaining:
+each diff's `before_hash` must equal the previous checkpoint/diff `after_hash`,
+and inverse operations must restore an earlier hash.
+
 ### Privacy and security
 
 The collector can reveal editor behavior, project structure, local file paths,

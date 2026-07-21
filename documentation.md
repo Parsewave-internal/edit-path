@@ -325,6 +325,15 @@ It includes the transition asset, first and second clip IDs, track IDs,
 mix start/end/offset and every parameter value. Regular compositions remain
 separate. A corrected run is required to accept mix creation and resizing.
 
+The corrected transition run, `pilot-session-019.jsonl`, passed. Creating the
+linked AV mix added a video `luma` entity and an audio `mix` entity. Both
+contained their first/second clip IDs, track IDs, mix start/end, 30-frame
+offset, MLT track mapping and complete parameter values. Removing the mixes
+removed these entities independently. Undo of the final audio-mix removal
+restored its exact prior hash, and redo restored the no-mix hash. Validation
+and normal shutdown succeeded, so same-track mix creation, deletion and
+reversibility are accepted.
+
 ### Privacy and security
 
 The collector can reveal editor behavior, project structure, local file paths,

@@ -88,6 +88,9 @@ QString friendlyFinalizationError(const QString &details)
 {
     const QString value = details.toLower();
     if (value.contains(QStringLiteral("rendered video")) && value.contains(QStringLiteral("exactly one"))) {
+        if (value.contains(QStringLiteral("found 0"))) {
+            return QStringLiteral("We couldn't find your final rendered video. Render the finished timeline into the session folder, then try again.");
+        }
         return QStringLiteral("We found more than one possible final video. Keep only your finished render in the session folder, then try again.");
     }
     if (value.contains(QStringLiteral("contains no resolvable media")) || value.contains(QStringLiteral("no resolvable media resources"))) {

@@ -74,6 +74,8 @@ class MvpTests(unittest.TestCase):
         self.assertIn('QStringLiteral("Show technical details")', source)
         self.assertIn("m_activity->setVisible(false)", source)
         self.assertIn("friendlyFinalizationError(m_workerTranscript)", source)
+        self.assertIn('value.contains(QStringLiteral("found 0"))', source)
+        self.assertIn("We couldn't find your final rendered video", source)
         self.assertIn('completed-sample/verification/report.json', source)
         self.assertNotIn('QStringLiteral("Sample generation failed: %1")', source)
         self.assertIn('m_start->setText(QStringLiteral("Start New Edit Anyway"))', source)

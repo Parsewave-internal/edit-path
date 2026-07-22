@@ -110,6 +110,21 @@ def load_manifest(session_dir: Path) -> tuple[Path, dict]:
         if path.name == "collector-metadata.json":
             value = {"schema": "video-path/assets@1", "assets": value.get("assets", [])}
         return path, value
+    sample_path = session_dir / "sample.json"
+    bindings_path = session_dir / "provenance" / "asset-bindings.json"
+    if sample_path.is_file():
+        import json
+
+        sample = json.loads(sample_path.read_text(encoding="utf-8"))
+        assets = sample.get("inputs", {}).get("assets", [])
+        by_id = {str(asset.get("asset_id")): dict(asset) for asset in assets if isinstance(asset, dict)}
+        if bindings_path.is_file():
+            bindings = json.loads(bindings_path.read_text(encoding="utf-8"))
+            for binding in bindings.get("bindings", []):
+                asset = by_id.get(str(binding.get("asset_id")))
+                if asset is not None:
+                    asset.update({key: value for key, value in binding.items() if key != "asset_id"})
+        return sample_path, {"schema": "video-path/assets@2", "assets": list(by_id.values())}
     raise GateError("assets", "asset manifest is missing")
 
 

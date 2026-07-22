@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
-from job_pipeline import canonical_hash, project_resources, replay_report, resolve_assets
+from job_pipeline import canonical_hash, organize_dataset_item, project_resources, replay_report, resolve_assets
 from normalize_sample import accepted_commits, build_sample
 from sample_collector import bind_project_assets
 from validate_sample import validate_sample
@@ -19,6 +19,32 @@ HASH_B = "b" * 64
 
 
 class MvpTests(unittest.TestCase):
+    def test_completed_sample_has_role_oriented_layout(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for relative, content in {
+                "assets/a.mp4": b"asset",
+                "reference/editor-final.mp4": b"target",
+                "final.mp4": b"replay",
+                "trajectory.jsonl": b"",
+                "reconstructed-output.mp4": b"reconstructed",
+                "reconstructed.kdenlive": b"<property>assets/a.mp4</property>",
+                "render-report.json": b"{}",
+                "internal/final.kdenlive": b"native",
+                "asset-manifest.json": json.dumps({"assets": [{"asset_id": "asset_001", "file": "assets/a.mp4", "sha256": "x", "bytes": 5, "bin_references": ["4"]}]}).encode(),
+            }.items():
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(content)
+            organize_dataset_item(root, ".mp4")
+            self.assertTrue((root / "outputs/final.mp4").is_file())
+            self.assertTrue((root / "edit-path/replay.mp4").is_file())
+            self.assertTrue((root / "verification/reconstructed.mp4").is_file())
+            self.assertTrue((root / "provenance/editor-project.kdenlive").is_file())
+            self.assertIn(b"../inputs/assets/a.mp4", (root / "verification/reconstructed.kdenlive").read_bytes())
+            bindings = json.loads((root / "provenance/asset-bindings.json").read_text())
+            self.assertEqual(bindings["bindings"], [{"asset_id": "asset_001", "bin_references": ["4"]}])
+
     def test_recorder_binds_delayed_actions_before_buffering(self):
         source = (Path(__file__).parents[2] / "src/videopath/videopathrecorder.cpp").read_text(encoding="utf-8")
         record_action = source.split("void VideoPathRecorder::recordAction", 1)[1].split(

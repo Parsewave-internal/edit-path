@@ -74,6 +74,7 @@ def find_trajectory(session_dir: Path) -> Path:
     if session_dir.is_file() and session_dir.suffix == ".jsonl":
         return session_dir
     candidates = (
+        session_dir / "edit-path" / "events.jsonl",
         session_dir / "evidence" / "raw-events.jsonl",
         session_dir / "trajectory.jsonl",
         session_dir / "raw-events.jsonl",

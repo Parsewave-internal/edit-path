@@ -277,6 +277,10 @@ def validate_checkpoints(
 
 def _reference_video(session_dir: Path) -> Path:
     candidates = (
+        session_dir / "outputs" / "final.mp4",
+        session_dir / "outputs" / "final.mkv",
+        session_dir / "outputs" / "final.mov",
+        session_dir / "outputs" / "final.webm",
         session_dir / "output" / "final.mp4",
         session_dir / "final_ref.mp4",
         session_dir / "output" / "final.mkv",
@@ -319,22 +323,9 @@ def _clean_events(events: list[dict[str, Any]], accepted: list[dict[str, Any]]) 
     accepted_ids = {event.get("event_id") for event in accepted}
     accepted_transactions = {event.get("transaction_id") for event in accepted if event.get("transaction_id")}
     checkpoints = [event for event in events if event.get("event_type") == "state.checkpoint"]
-    accepted_hashes = {
-        event.get("project_after_hash", event.get("after_hash"))
-        for event in accepted
-    }
-    if checkpoints:
-        baseline_state = checkpoints[0].get("project_state")
-        accepted_hashes.add(baseline_state.get("sha256") if isinstance(baseline_state, dict) else checkpoints[0].get("state_hash"))
-    checkpoint_ids = {
-        checkpoint.get("event_id")
-        for checkpoint in checkpoints
-        if (
-            checkpoint.get("project_state", {}).get("sha256")
-            if isinstance(checkpoint.get("project_state"), dict)
-            else checkpoint.get("state_hash")
-        ) in accepted_hashes
-    }
+    # Recovery checkpoints are epoch boundaries even when their regenerated
+    # project byte hash is not itself the result hash of an accepted edit.
+    checkpoint_ids = {checkpoint.get("event_id") for checkpoint in checkpoints}
     cleaned = []
     for event in events:
         event_type = event.get("event_type")
@@ -347,6 +338,8 @@ def _clean_events(events: list[dict[str, Any]], accepted: list[dict[str, Any]]) 
         )
         if keep:
             cleaned.append(copy.deepcopy(event))
+    for sequence, event in enumerate(cleaned, 1):
+        event["sequence"] = sequence
     return cleaned
 
 

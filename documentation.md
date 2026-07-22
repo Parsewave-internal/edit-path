@@ -842,6 +842,13 @@ MLT rendering without a display server. The final-state media gate remains
 authoritative; process replays are derived artifacts and do not replace the
 normalized trajectory or exact state chain.
 
+Completed samples now use the role-oriented layout documented in
+`DATASET_ITEM.md`. The editor target, edit-path replay, derived reconstruction,
+and native evidence no longer share ambiguous top-level names. `sample.json`
+remains the authoritative software-independent dataset record; verification
+and provenance artifacts are explicitly separated from training inputs and
+target output.
+
 A subsequent acceptance run exercised a speed-changed clip and exposed an MLT
 identity edge case: timewarp producers store `resource` as
 `speed:/absolute/source` while retaining the original Kdenlive bin ID. Asset

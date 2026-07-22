@@ -22,6 +22,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from edit_path.pipeline import process_session
+from edit_path.io import write_jsonl
 from edit_path.segments import assemble_segments, discover_segments
 from normalize_sample import accepted_commits, build_sample, read_jsonl
 from validate_sample import validate_sample
@@ -306,6 +307,69 @@ def refresh_bundle_manifest(bundle: Path) -> None:
     dump(path, value)
 
 
+def organize_dataset_item(bundle: Path, output_suffix: str) -> None:
+    """Give a completed bundle a stable, role-oriented dataset layout."""
+    moves = {
+        "assets": "inputs/assets",
+        f"reference/editor-final{output_suffix}": f"outputs/final{output_suffix}",
+        "final.mp4": "edit-path/replay.mp4",
+        "trajectory.jsonl": "edit-path/events.jsonl",
+        "reconstructed-output.mp4": "verification/reconstructed.mp4",
+        "reconstructed.kdenlive": "verification/reconstructed.kdenlive",
+        "render-report.json": "verification/report.json",
+        "checkpoint_refs": "verification/checkpoints",
+        "raw-trajectory.jsonl": "provenance/assembled-events.jsonl",
+        "evidence": "provenance/segments",
+        "states": "provenance/states",
+        "internal/final.kdenlive": "provenance/editor-project.kdenlive",
+        "entity-map.json": "provenance/entity-map.json",
+        "session.json": "provenance/session.json",
+        "asset-manifest.json": "provenance/asset-bindings.json",
+    }
+    for source_name, destination_name in moves.items():
+        source = bundle / source_name
+        if not source.exists():
+            continue
+        destination = bundle / destination_name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(source), str(destination))
+    internal = bundle / "internal"
+    if internal.is_dir() and not any(internal.iterdir()):
+        internal.rmdir()
+    reference = bundle / "reference"
+    if reference.is_dir() and not any(reference.iterdir()):
+        reference.rmdir()
+
+    bindings_path = bundle / "provenance" / "asset-bindings.json"
+    if bindings_path.is_file():
+        manifest = json.loads(bindings_path.read_text(encoding="utf-8"))
+        bindings = []
+        for asset in manifest.get("assets", []):
+            binding = {"asset_id": asset.get("asset_id")}
+            for key in ("bin_reference", "bin_references", "license_status"):
+                if key in asset:
+                    binding[key] = asset[key]
+            bindings.append(binding)
+        dump(bindings_path, {"schema": "video-path/native-asset-bindings@1", "bindings": bindings})
+
+    portable_project = bundle / "verification" / "reconstructed.kdenlive"
+    if portable_project.is_file():
+        portable_project.write_bytes(portable_project.read_bytes().replace(b"assets/", b"../inputs/assets/"))
+
+    # Portable state/proxy paths live inside the canonical event stream.
+    events_path = bundle / "edit-path" / "events.jsonl"
+    if events_path.is_file():
+        events = read_jsonl(events_path)
+        for event in events:
+            state = event.get("project_state")
+            if isinstance(state, dict) and isinstance(state.get("path"), str):
+                state["path"] = state["path"].replace("states/", "provenance/states/", 1)
+            proxy = event.get("reference_proxy")
+            if isinstance(proxy, dict) and isinstance(proxy.get("path"), str):
+                proxy["path"] = proxy["path"].replace("checkpoint_refs/", "verification/checkpoints/", 1)
+        write_jsonl(events_path, events)
+
+
 def finalize_session(session: Path, project: Path, output: Path, job: dict, *, source_root: Path | None = None) -> Path:
     raw_paths = discover_segments(session)
     for index, path in enumerate(raw_paths):
@@ -359,17 +423,26 @@ def finalize_session(session: Path, project: Path, output: Path, job: dict, *, s
     completed = session / "completed-sample"
     if completed.exists(): raise ValueError(f"completed sample already exists: {completed}")
     shutil.move(str(source_bundle), str(completed))
+    organize_dataset_item(completed, output.suffix.lower())
 
     sample_path = completed / "sample.json"
     sample = json.loads(sample_path.read_text(encoding="utf-8"))
-    report = json.loads((completed / "render-report.json").read_text(encoding="utf-8"))
-    reference_name = f"reference/editor-final{output.suffix.lower()}"
-    sample["output"]["video"] = reference_name
-    sample["output"]["sha256"] = sha256(completed / reference_name)
-    sample["output"]["edit_process_video"] = "final.mp4"
-    sample["output"]["edit_process_video_sha256"] = sha256(completed / "final.mp4")
-    sample["output"]["reconstructed_video"] = "reconstructed-output.mp4"
-    sample["output"]["reconstructed_video_sha256"] = sha256(completed / "reconstructed-output.mp4")
+    report = json.loads((completed / "verification/report.json").read_text(encoding="utf-8"))
+    final_name = f"outputs/final{output.suffix.lower()}"
+    sample["output"]["video"] = final_name
+    sample["output"]["sha256"] = sha256(completed / final_name)
+    sample["output"]["edit_process_video"] = "edit-path/replay.mp4"
+    sample["output"]["edit_process_video_sha256"] = sha256(completed / "edit-path/replay.mp4")
+    sample["output"]["reconstructed_video"] = "verification/reconstructed.mp4"
+    sample["output"]["reconstructed_video_sha256"] = sha256(completed / "verification/reconstructed.mp4")
+    sample["inputs"]["assets"] = [
+        {**asset, "file": asset["file"].replace("assets/", "inputs/assets/", 1)}
+        for asset in sample["inputs"]["assets"]
+    ]
+    sample["evidence"]["native_project"] = "provenance/editor-project.kdenlive"
+    for raw in sample["evidence"].get("raw_events", []):
+        raw["file"] = raw["file"].replace("evidence/", "provenance/segments/", 1)
+    sample["quality"]["segment_assembly"]["path"] = "edit-path/events.jsonl"
     sample["quality"]["canonical_reconstruction"] = "passed"
     sample["quality"]["media_reconstruction"] = "passed" if report.get("final", {}).get("accepted") else "failed"
     sample["quality"]["ready_for_client_review"] = sample["quality"]["media_reconstruction"] == "passed" and bool(sample["task"].get("prompt"))

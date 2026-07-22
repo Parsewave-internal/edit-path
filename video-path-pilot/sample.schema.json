@@ -11,7 +11,8 @@
       "type": "object",
       "required": ["prompt"],
       "properties": {
-        "prompt": {"type": "string", "minLength": 1}
+        "prompt": {"type": ["string", "null"], "minLength": 1},
+        "prompt_status": {"enum": ["provided", "pending_internal_entry"]}
       }
     },
     "project": {

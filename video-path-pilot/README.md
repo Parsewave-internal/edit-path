@@ -5,10 +5,10 @@ SPDX-License-Identifier: GPL-3.0-only
 
 # Kdenlive Video Path Pilot
 
-This fork includes an assigned-job recording MVP around Kdenlive. The app
-records interactions and canonical outcomes without collecting editor intent,
-resolves assets from the saved project by SHA-256, normalizes the accepted path,
-and generates `sample.json` automatically.
+This fork includes a freeform recording MVP around Kdenlive. Editors can import,
+download, or create media at any point. The app records canonical outcomes,
+discovers actual resources from the final project, resolves them by SHA-256,
+normalizes the accepted path, and generates `sample.json` automatically.
 
 For the two-sample client trial, begin with `EDITOR_WORKFLOW.md`. The clean
 format and language are in `sample.schema.json` and `VOCABULARY.md`.
@@ -22,11 +22,10 @@ video-path-pilot/run-collector-app.sh
 ```
 
 Choose **Run** if the file manager asks whether to display or execute the file.
-The app opens a supplied `job.json`, creates a session folder, launches
-Kdenlive with an isolated configuration and preloaded assets, records numbered
-segments, offers crash recovery, validates termination, and packages the
-completed sample. It never asks for an editor plan, rationale, creative
-decisions, or subjective review. No terminal commands are required.
+The one-screen app creates a session folder, launches blank Kdenlive with an
+isolated configuration, records numbered segments, offers crash recovery,
+validates termination, and packages the completed sample. There is no assigned
+job or initialization screen. No terminal commands are required.
 
 Canonical state replay must reproduce every recorded state hash. A first MLT
 media adapter reconstructs cut/trim/move edits with normal-speed clips and no
@@ -41,10 +40,11 @@ The underlying command interface remains available to developers and tests:
 python3 video-path-pilot/sample_collector.py --help
 ```
 
-`job_pipeline.py` is used internally to create assigned jobs and by the app to
-package completed samples. The older first-use-order collector was removed so
-it cannot produce incorrect asset identities. Undo/redo remains in raw evidence
-but is removed from the clean successful trajectory.
+`job_pipeline.py` discovers project resources and packages completed sessions.
+It can also create controlled jobs for automated testing, but the editor GUI
+does not require them. A verbal task becomes an explicit pending prompt in the
+generated sample; the internal team attaches the exact wording later. Undo/redo
+remains in raw evidence but is removed from the clean successful trajectory.
 
 The pilot is based on upstream Kdenlive revision
 `7de2ed9902b4288797a7781498546389a482a39e`.

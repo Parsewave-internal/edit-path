@@ -587,6 +587,33 @@ calculation. Native asset ID 4 resolved to `asset_001`, canonical replay passed,
 media reconstruction passed with SSIM 0.974985 and audio PSNR 172.592 dB, every
 packaged hash validated, and `quality.ready_for_client_review` was true.
 
+### Freeform editor workflow correction
+
+Testing showed that an assigned-job initialization screen was the wrong product
+assumption. Editors may obtain or create assets throughout an edit rather than
+receiving a complete manifest at startup. The editor GUI was reduced again to
+Start Session, Recover and Continue, Finish Session, and folder actions. It
+launches blank isolated Kdenlive and does not preload media.
+
+On Finish, `finalize-freeform` parses every file-backed `chain` and `producer`
+from the saved project, deduplicates resources by SHA-256, assigns canonical
+asset IDs, copies the discovered media, and resolves native IDs before sample
+normalization. A freeform end-to-end test discovered the project asset,
+generated the package, passed canonical and media reconstruction, and validated
+all hashes.
+
+Software cannot recover a verbal instruction. Therefore `sample.json` is still
+generated at the editor end but contains `task.prompt: null`,
+`prompt_status: pending_internal_entry`, and `ready_for_client_review: false`.
+The internal `attach-prompt` operation inserts the exact known instruction and
+recomputes readiness. The acceptance test changed readiness to true after that
+attachment without collecting any editor intent.
+
+The latest reported “crash” was also audited. Both recent JSONL files ended with
+valid `session.end`, Kdenlive logged requested close events, session manifests
+reached `ready_to_finish`, and no core dump existed. The recording did not
+crash, although remote X11 responsiveness made the shutdown appear abrupt.
+
 ### Privacy and security
 
 The collector can reveal editor behavior, project structure, local file paths,

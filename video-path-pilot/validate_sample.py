@@ -32,7 +32,11 @@ def validate_sample(path: Path, check_files: bool = False) -> list[str]:
     if sample.get("schema_version") != "0.1.0": errors.append("unsupported schema_version")
     task = sample.get("task", {})
     if "editor_plan" in task: errors.append("editor intent is prohibited: remove task.editor_plan")
-    if not isinstance(task.get("prompt"), str) or not task["prompt"].strip(): errors.append("task.prompt must be non-empty")
+    prompt = task.get("prompt")
+    if prompt is None:
+        if task.get("prompt_status") != "pending_internal_entry": errors.append("missing prompt must be marked pending_internal_entry")
+    elif not isinstance(prompt, str) or not prompt.strip():
+        errors.append("task.prompt must be non-empty or explicitly pending")
     rate = sample.get("project", {}).get("frame_rate", {})
     if not isinstance(rate.get("numerator"), int) or rate.get("numerator", 0) <= 0: errors.append("invalid frame-rate numerator")
     if not isinstance(rate.get("denominator"), int) or rate.get("denominator", 0) <= 0: errors.append("invalid frame-rate denominator")

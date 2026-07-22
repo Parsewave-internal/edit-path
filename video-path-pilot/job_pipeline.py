@@ -254,6 +254,57 @@ def finalize_job(args: argparse.Namespace) -> int:
     return 0
 
 
+def finalize_freeform(args: argparse.Namespace) -> int:
+    session = args.session_dir.resolve()
+    if (session / "completed-sample").exists(): raise ValueError("this session already has a completed sample")
+    project = args.project.resolve() if args.project else discover_one(session, {".kdenlive"}, "Kdenlive project")
+    output = args.output.resolve() if args.output else discover_one(session, VIDEO_SUFFIXES, "rendered video")
+    resources, settings = project_resources(project)
+    unique: dict[str, Path] = {}
+    for resource in resources.values():
+        if resource.is_file(): unique.setdefault(sha256(resource), resource)
+    if not unique: raise ValueError("saved project contains no resolvable media resources")
+    generated = session / "generated-assignment"
+    if generated.exists(): raise ValueError(f"generated assignment already exists: {generated}")
+    (generated / "assets").mkdir(parents=True)
+    assets = []
+    for index, (digest, source) in enumerate(sorted(unique.items()), 1):
+        asset_id = f"asset_{index:03d}"; target = generated / "assets" / f"{asset_id}{source.suffix.lower()}"
+        shutil.copy2(source, target)
+        assets.append({"asset_id": asset_id, "file": target.relative_to(generated).as_posix(),
+                       "original_filename": source.name, "sha256": digest, "bytes": target.stat().st_size})
+    dump(generated / "job.json", {"schema_version": "0.1.0", "job_id": session.name,
+         "task": {"prompt": "PROMPT_PENDING_INTERNAL_ENTRY"}, "project": settings, "assets": assets})
+    inner = argparse.Namespace(job_dir=generated, session_dir=session, project=project, output=output)
+    finalize_job(inner)
+    source_sample = generated / "completed-sample"; target_sample = session / "completed-sample"
+    shutil.move(str(source_sample), str(target_sample))
+    sample_path = target_sample / "sample.json"; sample = json.loads(sample_path.read_text(encoding="utf-8"))
+    sample["task"] = {"prompt": None, "prompt_status": "pending_internal_entry"}
+    sample["quality"]["ready_for_client_review"] = False
+    sample["quality"]["missing_requirements"] = ["task.prompt"]
+    dump(sample_path, sample)
+    print(f"freeform sample generated: {target_sample}")
+    print("task prompt: pending internal entry")
+    return 0
+
+
+def attach_prompt(args: argparse.Namespace) -> int:
+    sample_path = args.sample_dir.resolve() / "sample.json"
+    if not sample_path.is_file(): raise ValueError(f"sample.json not found: {sample_path}")
+    sample = json.loads(sample_path.read_text(encoding="utf-8")); prompt = args.prompt.strip()
+    if not prompt: raise ValueError("prompt must not be empty")
+    sample["task"] = {"prompt": prompt, "prompt_status": "provided"}
+    sample["quality"]["missing_requirements"] = []
+    sample["quality"]["ready_for_client_review"] = (sample["quality"].get("canonical_reconstruction") == "passed"
+                                                      and sample["quality"].get("media_reconstruction") == "passed")
+    dump(sample_path, sample)
+    errors = validate_sample(sample_path, check_files=True)
+    if errors: raise ValueError("sample failed after prompt attachment: " + "; ".join(errors))
+    print(f"prompt attached; ready for client review: {str(sample['quality']['ready_for_client_review']).lower()}")
+    return 0
+
+
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description=__doc__); sub = result.add_subparsers(dest="command", required=True)
     create = sub.add_parser("create-job"); create.add_argument("job_dir", type=Path); create.add_argument("--job-id", required=True)
@@ -263,6 +314,10 @@ def parser() -> argparse.ArgumentParser:
     check = sub.add_parser("validate-job"); check.add_argument("job_dir", type=Path); check.set_defaults(function=validate_job_command)
     finish = sub.add_parser("finalize"); finish.add_argument("job_dir", type=Path); finish.add_argument("session_dir", type=Path)
     finish.add_argument("--project", type=Path); finish.add_argument("--output", type=Path); finish.set_defaults(function=finalize_job)
+    freeform = sub.add_parser("finalize-freeform"); freeform.add_argument("session_dir", type=Path)
+    freeform.add_argument("--project", type=Path); freeform.add_argument("--output", type=Path); freeform.set_defaults(function=finalize_freeform)
+    prompt = sub.add_parser("attach-prompt"); prompt.add_argument("sample_dir", type=Path); prompt.add_argument("--prompt", required=True)
+    prompt.set_defaults(function=attach_prompt)
     return result
 
 

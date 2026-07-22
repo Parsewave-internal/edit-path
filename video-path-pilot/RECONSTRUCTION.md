@@ -30,8 +30,8 @@ may reconstruct from `internal/final.kdenlive`; unavailable legacy checkpoint
 proxies are reported as skipped rather than retroactively invented.
 
 An empty checkpoint can legitimately contain no video stream. In that one
-case SSIM is reported as `not_applicable_no_video`; both files must be
-video-free and must still pass duration and audio-structure checks.
+case SSIM is reported as `not_applicable_empty_timeline`. A non-empty
+checkpoint or final editor render that lacks video fails closed.
 
 ## Local workflow
 
@@ -48,7 +48,8 @@ python3 -m edit_path process /samples/session-001 /dataset
 python3 -m edit_path index /dataset
 ```
 
-`doctor` must find Zstandard, Melt (or `mlt-melt`), FFmpeg, and FFprobe. A
+`doctor` must find Zstandard, Melt (or `mlt-melt`), FFmpeg, FFprobe, and at
+least one supported video encoder (`libx264`, `libopenh264`, or `mpeg4`). A
 Kdenlive project can also require MLT modules beyond the executables themselves.
 Install the complete Kdenlive/MLT runtime when using effects, titles, Lottie,
 or audio preview: the commonly required services include `avformat`, `xml`,
@@ -87,6 +88,11 @@ a false success:
 ./scripts/run-verification.sh
 ```
 
+The pinned image explicitly installs the general MLT module set, its Qt 6
+module (`qimage`, `kdenlivetitle`, and Glaxnimate services), Frei0r effects,
+FFmpeg/AVFilter, and the audio backends pulled by MLT. It does not need the
+QtMultimedia QML import because it never starts the interactive editor.
+
 The immutable accepted bundle contains `final.mp4`, a portable
 `reconstructed.kdenlive`, cleaned and raw trajectories, exact state sidecars,
 checkpoint references, hashed assets, the asset manifest, and a render report.
@@ -120,8 +126,10 @@ python3 -m edit_path process /samples/session-001 /dataset \
   --runtime-lock /config/runtime-lock.json
 ```
 
-The lock compares exact Melt/MLT and FFmpeg version strings and, when set, the
-container image digest. Every render report also records the observed runtime.
+The lock compares exact Melt/MLT and FFmpeg version strings, selected video
+encoder, and, when set, the container image digest. Every render report also
+records the observed runtime. A Melt command that exits successfully but emits
+no video stream is rejected and retried with the next supported encoder.
 
 ## Collection-to-publication flow
 

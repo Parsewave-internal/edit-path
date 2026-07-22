@@ -107,6 +107,23 @@ class SegmentAssemblyTests(unittest.TestCase):
             with self.assertRaisesRegex(GateError, "checkpoint"):
                 assemble_segments(root)
 
+    def test_pre_checkpoint_crash_segment_is_retained_as_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.make_segments(root)
+            first = [
+                envelope(1, "session.start", "early-crash"),
+                envelope(2, "project.context", "early-crash", context=CONTEXT),
+                envelope(3, "ui.command", "early-crash", interaction_id="interaction", command_id="play", label="Play",
+                         source="programmatic_or_unknown", shortcuts=[]),
+            ]
+            write_events(root / "raw-events-000.jsonl", first)
+            report = assemble_segments(root, session_id="collection")
+            events = [json.loads(line) for line in Path(report["path"]).read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(report["segments"], 3)
+            self.assertEqual(sum(event["event_type"] == "state.checkpoint" for event in events), 2)
+            self.assertTrue(any(event.get("command_id") == "play" for event in events))
+
 
 if __name__ == "__main__":
     unittest.main()

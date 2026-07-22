@@ -19,7 +19,7 @@ from .io import RAW_SCHEMA_VERSIONS, event_sequence, find_trajectory, read_jsonl
 from .reconstruct import render_event, render_session, state_reference
 from .runtime import runtime_fingerprint, verify_runtime_lock
 from .state import load_state_reference, resolve_accepted_branch, validate_action_semantics, validate_state_transitions
-from .validate import validate_render
+from .validate import probe, validate_render
 
 
 def utc_now() -> str:
@@ -214,7 +214,27 @@ def validate_checkpoints(
             continue
         if not reference.is_file():
             raise GateError("checkpoint_ssim", f"checkpoint reference is missing: {reference}", event_sequence(event))
+        reference_probe = probe(reference)
+        snapshot = event.get("snapshot", {})
+        empty_timeline = (
+            isinstance(snapshot, dict)
+            and snapshot.get("duration_frames", 0) <= 0
+            and not snapshot.get("clips")
+            and not snapshot.get("compositions")
+            and not snapshot.get("mixes")
+        )
+        if empty_timeline:
+            results.append({
+                "sequence": event_sequence(event),
+                "status": "passed",
+                "accepted": True,
+                "ssim": 1.0,
+                "ssim_status": "not_applicable_empty_timeline",
+                "reference": {"probe": reference_probe},
+            })
+            continue
         output = work_dir / "checkpoint-renders" / f"{event_sequence(event):08d}.mp4"
+        reference_has_video = any(stream.get("codec_type") == "video" for stream in reference_probe.get("streams", []))
         proxy = event.get("reference_proxy", {})
         preset = None
         if isinstance(proxy, dict) and isinstance(proxy.get("width"), int) and isinstance(proxy.get("height"), int):
@@ -226,7 +246,14 @@ def validate_checkpoints(
                 "height": str(proxy["height"]),
                 "rescale": "bilinear",
             }
-        render_event(session_dir, event, output, melt_binary=melt_binary, preset=preset)
+        render_event(
+            session_dir,
+            event,
+            output,
+            melt_binary=melt_binary,
+            preset=preset,
+            require_video=reference_has_video,
+        )
         report = validate_render(reference, output, minimum_ssim=minimum_ssim)
         report["sequence"] = event_sequence(event)
         report["status"] = "passed" if report["accepted"] else "failed"
@@ -256,6 +283,24 @@ def _reference_video(session_dir: Path) -> Path:
             if candidate.is_file():
                 return candidate
     raise GateError("final_reference", "editor final reference render is missing")
+
+
+def reference_matched_render(reference: Path) -> tuple[str, dict[str, str] | None, bool]:
+    """Choose a strict comparison render that preserves lossless references."""
+
+    media = probe(reference)
+    video_streams = [stream for stream in media.get("streams", []) if stream.get("codec_type") == "video"]
+    audio_streams = [stream for stream in media.get("streams", []) if stream.get("codec_type") == "audio"]
+    has_video = bool(video_streams)
+    if reference.suffix.lower() == ".mkv" and has_video and video_streams[0].get("codec_name") == "ffv1":
+        preset = {"f": "matroska", "vcodec": "ffv1"}
+        pixel_format = video_streams[0].get("pix_fmt")
+        if isinstance(pixel_format, str) and pixel_format:
+            preset["pix_fmt"] = pixel_format
+        if audio_streams:
+            preset["acodec"] = "flac" if audio_streams[0].get("codec_name") == "flac" else "pcm_s16le"
+        return ".mkv", preset, has_video
+    return ".mp4", None, has_video
 
 
 def _clean_events(events: list[dict[str, Any]], accepted: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -372,6 +417,10 @@ def publish_bundle(
     if destination.exists():
         raise GateError("publish", f"destination already exists: {destination}")
     temporary = Path(tempfile.mkdtemp(prefix=f".{session_id}-", dir=destination_root))
+    # mkdtemp deliberately creates mode 0700. The temporary name is hidden,
+    # but that mode must not survive the atomic rename or bundles produced by
+    # a root-owned container cannot be inspected by the host user.
+    temporary.chmod(0o755)
     try:
         shutil.copy2(artifacts["final_video"], temporary / "final.mp4")
         reference_video = artifacts.get("reference_video")
@@ -432,6 +481,7 @@ def quarantine_session(
     quarantine_root.mkdir(parents=True, exist_ok=True)
     destination = quarantine_root / session_id
     temporary = Path(tempfile.mkdtemp(prefix=f".{session_id}-", dir=quarantine_root))
+    temporary.chmod(0o755)
     try:
         if trajectory and trajectory.is_file():
             shutil.copy2(trajectory, temporary / "raw-trajectory.jsonl")
@@ -521,11 +571,38 @@ def process_session(
                 melt_binary=melt_binary,
                 require_references=require_targets,
             )
-            reconstructed = render_session(session_dir, work_dir / "reconstructed.mp4", melt_binary=melt_binary)
+            reference = _reference_video(session_dir)
+            validation_suffix, validation_preset, reference_has_video = reference_matched_render(reference)
+            if not reference_has_video:
+                raise GateError("reference_render", "the editor reference render contains no video stream")
+            validation_name = "reconstructed.mp4" if validation_suffix == ".mp4" and validation_preset is None else f"reconstructed-validation{validation_suffix}"
+            validation_render = render_session(
+                session_dir,
+                work_dir / validation_name,
+                melt_binary=melt_binary,
+                preset=validation_preset,
+            )
             project = work_dir / "reconstructed.kdenlive"
-            final_report = validate_render(_reference_video(session_dir), reconstructed, minimum_ssim=minimum_ssim)
+            final_report = validate_render(reference, validation_render, minimum_ssim=minimum_ssim)
             if not final_report["accepted"]:
                 raise GateError("final_render", f"final render validation failed with SSIM {final_report['ssim']}")
+            if validation_suffix == ".mp4" and validation_preset is None:
+                reconstructed = validation_render
+                delivery_report = final_report
+            else:
+                reconstructed = render_session(session_dir, work_dir / "reconstructed.mp4", melt_binary=melt_binary)
+                delivery_report = validate_render(
+                    reference,
+                    reconstructed,
+                    minimum_ssim=0.98,
+                    maximum_duration_delta=0.10,
+                )
+                if not delivery_report["accepted"]:
+                    raise GateError(
+                        "delivery_render",
+                        "MP4 delivery validation failed "
+                        f"with SSIM {delivery_report['ssim']} and duration delta {delivery_report['duration_delta_seconds']}",
+                    )
             report = {
                 "schema": "video-path/render-report@1",
                 "capture": {
@@ -547,6 +624,7 @@ def process_session(
                 "assets_verified": len(verified_assets),
                 "checkpoint_results": checkpoint_results,
                 "final": final_report,
+                "delivery": delivery_report,
             }
             report_path = work_dir / "render-report.json"
             write_json(report_path, report)
@@ -556,7 +634,7 @@ def process_session(
                 session_id,
                 {
                     "final_video": reconstructed,
-                    "reference_video": _reference_video(session_dir),
+                    "reference_video": reference,
                     "project": project,
                     "report": report_path,
                     "raw_trajectory": trajectory,
@@ -649,6 +727,7 @@ def ingest_session(session_dir: Path, queue_root: Path) -> dict[str, Any]:
         if destination.exists():
             raise GateError("ingestion", f"session is already queued: {session_id}")
         temporary = Path(tempfile.mkdtemp(prefix=f".{session_id}-", dir=queued_root))
+        temporary.chmod(0o755)
         shutil.copytree(session_dir, temporary, dirs_exist_ok=True)
         preflight_session(temporary)
         os.replace(temporary, destination)

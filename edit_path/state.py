@@ -245,19 +245,57 @@ def operation_name(diff: dict[str, Any]) -> str:
 
 
 def validate_action_semantics(events: list[dict[str, Any]], accepted: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    actions_by_transaction = {
-        event.get("transaction_id"): event
-        for event in events
-        if event.get("event_type") == "action" and event.get("transaction_id")
-    }
+    def compatible(declared: str | None, inferred: str) -> bool:
+        return declared is None or declared == inferred or (declared in {"clip.trim", "clip.split"} and inferred == "clip.trim_or_split")
+
+    accepted_by_transaction: dict[str, list[dict[str, Any]]] = {}
+    for state_event in accepted:
+        transaction_id = state_event.get("transaction_id")
+        if isinstance(transaction_id, str):
+            accepted_by_transaction.setdefault(transaction_id, []).append(state_event)
+    assignments: dict[str, tuple[dict[str, Any], str]] = {}
+    actions = sorted(
+        (event for event in events if event.get("event_type") == "action" and event.get("transaction_id")),
+        key=event_sequence,
+    )
+    for action_event in actions:
+        transaction_id = str(action_event["transaction_id"])
+        declared = action_event.get("action")
+        target_events = accepted_by_transaction.get(transaction_id, [])
+        if target_events and all(compatible(declared, operation_name(value.get("diff", {}))) for value in target_events):
+            assignments[transaction_id] = (action_event, "transaction")
+            continue
+        # Recorder versions before the post-push fix emitted the semantic
+        # action just after QUndoStack had closed its transaction. The next
+        # transaction then inherited it. Recover only when a preceding,
+        # otherwise-unlinked accepted transaction has matching state semantics.
+        candidates = [
+            value
+            for value in accepted
+            if event_sequence(value) < event_sequence(action_event)
+            and isinstance(value.get("transaction_id"), str)
+            and value["transaction_id"] not in assignments
+            and compatible(declared, operation_name(value.get("diff", {})))
+        ]
+        if not candidates:
+            inferred = operation_name(target_events[0].get("diff", {})) if target_events else "unlinked"
+            raise GateError(
+                "action_semantics",
+                f"declared action {declared!r} is inconsistent with inferred operation {inferred!r}",
+                event_sequence(target_events[0]) if target_events else event_sequence(action_event),
+            )
+        recovered = max(candidates, key=event_sequence)
+        assignments[str(recovered["transaction_id"])] = (action_event, "recovered_post_push")
+
     reports: list[dict[str, Any]] = []
     for event in accepted:
         inferred = operation_name(event.get("diff", {}))
         transaction_id = event.get("transaction_id")
-        action_event = actions_by_transaction.get(transaction_id)
+        assignment = assignments.get(transaction_id)
+        action_event = assignment[0] if assignment else None
         declared = action_event.get("action") if action_event else None
-        compatible = declared is None or declared == inferred or (declared in {"clip.trim", "clip.split"} and inferred == "clip.trim_or_split")
-        if not compatible:
+        is_compatible = compatible(declared, inferred)
+        if not is_compatible:
             raise GateError(
                 "action_semantics",
                 f"declared action {declared!r} is inconsistent with inferred operation {inferred!r}",
@@ -269,6 +307,7 @@ def validate_action_semantics(events: list[dict[str, Any]], accepted: list[dict[
             "declared": declared,
             "inferred": inferred,
             "linked": action_event is not None,
+            "attribution": assignment[1] if assignment else "state_only",
         })
     return reports
 

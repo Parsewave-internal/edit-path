@@ -12,9 +12,11 @@ import json
 import os
 import shutil
 import sys
+import tempfile
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -38,7 +40,38 @@ def sha256(path: Path) -> str:
 
 
 def dump(path: Path, value: object) -> None:
-    path.write_text(json.dumps(value, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    encoded = json.dumps(value, indent=2, ensure_ascii=False) + "\n"
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            dir=path.parent,
+            delete=False,
+        ) as stream:
+            temporary = Path(stream.name)
+            stream.write(encoded)
+            stream.flush()
+            os.fsync(stream.fileno())
+        temporary.chmod(path.stat().st_mode & 0o777 if path.exists() else 0o644)
+        os.replace(temporary, path)
+    except Exception:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+        raise
+
+
+def mark_session_packaged(session: Path, completed: Path) -> None:
+    manifest_path = session / "session.json"
+    if not manifest_path.is_file():
+        return
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["status"] = "packaged"
+    manifest["updated_at_utc"] = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    dump(manifest_path, manifest)
+    shutil.copy2(manifest_path, completed / "session.json")
 
 
 def load_job(root: Path) -> dict:
@@ -335,9 +368,10 @@ def finalize_session(session: Path, project: Path, output: Path, job: dict, *, s
     sample["quality"]["media_reconstruction"] = "passed" if report.get("final", {}).get("accepted") else "failed"
     sample["quality"]["ready_for_client_review"] = sample["quality"]["media_reconstruction"] == "passed" and bool(sample["task"].get("prompt"))
     dump(sample_path, sample)
-    refresh_bundle_manifest(completed)
     errors = validate_sample(sample_path, check_files=True)
     if errors: raise ValueError("generated sample failed validation: " + "; ".join(errors))
+    mark_session_packaged(session, completed)
+    refresh_bundle_manifest(completed)
     print(f"completed sample: {completed}")
     print(f"media reconstruction: {sample['quality']['media_reconstruction']}")
     print(f"ready for client review: {str(sample['quality']['ready_for_client_review']).lower()}")

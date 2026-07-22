@@ -14,6 +14,7 @@
 #include <QPointF>
 #include <QSet>
 #include <QString>
+#include <QThreadPool>
 
 #include <functional>
 #include <memory>
@@ -46,6 +47,12 @@ public:
     void captureTimelineChange(const QString &label, const QString &boundary);
 
 private:
+    struct PendingSidecarWrite {
+        QFuture<bool> future;
+        QString stateHash;
+        QString checkpointHash;
+    };
+
     VideoPathRecorder();
     ~VideoPathRecorder();
     Q_DISABLE_COPY_MOVE(VideoPathRecorder)
@@ -65,6 +72,7 @@ private:
     QString stableEntityId(const QString &kind, const QString &nativeId) const;
     void persistEntityMap() const;
     bool waitForStateSidecars();
+    void reapFinishedStateSidecars(bool waitForSlot);
     static QJsonObject diffSnapshots(const QJsonObject &before, const QJsonObject &after);
     bool eventFilter(QObject *watched, QEvent *event) override;
     static QString describeObject(const QObject *object);
@@ -93,9 +101,13 @@ private:
     int m_pointerButton{0};
     QHash<QString, QJsonObject> m_lastSnapshots;
     std::function<QByteArray()> m_projectStateProvider;
-    QList<QFuture<bool>> m_stateSidecarWrites;
+    QList<PendingSidecarWrite> m_stateSidecarWrites;
+    QThreadPool m_stateSidecarPool;
+    int m_maxPendingStateSidecars{2};
     QSet<QString> m_scheduledStateHashes;
     QSet<QString> m_scheduledCheckpointHashes;
+    QSet<QString> m_failedStateHashes;
+    QSet<QString> m_failedCheckpointHashes;
     QString m_lastProjectStateHash;
     QList<QJsonObject> m_pendingActions;
     mutable QHash<QString, QString> m_stableEntityIds;

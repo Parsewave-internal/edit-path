@@ -92,6 +92,34 @@ QJsonArray canonicalEffectStack(const std::shared_ptr<EffectStackModel> &stack)
     }
     return effects;
 }
+
+QString checkpointVideoEncoder()
+{
+    static const QString selected = []() {
+        const QString configured = qEnvironmentVariable("KDENLIVE_VIDEO_PATH_VIDEO_ENCODER");
+        if (!configured.isEmpty()) {
+            return configured;
+        }
+        const QString ffmpeg = qEnvironmentVariable("KDENLIVE_VIDEO_PATH_FFMPEG", QStringLiteral("ffmpeg"));
+        QProcess process;
+        process.start(ffmpeg, {QStringLiteral("-hide_banner"), QStringLiteral("-encoders")});
+        if (!process.waitForStarted(5000) || !process.waitForFinished(10000) || process.exitCode() != 0) {
+            return QStringLiteral("mpeg4");
+        }
+        const QString output = QString::fromUtf8(process.readAllStandardOutput() + process.readAllStandardError());
+        const QStringList preferred{QStringLiteral("libx264"), QStringLiteral("libopenh264"), QStringLiteral("mpeg4")};
+        for (const QString &encoder : preferred) {
+            for (const QStringView line : QStringView(output).split(QLatin1Char('\n'))) {
+                const QStringList fields = line.trimmed().toString().split(QLatin1Char(' '), Qt::SkipEmptyParts);
+                if (fields.size() >= 2 && fields[0].startsWith(QLatin1Char('V')) && fields[1] == encoder) {
+                    return encoder;
+                }
+            }
+        }
+        return QStringLiteral("mpeg4");
+    }();
+    return selected;
+}
 }
 
 VideoPathRecorder &VideoPathRecorder::instance()
@@ -103,6 +131,13 @@ VideoPathRecorder &VideoPathRecorder::instance()
 VideoPathRecorder::VideoPathRecorder()
     : m_sessionId(qEnvironmentVariable("KDENLIVE_VIDEO_PATH_SESSION_ID"))
 {
+    bool pendingLimitValid = false;
+    const int configuredPendingLimit = qEnvironmentVariableIntValue("KDENLIVE_VIDEO_PATH_MAX_PENDING_SIDECARS", &pendingLimitValid);
+    if (pendingLimitValid) {
+        m_maxPendingStateSidecars = qBound(1, configuredPendingLimit, 8);
+    }
+    m_stateSidecarPool.setMaxThreadCount(1);
+    m_stateSidecarPool.setExpiryTimeout(30000);
     if (m_sessionId.isEmpty()) {
         m_sessionId = QUuid::createUuid().toString(QUuid::WithoutBraces);
     }
@@ -321,11 +356,14 @@ void VideoPathRecorder::recordAction(const QString &action, const QString &timel
     event.insert(QStringLiteral("action"), action);
     event.insert(QStringLiteral("timeline_id"), timelineId);
     event.insert(QStringLiteral("parameters"), parameters);
-    // Some timeline operations emit their semantic action after the undo-stack
-    // push has already captured the state diff. Preserve the active (or just
-    // completed) transaction when the action is observed instead of waiting
-    // until shutdown, when that transaction context is no longer available.
-    addTransactionFields(event, true);
+    // Some operations report their semantic action immediately after the
+    // undo-stack push has completed. Write those actions now: buffering until
+    // the next transaction could overwrite the transaction attribution.
+    if (m_transactionId.isEmpty() && m_lastCompletedTransaction.isValid() && m_lastCompletedTransaction.elapsed() < 2000) {
+        addTransactionFields(event, true);
+        writeEvent(event);
+        return;
+    }
     m_pendingActions.append(event);
 }
 
@@ -480,8 +518,11 @@ QJsonObject VideoPathRecorder::projectStateReference(QByteArray *rawState)
     const QString target = QDir(m_stateDirectory).filePath(digest + extension);
     const QString relative = QDir(m_logDirectory).relativeFilePath(target);
     if (!m_scheduledStateHashes.contains(digest) && !QFileInfo::exists(target)) {
+        reapFinishedStateSidecars(true);
         m_scheduledStateHashes.insert(digest);
-        m_stateSidecarWrites.append(QtConcurrent::run([state, target]() -> bool {
+        PendingSidecarWrite pending;
+        pending.stateHash = digest;
+        pending.future = QtConcurrent::run(&m_stateSidecarPool, [state, target]() -> bool {
             QByteArray compressed;
 #ifdef VIDEOPATH_HAVE_ZSTD
             const size_t bound = ZSTD_compressBound(static_cast<size_t>(state.size()));
@@ -499,7 +540,8 @@ QJsonObject VideoPathRecorder::projectStateReference(QByteArray *rawState)
                 return false;
             }
             return output.commit();
-        }));
+        });
+        m_stateSidecarWrites.append(std::move(pending));
     }
     QJsonObject reference;
     reference.insert(QStringLiteral("encoding"), encoding);
@@ -535,8 +577,12 @@ QJsonObject VideoPathRecorder::scheduleCheckpointProxy(const QByteArray &project
     }
     const QString target = QDir(proxyDirectory).filePath(digest + QStringLiteral(".mp4"));
     if (!m_scheduledCheckpointHashes.contains(digest) && !QFileInfo::exists(target)) {
+        reapFinishedStateSidecars(true);
         m_scheduledCheckpointHashes.insert(digest);
-        m_stateSidecarWrites.append(QtConcurrent::run([projectState, target, width, height]() -> bool {
+        const QString videoEncoder = checkpointVideoEncoder();
+        PendingSidecarWrite pending;
+        pending.checkpointHash = digest;
+        pending.future = QtConcurrent::run(&m_stateSidecarPool, [projectState, target, width, height, videoEncoder]() -> bool {
             const QString token = QUuid::createUuid().toString(QUuid::WithoutBraces);
             const QString temporaryProject = QFileInfo(target).absolutePath() + QStringLiteral("/.%1.kdenlive").arg(token);
             const QString temporaryVideo = QFileInfo(target).absolutePath() + QStringLiteral("/.%1.mp4").arg(token);
@@ -545,21 +591,23 @@ QJsonObject VideoPathRecorder::scheduleCheckpointProxy(const QByteArray &project
                 return false;
             }
             const QString melt = qEnvironmentVariable("KDENLIVE_VIDEO_PATH_MELT", QStringLiteral("melt"));
-            const QStringList arguments{
+            QStringList arguments{
                 QStringLiteral("-progress"),
                 temporaryProject,
                 QStringLiteral("-consumer"),
                 QStringLiteral("avformat:%1").arg(temporaryVideo),
                 QStringLiteral("f=mp4"),
-                QStringLiteral("vcodec=libx264"),
-                QStringLiteral("crf=28"),
-                QStringLiteral("preset=ultrafast"),
-                QStringLiteral("acodec=aac"),
-                QStringLiteral("ab=64k"),
-                QStringLiteral("width=%1").arg(width),
-                QStringLiteral("height=%1").arg(height),
-                QStringLiteral("rescale=bilinear"),
+                QStringLiteral("vcodec=%1").arg(videoEncoder),
             };
+            if (videoEncoder == QLatin1String("libx264")) {
+                arguments << QStringLiteral("crf=28") << QStringLiteral("preset=ultrafast");
+            } else if (videoEncoder == QLatin1String("libopenh264")) {
+                arguments << QStringLiteral("vb=2M") << QStringLiteral("g=50");
+            } else {
+                arguments << QStringLiteral("qscale=3") << QStringLiteral("g=50");
+            }
+            arguments << QStringLiteral("acodec=aac") << QStringLiteral("ab=64k") << QStringLiteral("width=%1").arg(width)
+                      << QStringLiteral("height=%1").arg(height) << QStringLiteral("rescale=bilinear");
             const int result = QProcess::execute(melt, arguments);
             QFile::remove(temporaryProject);
             if (result != 0 || !QFileInfo::exists(temporaryVideo)) {
@@ -571,7 +619,8 @@ QJsonObject VideoPathRecorder::scheduleCheckpointProxy(const QByteArray &project
                 return true;
             }
             return QFile::rename(temporaryVideo, target);
-        }));
+        });
+        m_stateSidecarWrites.append(std::move(pending));
     }
     QJsonObject reference;
     reference.insert(QStringLiteral("path"), QDir(m_logDirectory).relativeFilePath(target));
@@ -583,14 +632,64 @@ QJsonObject VideoPathRecorder::scheduleCheckpointProxy(const QByteArray &project
     return reference;
 }
 
+void VideoPathRecorder::reapFinishedStateSidecars(bool waitForSlot)
+{
+    const auto finish = [this](int index) {
+        PendingSidecarWrite pending = m_stateSidecarWrites.takeAt(index);
+        pending.future.waitForFinished();
+        const bool succeeded = pending.future.result();
+        if (!pending.stateHash.isEmpty()) {
+            m_scheduledStateHashes.remove(pending.stateHash);
+            if (succeeded) {
+                m_failedStateHashes.remove(pending.stateHash);
+            } else {
+                m_failedStateHashes.insert(pending.stateHash);
+            }
+        }
+        if (!pending.checkpointHash.isEmpty()) {
+            m_scheduledCheckpointHashes.remove(pending.checkpointHash);
+            if (succeeded) {
+                m_failedCheckpointHashes.remove(pending.checkpointHash);
+            } else {
+                m_failedCheckpointHashes.insert(pending.checkpointHash);
+            }
+        }
+    };
+    for (int index = m_stateSidecarWrites.size() - 1; index >= 0; --index) {
+        if (m_stateSidecarWrites[index].future.isFinished()) {
+            finish(index);
+        }
+    }
+    while (waitForSlot && m_stateSidecarWrites.size() >= m_maxPendingStateSidecars) {
+        finish(0);
+    }
+}
+
 bool VideoPathRecorder::waitForStateSidecars()
 {
-    bool result = true;
-    for (QFuture<bool> &future : m_stateSidecarWrites) {
-        future.waitForFinished();
-        result = future.result() && result;
+    reapFinishedStateSidecars(false);
+    while (!m_stateSidecarWrites.isEmpty()) {
+        PendingSidecarWrite pending = m_stateSidecarWrites.takeFirst();
+        pending.future.waitForFinished();
+        const bool succeeded = pending.future.result();
+        if (!pending.stateHash.isEmpty()) {
+            m_scheduledStateHashes.remove(pending.stateHash);
+            if (succeeded) {
+                m_failedStateHashes.remove(pending.stateHash);
+            } else {
+                m_failedStateHashes.insert(pending.stateHash);
+            }
+        }
+        if (!pending.checkpointHash.isEmpty()) {
+            m_scheduledCheckpointHashes.remove(pending.checkpointHash);
+            if (succeeded) {
+                m_failedCheckpointHashes.remove(pending.checkpointHash);
+            } else {
+                m_failedCheckpointHashes.insert(pending.checkpointHash);
+            }
+        }
     }
-    return result;
+    return m_failedStateHashes.isEmpty() && m_failedCheckpointHashes.isEmpty();
 }
 
 QJsonObject VideoPathRecorder::diffSnapshots(const QJsonObject &before, const QJsonObject &after)

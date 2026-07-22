@@ -76,6 +76,20 @@ if [[ $platform != Darwin ]]; then
         fi
     fi
 fi
+
+# Kdenlive's timeline QML imports QtMultimedia. A missing runtime module leaves
+# the timeline root null and can turn a packaging error into a Qt crash.
+qml_import_root=""
+if command -v qtpaths6 >/dev/null 2>&1; then
+    qml_import_root=$(qtpaths6 --query QT_INSTALL_QML 2>/dev/null || true)
+fi
+if [[ -z $qml_import_root && -n $craft_root && -d $craft_root/qml ]]; then
+    qml_import_root=$craft_root/qml
+fi
+if [[ -z $qml_import_root || ! -r $qml_import_root/QtMultimedia/qmldir ]]; then
+    echo "error: QtMultimedia QML is missing; install the Qt 6 multimedia imports package (qt6-multimedia-imports on openSUSE)" >&2
+    exit 1
+fi
 if [[ -n $craft_root ]]; then
     export MLT_PREFIX="$craft_root"
     [[ -d $craft_root/share/mlt-7 ]] && export MLT_DATA="$craft_root/share/mlt-7"

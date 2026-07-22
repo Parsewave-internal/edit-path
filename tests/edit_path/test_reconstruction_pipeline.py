@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -26,9 +27,9 @@ from edit_path.pipeline import (
     validate_event_envelope,
     validate_state_transitions,
 )
-from edit_path.reconstruct import render_project
+from edit_path.reconstruct import render_project, select_video_encoder
 from edit_path.runtime import runtime_fingerprint
-from edit_path.state import canonical_hash, load_state_reference, resolve_accepted_branch
+from edit_path.state import canonical_hash, load_state_reference, resolve_accepted_branch, validate_action_semantics
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "video-path-pilot"))
 from job_pipeline import finalize_session
@@ -65,6 +66,22 @@ class BranchResolutionTests(unittest.TestCase):
         with self.assertRaisesRegex(Exception, "targets a transaction other"):
             resolve_accepted_branch([checkpoint, commit, undo], require_targets=True)
 
+    def test_post_push_action_is_rebound_to_the_matching_previous_diff(self) -> None:
+        checkpoint = event(1, "state.checkpoint", state_hash="d" * 64, snapshot={}, project_state={"sha256": "a" * 64})
+        inserted = event(2, "state.diff", boundary="commit", transaction_id="insert", undo_entry_id="insert-entry",
+                         project_before_hash="a" * 64, project_after_hash="b" * 64,
+                         diff={"changes": [{"entity": "clip", "native_id": 1, "change": "added", "after": {}}]})
+        late_action = event(3, "action", action="clip.insert", transaction_id="move", timeline_id="timeline", parameters={})
+        moved = event(4, "state.diff", boundary="commit", transaction_id="move", undo_entry_id="move-entry",
+                      project_before_hash="b" * 64, project_after_hash="c" * 64,
+                      diff={"changes": [{"entity": "clip", "native_id": 1, "change": "updated",
+                                          "before": {"timeline_start_frame": 0}, "after": {"timeline_start_frame": 10}}]})
+        accepted = resolve_accepted_branch([checkpoint, inserted, late_action, moved], require_targets=True).accepted
+        reports = validate_action_semantics([checkpoint, inserted, late_action, moved], accepted)
+        self.assertEqual(reports[0]["declared"], "clip.insert")
+        self.assertEqual(reports[0]["attribution"], "recovered_post_push")
+        self.assertIsNone(reports[1]["declared"])
+
 
 class StateTests(unittest.TestCase):
     def test_multiple_timeline_hash_chains_are_validated_independently(self) -> None:
@@ -93,6 +110,48 @@ class StateTests(unittest.TestCase):
 
 
 class RuntimeTests(unittest.TestCase):
+    @mock.patch("edit_path.reconstruct.shutil.which", return_value="/usr/bin/ffmpeg")
+    @mock.patch("edit_path.reconstruct.subprocess.run")
+    def test_encoder_selection_falls_back_to_openh264(self, run: mock.Mock, _which: mock.Mock) -> None:
+        run.return_value = subprocess.CompletedProcess(
+            [],
+            0,
+            stdout=" V....D libopenh264 OpenH264 encoder\n V.S... mpeg4 MPEG-4 encoder\n",
+            stderr="",
+        )
+        self.assertEqual(select_video_encoder(), "libopenh264")
+
+    @mock.patch("edit_path.validate.probe")
+    @mock.patch("edit_path.reconstruct.available_video_encoders", return_value={"libx264", "libopenh264"})
+    @mock.patch("edit_path.reconstruct.subprocess.run")
+    def test_audio_only_melt_success_retries_the_next_encoder(
+        self,
+        run: mock.Mock,
+        _encoders: mock.Mock,
+        probe_media: mock.Mock,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = root / "project.kdenlive"
+            output = root / "output.mp4"
+            project.write_text("<mlt/>", encoding="utf-8")
+
+            def render(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess:
+                target = Path(next(value for value in command if value.startswith("avformat:")).removeprefix("avformat:"))
+                target.write_bytes(b"media")
+                return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+            run.side_effect = render
+            probe_media.side_effect = [
+                {"streams": [{"codec_type": "audio"}]},
+                {"streams": [{"codec_type": "video"}, {"codec_type": "audio"}]},
+            ]
+            self.assertEqual(render_project(project, output, melt_binary="/usr/bin/melt"), output)
+            self.assertTrue(output.is_file())
+            commands = [call.args[0] for call in run.call_args_list]
+            self.assertTrue(any("vcodec=libx264" in command for command in commands))
+            self.assertTrue(any("vcodec=libopenh264" in command for command in commands))
+
     @mock.patch("edit_path.runtime.shutil.which", side_effect=lambda name: f"/usr/bin/{name}")
     @mock.patch("edit_path.runtime.subprocess.run")
     def test_ffmpeg_tools_use_the_supported_version_flag(self, run: mock.Mock, _which: mock.Mock) -> None:
@@ -140,12 +199,31 @@ class PublicationTests(unittest.TestCase):
             events = [event(1, "session.start"), event(2, "session.end", state_sidecars_complete=True)]
             write_jsonl(raw, events)
             bundle = publish_bundle(root, output, "session-test", {"final_video": final, "project": project, "report": report, "raw_trajectory": raw, "manifest_path": root / "asset-manifest.json"}, events, [], manifest)
+            self.assertEqual(stat.S_IMODE(bundle.stat().st_mode), 0o755)
             self.assertTrue((bundle / "assets" / "source.mp4").is_file())
             self.assertIn("assets/source.mp4", (bundle / "reconstructed.kdenlive").read_text(encoding="utf-8"))
             self.assertTrue((bundle / "bundle-manifest.json").is_file())
             published = json.loads((bundle / "asset-manifest.json").read_text(encoding="utf-8"))
             self.assertNotIn("source", published["assets"][0])
             self.assertNotIn("original_path", published["assets"][0])
+
+
+class LongSessionLoadTests(unittest.TestCase):
+    def test_five_hour_equivalent_event_volume_keeps_a_valid_envelope(self) -> None:
+        events = [event(1, "session.start"), event(2, "project.context", context={
+            "project_id": "project", "fps_numerator": 25, "fps_denominator": 1, "width": 1920, "height": 1080,
+            "sample_aspect_numerator": 1, "sample_aspect_denominator": 1, "display_aspect_numerator": 16,
+            "display_aspect_denominator": 9, "colorspace": 709, "progressive": True, "bottom_field_first": False,
+            "audio_channels": 2, "audio_sample_rate": 48000, "kdenlive_version": "test", "kdenlive_build": "test",
+            "mlt_version": "test",
+        })]
+        for sequence in range(3, 18_003):
+            events.append(event(sequence, "ui.command", command_id="noop", interaction_id=f"interaction-{sequence}",
+                                label="Load event", source="programmatic_or_unknown", shortcuts=[]))
+        events.append(event(18_003, "session.end", state_sidecars_complete=True))
+        envelope = validate_event_envelope(events)
+        self.assertTrue(envelope["complete"])
+        self.assertEqual(envelope["events"], 18_003)
 
 
 class PilotRegressionTests(unittest.TestCase):
@@ -225,6 +303,7 @@ class MediaIntegrationTests(unittest.TestCase):
             write_jsonl(root / "trajectory.jsonl", entries)
             manifest = {"schema": "video-path/assets@2", "assets": [{"asset_id": "asset_001", "bin_reference": "1", "original_filename": "source.mp4", "file": "assets/source.mp4", "sha256": sha256_file(source), "bytes": source.stat().st_size, "license_status": "pending"}]}
             write_json(root / "asset-manifest.json", manifest)
+            write_json(root / "session.json", {"schema_version": "0.3.0", "status": "ready_to_finish"})
             queue_root = Path(temporary) / "queue"
             dataset_root = Path(temporary) / "dataset"
             ingested = ingest_session(root, queue_root)
@@ -254,6 +333,7 @@ class MediaIntegrationTests(unittest.TestCase):
                 },
             )
             self.assertTrue((completed / "final.mp4").is_file())
+            self.assertEqual(stat.S_IMODE(completed.stat().st_mode), 0o755)
             self.assertTrue((completed / "reference" / "editor-final.mp4").is_file())
             self.assertTrue((completed / "evidence" / "raw-events-001.jsonl").is_file())
             published_manifest = json.loads((completed / "asset-manifest.json").read_text(encoding="utf-8"))
@@ -263,6 +343,8 @@ class MediaIntegrationTests(unittest.TestCase):
             sample = json.loads((completed / "sample.json").read_text(encoding="utf-8"))
             self.assertEqual(sample["task"]["prompt_status"], "pending_internal_entry")
             self.assertEqual(sample["quality"]["media_reconstruction"], "passed")
+            self.assertEqual(json.loads((root / "session.json").read_text(encoding="utf-8"))["status"], "packaged")
+            self.assertEqual(json.loads((completed / "session.json").read_text(encoding="utf-8"))["status"], "packaged")
 
 
 if __name__ == "__main__":

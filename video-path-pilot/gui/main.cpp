@@ -12,12 +12,14 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLabel>
+#include <QLibraryInfo>
 #include <QMainWindow>
 #include <QMessageBox>
 #include <QPlainTextEdit>
 #include <QProcess>
 #include <QProcessEnvironment>
 #include <QPushButton>
+#include <QSaveFile>
 #include <QSettings>
 #include <QStandardPaths>
 #include <QTextStream>
@@ -25,6 +27,8 @@
 #include <QUrl>
 #include <QUuid>
 #include <QVBoxLayout>
+
+#include <utility>
 
 namespace {
 QString repositoryRoot()
@@ -56,6 +60,27 @@ QString sessionsRoot()
     if (videos.isEmpty()) videos = QDir::homePath() + QStringLiteral("/Videos");
     return QDir(videos).filePath(QStringLiteral("EditPathSessions"));
 }
+
+QString qtMultimediaQmlPath()
+{
+    QStringList roots = qEnvironmentVariable("QML2_IMPORT_PATH").split(QDir::listSeparator(), Qt::SkipEmptyParts);
+    roots.append(QLibraryInfo::path(QLibraryInfo::QmlImportsPath));
+    roots.append(QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("../qml")));
+    for (const QString &root : std::as_const(roots)) {
+        const QString qmldir = QDir(root).filePath(QStringLiteral("QtMultimedia/qmldir"));
+        if (QFileInfo(qmldir).isReadable()) return qmldir;
+    }
+    return {};
+}
+
+QString guiRuntimeProblem()
+{
+    if (qtMultimediaQmlPath().isEmpty()) {
+        return QStringLiteral(
+            "QtMultimedia QML is missing. On openSUSE install qt6-multimedia-imports; Kdenlive cannot safely create its timeline without this module.");
+    }
+    return {};
+}
 } // namespace
 
 class RecorderWindow final : public QMainWindow
@@ -68,8 +93,13 @@ public:
         resize(720, 500);
         buildUi();
         restoreLastSession();
+        const QString runtimeProblem = guiRuntimeProblem();
         if (m_repoRoot.isEmpty()) {
             setStatus(QStringLiteral("Recorder installation was not found."), true);
+            show();
+        } else if (!runtimeProblem.isEmpty()) {
+            setStatus(runtimeProblem, true);
+            m_activity->appendPlainText(runtimeProblem);
             show();
         } else {
             QTimer::singleShot(0, this, [this] {
@@ -105,7 +135,8 @@ private:
         m_title->setWordWrap(true);
         layout->addWidget(m_title);
         m_instructions = new QLabel(QStringLiteral(
-            "Before finishing, ensure the final rendered video is in the session folder. The project is saved automatically as <b>edit.kdenlive</b>."));
+            "Before finishing, render exactly one .mp4, .mov, .mkv, or .webm directly into the displayed session folder. "
+            "H.264 is not required. The project is saved automatically as <b>edit.kdenlive</b>."));
         m_instructions->setWordWrap(true);
         layout->addWidget(m_instructions);
         m_status = new QLabel;
@@ -159,10 +190,12 @@ private:
         connect(&m_editor, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this, &RecorderWindow::editorFinished);
         connect(&m_editor, &QProcess::started, this, [this] {
             writeManifest(QStringLiteral("recording"));
+            m_heartbeat.start();
             m_activity->appendPlainText(QStringLiteral("Kdenlive process started. Remote X11 startup can take 15–60 seconds."));
         });
         connect(&m_editor, &QProcess::errorOccurred, this, [this](QProcess::ProcessError error) {
             if (error == QProcess::FailedToStart) {
+                m_heartbeat.stop();
                 writeManifest(QStringLiteral("start_failed"));
                 setStatus(QStringLiteral("Kdenlive could not start. Check X11 and the console log."), true);
                 m_start->setVisible(true);
@@ -172,6 +205,10 @@ private:
         connect(&m_worker, &QProcess::readyReadStandardOutput, this, &RecorderWindow::readWorker);
         connect(&m_worker, &QProcess::readyReadStandardError, this, &RecorderWindow::readWorker);
         connect(&m_worker, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this, &RecorderWindow::workerFinished);
+        m_heartbeat.setInterval(60000);
+        connect(&m_heartbeat, &QTimer::timeout, this, [this] {
+            if (m_editor.state() != QProcess::NotRunning) writeManifest(QStringLiteral("recording"));
+        });
     }
 
     void setStatus(const QString &text, bool error = false)
@@ -191,9 +228,12 @@ private:
                              {QStringLiteral("segment"), m_segment},
                              {QStringLiteral("status"), status},
                              {QStringLiteral("kdenlive_pid"), qint64(m_editor.processId())},
+                             {QStringLiteral("last_exit_code"), m_lastEditorExitCode},
+                             {QStringLiteral("last_exit_crashed"), m_lastEditorExitCrashed},
                              {QStringLiteral("updated_at_utc"), QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)}};
-        QFile file(QDir(m_session).filePath(QStringLiteral("session.json")));
-        if (file.open(QIODevice::WriteOnly | QIODevice::Truncate)) file.write(QJsonDocument(manifest).toJson(QJsonDocument::Indented));
+        QSaveFile file(QDir(m_session).filePath(QStringLiteral("session.json")));
+        const QByteArray encoded = QJsonDocument(manifest).toJson(QJsonDocument::Indented);
+        if (file.open(QIODevice::WriteOnly) && file.write(encoded) == encoded.size()) file.commit();
         QSettings().setValue(QStringLiteral("lastSession"), m_session);
     }
 
@@ -249,6 +289,13 @@ private:
 
     void launchSegment()
     {
+        const QString runtimeProblem = guiRuntimeProblem();
+        if (!runtimeProblem.isEmpty()) {
+            setStatus(runtimeProblem, true);
+            m_activity->appendPlainText(runtimeProblem);
+            showCompletionWindow();
+            return;
+        }
         hide();
         m_recover->setVisible(false);
         m_start->setVisible(false);
@@ -287,10 +334,15 @@ private:
         m_editor.start(program, arguments);
     }
 
-    void editorFinished(int exitCode, QProcess::ExitStatus)
+    void editorFinished(int exitCode, QProcess::ExitStatus exitStatus)
     {
+        m_heartbeat.stop();
+        m_lastEditorExitCode = exitCode;
+        m_lastEditorExitCrashed = exitStatus == QProcess::CrashExit;
         showCompletionWindow();
-        m_activity->appendPlainText(QStringLiteral("Kdenlive exited with code %1; checking the recording…").arg(exitCode));
+        m_activity->appendPlainText(m_lastEditorExitCrashed
+                                        ? QStringLiteral("Kdenlive crashed with signal/exit code %1; checking recoverable evidence…").arg(exitCode)
+                                        : QStringLiteral("Kdenlive exited with code %1; checking the recording…").arg(exitCode));
         m_workerPurpose = QStringLiteral("validate");
         const QString raw = QDir(m_session).filePath(QStringLiteral("raw-events-%1.jsonl").arg(m_segment, 3, 10, QLatin1Char('0')));
         m_worker.start(pythonExecutable(), {m_repoRoot + QStringLiteral("/video-path-pilot/validate_video_path.py"), raw});
@@ -317,7 +369,7 @@ private:
         readWorker();
         const bool success = status == QProcess::NormalExit && exitCode == 0;
         if (m_workerPurpose == QStringLiteral("validate")) {
-            if (success) {
+            if (success && !m_lastEditorExitCrashed && m_lastEditorExitCode == 0) {
                 writeManifest(QStringLiteral("ready_to_finish"));
                 m_finish->setEnabled(true);
                 m_start->setVisible(true);
@@ -327,7 +379,10 @@ private:
                 writeManifest(QStringLiteral("recovery_available"));
                 m_recover->setVisible(true);
                 m_start->setVisible(true);
-                setStatus(QStringLiteral("Recording ended unexpectedly. Use Recover and Continue, or start a fresh session if no edit was made."), true);
+                setStatus(m_lastEditorExitCrashed
+                              ? QStringLiteral("Kdenlive crashed, but flushed evidence was preserved. Use Recover and Continue.")
+                              : QStringLiteral("Recording ended unexpectedly. Use Recover and Continue, or start a fresh session if no edit was made."),
+                          true);
             }
         } else if (m_workerPurpose == QStringLiteral("finalize")) {
             if (success) {
@@ -359,8 +414,10 @@ private:
 
     QString m_repoRoot, m_session, m_sessionId, m_configName, m_workerPurpose;
     int m_segment{0};
+    int m_lastEditorExitCode{0};
     QProcess m_editor, m_worker;
-    bool m_autoRecover{false}, m_showExistingCompletion{false};
+    QTimer m_heartbeat;
+    bool m_autoRecover{false}, m_showExistingCompletion{false}, m_lastEditorExitCrashed{false};
     QLabel *m_title{}, *m_instructions{}, *m_status{}, *m_sessionLabel{};
     QPushButton *m_start{}, *m_recover{}, *m_finish{}, *m_openSession{}, *m_openCompleted{};
     QPlainTextEdit *m_activity{};
@@ -396,6 +453,7 @@ int runSelfTest()
     passed = checkFile(QStringLiteral("ffmpeg"), ffmpeg) && passed;
     passed = checkFile(QStringLiteral("ffprobe"), ffprobe) && passed;
     passed = checkFile(QStringLiteral("melt"), melt) && passed;
+    passed = checkFile(QStringLiteral("qt_multimedia_qml"), qtMultimediaQmlPath()) && passed;
     const QString validator = QDir(root).filePath(QStringLiteral("video-path-pilot/validate_video_path.py"));
     passed = checkFile(QStringLiteral("validator"), validator) && passed;
     const QString pipeline = QDir(root).filePath(QStringLiteral("video-path-pilot/job_pipeline.py"));

@@ -131,6 +131,12 @@ python -m edit_path doctor
 ./video-path-pilot/run-collector-app.sh
 ```
 
+On openSUSE/WSL, also install `qt6-multimedia-imports`,
+`libmlt7-modules`, `libmlt7-module-qt6`, and `frei0r-plugins`. A missing
+QtMultimedia QML import is detected before launch because Kdenlive cannot
+safely create its timeline without it. Use `docker run --init` for a persistent
+GUI container so exited Kdenlive child processes are reaped.
+
 When using KDE Craft, point the launcher at it instead of hard-coding a
 machine-specific path:
 
@@ -168,6 +174,12 @@ are enabled by default and may be disabled for recorder diagnostics with
 disabled will not pass the checkpoint gate). Use a new output file for each
 editor session.
 
+Sidecar compression and checkpoint rendering run on a dedicated one-thread
+pool. Pending work is bounded to two entries by default and completed futures
+are reaped throughout the recording, so a multi-hour session does not retain
+every project state or future in memory. The supervisor writes `session.json`
+atomically and refreshes its heartbeat every 60 seconds.
+
 Validate a recorded session with:
 
 ```bash
@@ -188,6 +200,13 @@ python3 -m edit_path index /path/to/dataset
 Successful samples are atomically published under `accepted/<session_id>/`.
 Failures are atomically published under `quarantine/<session_id>/` with a
 machine-readable `rejection.json` naming the failed gate and sequence.
+
+In the freeform GUI flow, save exactly one independent `.mp4`, `.mov`, `.mkv`,
+or `.webm` render directly in the session folder, then click **Finish Session**.
+H.264 is optional. The finished trajectory and reconstruction are in
+`completed-sample/trajectory.jsonl`, `completed-sample/reconstructed.kdenlive`,
+and `completed-sample/final.mp4`; detailed media scores are in
+`completed-sample/render-report.json`.
 
 ## Manual acceptance scenario
 

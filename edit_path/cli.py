@@ -21,7 +21,7 @@ from .pipeline import (
     semantic_activity,
     validate_event_envelope,
 )
-from .reconstruct import materialize_project, render_session
+from .reconstruct import materialize_project, render_session, select_video_encoder
 from .runtime import write_runtime_lock
 from .state import resolve_accepted_branch, validate_action_semantics, validate_state_transitions
 from .validate import validate_render
@@ -137,14 +137,23 @@ def command_qa_review(args: argparse.Namespace) -> int:
 def command_doctor(_args: argparse.Namespace) -> int:
     tools = {name: shutil.which(name) for name in ("melt", "mlt-melt", "ffmpeg", "ffprobe")}
     try:
+        video_encoder = select_video_encoder(tools["ffmpeg"])
+        encoder_error = None
+    except EditPathError as error:
+        video_encoder = None
+        encoder_error = str(error)
+    try:
         import zstandard
 
         tools["zstandard"] = zstandard.__version__
     except ImportError:
         tools["zstandard"] = None
     tools["python"] = sys.executable
+    tools["video_encoder"] = video_encoder
+    if encoder_error:
+        tools["video_encoder_error"] = encoder_error
     print(json.dumps(tools, indent=2, sort_keys=True))
-    return 0 if (tools["melt"] or tools["mlt-melt"]) and tools["ffmpeg"] and tools["ffprobe"] and tools["zstandard"] else 1
+    return 0 if (tools["melt"] or tools["mlt-melt"]) and tools["ffmpeg"] and tools["ffprobe"] and tools["zstandard"] and video_encoder else 1
 
 
 def command_lock_runtime(args: argparse.Namespace) -> int:

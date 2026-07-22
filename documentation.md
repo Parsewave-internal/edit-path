@@ -608,10 +608,14 @@ The internal `attach-prompt` operation inserts the exact known instruction and
 recomputes readiness. The acceptance test changed readiness to true after that
 attachment without collecting any editor intent.
 
-The latest reported “crash” was also audited. Both recent JSONL files ended with
-valid `session.end`, Kdenlive logged requested close events, session manifests
-reached `ready_to_finish`, and no core dump existed. The recording did not
-crash, although remote X11 responsiveness made the shutdown appear abrupt.
+The July 22 WSL code-11 failures were real crashes. The console logs reported a
+missing `QtMultimedia` QML module followed by `Timeline root not created`, and
+the kernel journal recorded Kdenlive segfaulting in QtCore. There was no OOM
+evidence. Installing `qt6-multimedia-imports` removed those initialization
+errors and the next segment closed normally. The supervisor and diagnostic
+launcher now preflight this QML module and stop with an install instruction
+before starting Kdenlive, rather than allowing a null timeline to reach the
+segfault.
 
 The first freeform interruption audit found a different failure mode in
 `session_20260722_113348_7e8d3a1e`. Kdenlive stopped without `session.end`, the
@@ -748,12 +752,12 @@ transaction and undo-entry IDs, but the corresponding buffered `clip.insert`
 action was written at shutdown without a `transaction_id`; the supervisor then
 misclassified the otherwise clean recording as `recovery_available`.
 
-`VideoPathRecorder::recordAction` now captures the active or just-completed
-transaction before buffering an action, so delayed emission cannot lose its
-transaction context. A source-level regression check protects the required
-ordering. The optimized Linux build and all MVP, reconstruction, segment, and
-real-media tests passed after this fix. A fresh GUI session remains required to
-confirm the corrected event on the live Kdenlive path.
+`VideoPathRecorder::recordAction` still buffers actions emitted inside an active
+transaction, but writes a just-completed action immediately with the preserved
+transaction and undo-entry IDs. This prevents a later transaction flush from
+overwriting the attribution. Reconstruction also safely repairs recordings
+made before this fix when an otherwise-unassigned preceding diff has matching
+semantics. Source-level and trajectory regression tests protect both paths.
 
 ## Historical Version 2 manual acceptance test
 

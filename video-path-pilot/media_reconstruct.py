@@ -14,6 +14,8 @@ import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+from edit_path.reconstruct import select_video_encoder
+
 
 class UnsupportedEdit(ValueError):
     pass
@@ -134,7 +136,12 @@ def reconstruct(sample_path: Path) -> dict:
         build_mlt(sample_path, mlt_path)
         melt = shutil.which("melt-7") or shutil.which("melt")
         if not melt: raise RuntimeError("melt executable was not found")
-        subprocess.run([melt, str(mlt_path), "-consumer", f"avformat:{render}", "vcodec=libx264", "acodec=aac", "real_time=-1"],
+        video_encoder = select_video_encoder()
+        encoder_options = [f"vcodec={video_encoder}"]
+        if video_encoder == "libx264": encoder_options.extend(["crf=18", "preset=medium"])
+        elif video_encoder == "libopenh264": encoder_options.extend(["vb=8M", "g=50"])
+        else: encoder_options.extend(["qscale=2", "g=50"])
+        subprocess.run([melt, str(mlt_path), "-consumer", f"avformat:{render}", *encoder_options, "acodec=aac", "real_time=-1"],
                        check=True, capture_output=True, text=True)
         editor = root / json.loads(sample_path.read_text())["output"]["video"]
         reconstructed_probe, editor_probe = ffprobe(render), ffprobe(editor)

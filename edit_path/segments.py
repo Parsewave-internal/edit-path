@@ -56,7 +56,11 @@ def assemble_segments(
         original_session_ids.append(str(envelope["session_id"]))
         if index < len(groups) - 1 and events[-1].get("event_type") == "session.end":
             raise GateError("segment_assembly", f"non-final segment ended normally: {paths[index].name}")
-        validate_state_transitions(events)
+        state_events = [event for event in events if event.get("event_type") in {"state.checkpoint", "state.diff"}]
+        if state_events:
+            if state_events[0].get("event_type") != "state.checkpoint":
+                raise GateError("segment_assembly", f"segment starts state capture without a checkpoint: {paths[index].name}")
+            validate_state_transitions(events)
 
     canonical_session_id = session_id or original_session_ids[0]
     assembled: list[dict[str, Any]] = []

@@ -74,6 +74,15 @@ Kdenlive; at minimum reconstruction needs `avformat`, `xml`, and `qimage` or
 `pixbuf`. Frei0r, AVFilter, `kdenlivetitle`, Glaxnimate, and an SDL/RtAudio
 backend are needed when the project uses those capabilities.
 
+On openSUSE/WSL, the QtMultimedia QML import is also mandatory for Kdenlive's
+timeline. The supervisor now refuses to start a broken editor instead of
+allowing the missing import to become a later Qt crash:
+
+```bash
+sudo zypper --non-interactive install \
+  qt6-multimedia-imports libmlt7-modules libmlt7-module-qt6 frei0r-plugins
+```
+
 ```bash
 python3 -m venv .venv
 . .venv/bin/activate
@@ -128,15 +137,31 @@ for developer testing rather than editor distribution.
    **Recover and Continue** reopens the same project and configuration, retains
    stable entity IDs, and records the continuation as a new numbered segment.
 4. The editor renders one independent final video into the displayed session
-   folder and closes Kdenlive normally.
+   folder and closes Kdenlive normally. The accepted extensions are `.mp4`,
+   `.mov`, `.mkv`, and `.webm`; H.264 is not required. There must be exactly
+   one top-level rendered video in the session folder.
 5. **Finish Session** discovers and hashes project assets, assembles recovery
    segments, resolves the accepted commit/undo/redo branch, and reconstructs
    from the exact accepted project state—not from mouse/keyboard replay.
-6. Melt renders a fresh MP4. FFprobe/FFmpeg compare structure, duration, audio,
-   and video SSIM against the editor's independent render. Passing samples are
-   atomically published; failures are quarantined with the precise gate and
-   sequence. The verbal task prompt remains pending until internal staff attach
-   the exact wording.
+6. Melt first renders a validation file matched to the independent editor
+   render, then creates the delivery MP4 with the first available supported
+   encoder (`libx264`, `libopenh264`, then `mpeg4`). FFprobe rejects an
+   audio-only encoder "success". FFmpeg compares structure, duration, audio,
+   and video SSIM. Passing samples are atomically published; failures are
+   quarantined with the precise gate and sequence.
+
+The finished edit path and reconstruction are under the displayed session's
+`completed-sample/` directory. The main files are `trajectory.jsonl`,
+`reconstructed.kdenlive`, `final.mp4`, `reference/editor-final.*`,
+`render-report.json`, and `sample.json`.
+
+For long-lived WSL GUI containers, create the container with `docker run
+--init ...` so a tiny init process reaps Kdenlive render children. The recorder
+uses a dedicated single-thread sidecar pool with a bounded queue (two pending
+states by default), reaps completed work during the session, flushes every
+event, and updates the supervisor manifest heartbeat every 60 seconds. Override
+the queue only for diagnostics with `KDENLIVE_VIDEO_PATH_MAX_PENDING_SIDECARS`
+(accepted range 1-8).
 
 ### Reconstruct and assemble the dataset
 

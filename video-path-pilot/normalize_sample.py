@@ -20,7 +20,7 @@ def read_jsonl(path: Path) -> list[dict]:
 
 
 def accepted_commits(events: list[dict]) -> list[dict]:
-    """Return the final successful branch; raw undo/redo remains in evidence."""
+    """Return the final branch for legacy reconstruction helpers."""
     stack: list[dict] = []
     redo: list[dict] = []
     for event in events:
@@ -63,6 +63,16 @@ def operation_name(diff: dict) -> str:
         if kinds == {"removed"}: return "transition.remove"
         return "transition.change"
     return "timeline.change"
+
+
+def event_operation_name(event: dict) -> str:
+    """Name every state-changing event without discarding editing history."""
+    boundary = event.get("boundary")
+    if boundary == "undo":
+        return "history.undo"
+    if boundary == "redo":
+        return "history.redo"
+    return operation_name(event.get("diff", {}))
 
 
 def normalized_change(change: dict, ids: dict[tuple[str, str], str], assets: dict[str, str]) -> dict:
@@ -125,23 +135,23 @@ def build_sample(root: Path, metadata: dict) -> dict:
     ids: dict[tuple[str, str], str] = {}
     asset_refs: dict[str, str] = dict(metadata.get("native_asset_bindings", {}))
     operations = []
-    commits = [event for events in event_groups for event in accepted_commits(events)]
-    for index, event in enumerate(commits, 1):
+    timeline_events = [event for events in event_groups for event in events if event.get("event_type") == "state.diff"]
+    for index, event in enumerate(timeline_events, 1):
         diff = event.get("diff", {})
         operations.append({
             "operation_id": f"op_{index:04d}",
-            "operation": operation_name(diff),
+            "operation": event_operation_name(event),
             "changes": [normalized_change(change, ids, asset_refs) for change in diff.get("changes", [])],
             "resulting_state_hash": event.get("after_hash"),
             "evidence": {"raw_event_id": event.get("event_id"), "raw_sequence": event.get("sequence")},
-            "extensions": {"kdenlive": {"command_label": event.get("label")}},
+            "extensions": {"kdenlive": {"command_label": event.get("label"), "boundary": event.get("boundary")}},
         })
     first_checkpoint = next((event for event in event_groups[0] if event.get("event_type") == "state.checkpoint"), None)
     if not first_checkpoint:
         raise ValueError("recording has no canonical checkpoint")
     initial_native = copy.deepcopy(first_checkpoint["snapshot"])
     final_native = copy.deepcopy(initial_native)
-    for event in commits:
+    for event in timeline_events:
         apply_native_diff(final_native, event.get("diff", {}))
     initial_state = normalized_state(initial_native, ids, asset_refs)
     final_state = normalized_state(final_native, ids, asset_refs)
@@ -159,7 +169,7 @@ def build_sample(root: Path, metadata: dict) -> dict:
         "output": {"video": metadata["artifacts"]["final_video"], "sha256": metadata["artifacts"]["final_video_sha256"]},
         "quality": {
             "raw_session_complete": True,
-            "undo_redo_removed_from_edit_path": True,
+            "undo_redo_preserved_in_edit_path": True,
             "asset_binding_method": metadata["asset_binding_method"],
             "unresolved_asset_ids": unresolved,
             "review_status": "needs_human_review",

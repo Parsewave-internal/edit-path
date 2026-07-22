@@ -17,7 +17,7 @@ HASH_B = "b" * 64
 
 
 class MvpTests(unittest.TestCase):
-    def test_undo_is_removed_and_redo_is_restored(self):
+    def test_legacy_final_branch_helper(self):
         a = {"event_type": "state.diff", "boundary": "commit", "event_id": "a"}
         b = {"event_type": "state.diff", "boundary": "commit", "event_id": "b"}
         undo = {"event_type": "state.diff", "boundary": "undo"}
@@ -42,6 +42,16 @@ class MvpTests(unittest.TestCase):
                 "diff": {"changes": [{"entity": "clip", "native_id": 8, "change": "added",
                     "after": {"asset_reference": "4", "track_native_id": 3, "timeline_start_frame": 0, "duration_frames": 25}}]},
             }, {"event_type": "session.end", "sequence": 4}]
+            added = events[2]["diff"]["changes"][0]["after"]
+            events[3:3] = [{
+                "event_type": "state.diff", "boundary": "undo", "sequence": 4,
+                "event_id": "raw-3", "label": "Undo Insert Clip", "after_hash": "c" * 64,
+                "diff": {"changes": [{"entity": "clip", "native_id": 8, "change": "removed", "before": added}]},
+            }, {
+                "event_type": "state.diff", "boundary": "redo", "sequence": 5,
+                "event_id": "raw-4", "label": "Redo Insert Clip", "after_hash": HASH_B,
+                "diff": {"changes": [{"entity": "clip", "native_id": 8, "change": "added", "after": added}]},
+            }]
             raw = root / "evidence/raw-events.jsonl"
             raw.write_text("".join(json.dumps(e) + "\n" for e in events))
             sha = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
@@ -57,7 +67,9 @@ class MvpTests(unittest.TestCase):
                     "native_project": "internal/final.kdenlive", "native_project_sha256": sha(root / "internal/final.kdenlive"),
                     "raw_events": [{"file": "evidence/raw-events.jsonl", "sha256": sha(raw)}]}}
             sample = build_sample(root, metadata)
-            self.assertEqual(sample["edit_path"]["operations"][0]["operation"], "clip.insert")
+            self.assertEqual([operation["operation"] for operation in sample["edit_path"]["operations"]],
+                             ["clip.insert", "history.undo", "history.redo"])
+            self.assertTrue(sample["quality"]["undo_redo_preserved_in_edit_path"])
             self.assertNotIn("rationale", sample)
             self.assertNotIn("editor_plan", sample["task"])
             path = root / "sample.json"

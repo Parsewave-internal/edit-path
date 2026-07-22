@@ -460,8 +460,10 @@ normalizer improvements. There is no `initial.kdenlive`: editors begin from a
 blank project and the recorder establishes the canonical baseline. The final
 video is mandatory because it is the target artifact and enables human review.
 
-`normalize_sample.py` removes undone or abandoned commands from the clean path
-while retaining them in raw evidence. Accepted operations use integer frames,
+`normalize_sample.py` preserves undo and redo chronologically in the sample as
+`history.undo` and `history.redo`, including their reverse/restored changes and
+resulting hashes. A final-branch-only view can be derived later if required;
+the MVP favors retaining more training information. Operations use integer frames,
 software-independent entity names, sample-local canonical IDs, before/after
 changes, resulting state hashes, and pointers to raw events. Kdenlive labels
 are isolated under `extensions.kdenlive`. Ambiguous outcomes deliberately use

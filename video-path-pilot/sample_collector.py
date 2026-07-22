@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Video Path Pilot contributors
 # SPDX-License-Identifier: GPL-3.0-only
-"""Create, annotate, launch, and finalize an editor sample workspace."""
+"""Internal prototype for constructing and validating a sample package."""
 
 from __future__ import annotations
 
@@ -11,7 +11,6 @@ import json
 import shutil
 import subprocess
 import sys
-import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -71,7 +70,6 @@ def command_init(args: argparse.Namespace) -> int:
         "status": "initialized",
         "prompt": args.prompt,
         "editor": {"editor_id": args.editor_id},
-        "editor_plan": args.plan,
         "project": {
             "frame_rate": {"numerator": args.fps_num, "denominator": args.fps_den},
             "width": args.width,
@@ -81,7 +79,6 @@ def command_init(args: argparse.Namespace) -> int:
         "asset_binding_method": "first_use_order",
     }
     dump(root / "internal" / "collector-metadata.json", metadata)
-    (root / "internal" / "rationale.jsonl").touch()
     print(f"created sample workspace: {root}")
     print("Import the files from its assets/ directory into Kdenlive in filename order.")
     print(f"Then launch with: {Path(__file__).name} launch {root}")
@@ -93,21 +90,6 @@ def load_metadata(root: Path) -> dict:
     if not path.is_file():
         raise ValueError(f"not a sample workspace: {root}")
     return json.loads(path.read_text(encoding="utf-8"))
-
-
-def command_note(args: argparse.Namespace) -> int:
-    root = args.sample_dir.resolve()
-    load_metadata(root)
-    note = {
-        "note_id": str(uuid.uuid4()),
-        "timestamp_utc": utc_now(),
-        "reason": args.reason,
-        "decision": args.decision,
-    }
-    with (root / "internal" / "rationale.jsonl").open("a", encoding="utf-8") as stream:
-        stream.write(json.dumps(note, ensure_ascii=False) + "\n")
-    print(f"saved rationale note: {note['note_id']}")
-    return 0
 
 
 def command_launch(args: argparse.Namespace) -> int:
@@ -144,7 +126,7 @@ def command_finalize(args: argparse.Namespace) -> int:
     copy_artifact(args.output, final_video)
     metadata["status"] = "finalized"
     metadata["finalized_at_utc"] = utc_now()
-    metadata["editor_review"] = args.review
+    metadata["output_completion_confirmed"] = True
     metadata["artifacts"] = {
         "final_video": final_video.relative_to(root).as_posix(),
         "final_video_sha256": sha256(final_video),
@@ -181,19 +163,12 @@ def parser() -> argparse.ArgumentParser:
     init.add_argument("--sample-id")
     init.add_argument("--prompt", required=True)
     init.add_argument("--editor-id", required=True)
-    init.add_argument("--plan", required=True, help="editor's high-level plan before editing")
     init.add_argument("--fps-num", type=int, default=25)
     init.add_argument("--fps-den", type=int, default=1)
     init.add_argument("--width", type=int, default=1920)
     init.add_argument("--height", type=int, default=1080)
     init.add_argument("assets", type=Path, nargs="+")
     init.set_defaults(function=command_init)
-
-    note = sub.add_parser("note", help="record why an important editing decision was made")
-    note.add_argument("sample_dir", type=Path)
-    note.add_argument("--reason", required=True)
-    note.add_argument("--decision", required=True)
-    note.set_defaults(function=command_note)
 
     launch = sub.add_parser("launch", help="start the instrumented Kdenlive")
     launch.add_argument("sample_dir", type=Path)
@@ -203,7 +178,8 @@ def parser() -> argparse.ArgumentParser:
     finalize.add_argument("sample_dir", type=Path)
     finalize.add_argument("--project", type=Path, required=True)
     finalize.add_argument("--output", type=Path, required=True)
-    finalize.add_argument("--review", required=True, help="editor's final assessment")
+    finalize.add_argument("--confirm-output-complete", action="store_true", required=True,
+                          help="confirm that the required project and render were supplied")
     finalize.set_defaults(function=command_finalize)
 
     validate = sub.add_parser("validate", help="validate a finalized sample")

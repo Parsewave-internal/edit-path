@@ -507,6 +507,30 @@ shareable among Linux machines with the project and Craft dependencies; a
 self-contained AppImage or installer is a separate distribution gate before
 sharing outside that controlled environment.
 
+### MVP scope correction: recording only
+
+The operational plan was narrowed after internal direction. Editors will be
+given the application, task instructions, and assets; they will perform the
+edit and return the recording, native project, render, and source assets. The
+Parsewave team—not the editor—will construct the two canonical samples and ask
+the client for feedback. Consequently, the editor-facing MVP must not collect
+editor intent.
+
+The GUI initialization, prompt, plan, asset-copying, rationale, decision-note,
+subjective-review, normalization, and finalization screens were removed. The
+app is now a one-screen **Edit Path Recorder** with Start Session and Open
+Session Folder actions. Starting creates a unique directory under the user's
+Videos folder, supplies a unique Kdenlive configuration so an old project is
+not reopened, records JSONL and console evidence, and validates the raw session
+after Kdenlive closes.
+
+The sample schema and internal prototype were also revised so editor plan,
+rationale notes, and subjective editor review cannot leak into generated
+samples. The externally assigned task prompt remains valid sample input; it is
+not collected from the editor application. Objective completion confirmation
+and later internal human review remain quality-control concerns, not editor
+intent.
+
 ### Privacy and security
 
 The collector can reveal editor behavior, project structure, local file paths,

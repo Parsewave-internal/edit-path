@@ -106,31 +106,15 @@ def build_sample(root: Path, metadata: dict) -> dict:
             "evidence": {"raw_event_id": event.get("event_id"), "raw_sequence": event.get("sequence")},
             "extensions": {"kdenlive": {"command_label": event.get("label")}},
         })
-    notes = read_jsonl(root / "internal" / "rationale.jsonl")
-    # Notes are entered immediately after a meaningful decision. Associate each
-    # with the latest accepted edit that had completed when the note was saved.
-    for note in notes:
-        preceding = [
-            (operation, event) for operation, event in zip(operations, accepted_commits(events))
-            if event.get("timestamp_utc", "") <= note.get("timestamp_utc", "")
-        ]
-        note["after_operation_id"] = preceding[-1][0]["operation_id"] if preceding else None
-    notes_by_operation: dict[str, list[str]] = {}
-    for note in notes:
-        if note.get("after_operation_id"):
-            notes_by_operation.setdefault(note["after_operation_id"], []).append(note.get("note_id"))
-    for operation in operations:
-        operation["rationale_note_ids"] = notes_by_operation.get(operation["operation_id"], [])
     input_assets = [{k: a[k] for k in ("asset_id", "original_filename", "file", "sha256", "bytes")} for a in metadata["assets"]]
     unresolved = sorted(set(asset_refs.values()) - {a["asset_id"] for a in input_assets})
     return {
         "schema_version": "0.1.0",
         "sample_id": metadata["sample_id"],
-        "task": {"prompt": metadata["prompt"], "editor_plan": metadata["editor_plan"]},
+        "task": {"prompt": metadata["prompt"]},
         "project": metadata["project"],
         "inputs": {"assets": input_assets},
         "edit_path": {"time_unit": "frame", "operations": operations},
-        "rationale": {"decision_notes": notes, "editor_review": metadata["editor_review"]},
         "output": {"video": metadata["artifacts"]["final_video"], "sha256": metadata["artifacts"]["final_video_sha256"]},
         "quality": {
             "raw_session_complete": True,
@@ -138,6 +122,7 @@ def build_sample(root: Path, metadata: dict) -> dict:
             "asset_binding_method": metadata["asset_binding_method"],
             "unresolved_asset_ids": unresolved,
             "review_status": "needs_human_review",
+            "output_completion_confirmed": metadata["output_completion_confirmed"],
         },
         "evidence": {
             "raw_events": metadata["artifacts"]["raw_events"],

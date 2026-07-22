@@ -32,7 +32,6 @@ class MvpTests(unittest.TestCase):
             (root / "assets/asset_001.mp4").write_bytes(b"asset")
             (root / "output/final.mp4").write_bytes(b"video")
             (root / "internal/final.kdenlive").write_bytes(b"project")
-            (root / "internal/rationale.jsonl").write_text(json.dumps({"reason": "pace", "decision": "shorter opening"}) + "\n")
             events = [{"event_type": "session.start", "sequence": 1}, {
                 "event_type": "state.diff", "boundary": "commit", "sequence": 2,
                 "event_id": "raw-2", "label": "Insert Clip", "after_hash": HASH_B,
@@ -43,17 +42,19 @@ class MvpTests(unittest.TestCase):
             raw.write_text("".join(json.dumps(e) + "\n" for e in events))
             sha = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
             metadata = {
-                "sample_id": "sample_test", "prompt": "Make a short edit", "editor_plan": "Use the strongest shot",
+                "sample_id": "sample_test", "prompt": "Make a short edit",
                 "editor": {"editor_id": "editor_test"},
                 "project": {"frame_rate": {"numerator": 25, "denominator": 1}, "width": 1920, "height": 1080},
                 "assets": [{"asset_id": "asset_001", "original_filename": "source.mp4", "file": "assets/asset_001.mp4",
                             "sha256": sha(root / "assets/asset_001.mp4"), "bytes": 5}],
-                "asset_binding_method": "first_use_order", "editor_review": "Checked",
+                "asset_binding_method": "first_use_order", "output_completion_confirmed": True,
                 "artifacts": {"final_video": "output/final.mp4", "final_video_sha256": sha(root / "output/final.mp4"),
                     "native_project": "internal/final.kdenlive", "native_project_sha256": sha(root / "internal/final.kdenlive"),
                     "raw_events": "evidence/raw-events.jsonl", "raw_events_sha256": sha(raw)}}
             sample = build_sample(root, metadata)
             self.assertEqual(sample["edit_path"]["operations"][0]["operation"], "clip.insert")
+            self.assertNotIn("rationale", sample)
+            self.assertNotIn("editor_plan", sample["task"])
             path = root / "sample.json"
             path.write_text(json.dumps(sample))
             self.assertEqual(validate_sample(path, check_files=True), [])

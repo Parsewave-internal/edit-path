@@ -40,4 +40,9 @@ export MLT_REPOSITORY="$craft_root/lib/mlt-7"
 export QT_DATA_DIRS="$source_root/data${QT_DATA_DIRS:+:$QT_DATA_DIRS}"
 export KDENLIVE_VIDEO_PATH_LOG=$log_path
 
-exec "$binary"
+arguments=()
+if [[ -n ${KDENLIVE_VIDEO_PATH_CONFIG:-} ]]; then
+    arguments+=(--config "$KDENLIVE_VIDEO_PATH_CONFIG" --no-welcome)
+fi
+
+exec "$binary" "${arguments[@]}"

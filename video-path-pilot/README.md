@@ -5,15 +5,15 @@ SPDX-License-Identifier: GPL-3.0-only
 
 # Kdenlive Video Path Pilot
 
-This fork includes an MVP training-sample collector around the Kdenlive
-recorder. It packages the prompt, hashed assets, editor plan and rationale,
-accepted software-independent edit path, final render, native project, and raw
-audit evidence into one sample directory.
+This fork includes an editor-facing recording MVP around Kdenlive. The app
+records editing interactions and canonical timeline outcomes without collecting
+editor intent. The internal project team later combines the recording, native
+project, render, source assets, and externally assigned prompt into a sample.
 
 For the two-sample client trial, begin with `EDITOR_WORKFLOW.md`. The clean
 format and language are in `sample.schema.json` and `VOCABULARY.md`.
 
-## MVP collector
+## MVP recorder
 
 The editor-facing interface is a native Qt desktop app. On Linux, double-click:
 
@@ -22,9 +22,11 @@ video-path-pilot/run-collector-app.sh
 ```
 
 Choose **Run** if the file manager asks whether to display or execute the file.
-The app provides forms and file pickers for the complete workflow; no terminal
-commands are required. The launcher uses the existing Craft/Qt environment and
-builds the small GUI automatically on first use.
+The one-screen app creates a session folder automatically, launches Kdenlive
+with an isolated fresh configuration, records the edit, validates normal
+termination, and opens the return folder. It never asks for an editor plan,
+rationale, creative decisions, or subjective review. No terminal commands are
+required.
 
 The underlying command interface remains available to developers and tests:
 
@@ -32,10 +34,9 @@ The underlying command interface remains available to developers and tests:
 python3 video-path-pilot/sample_collector.py --help
 ```
 
-`init` creates a workspace, `launch` starts the recorder, `note` captures an
-occasional creative decision, and `finalize` normalizes and validates
-`sample.json`. Undo/redo remains in evidence but is removed from the clean
-successful trajectory.
+The underlying Python sample tools are internal prototypes, not part of the
+editor workflow. Undo/redo remains in raw evidence and can be removed later
+when the internal team constructs the clean successful trajectory.
 
 The pilot is based on upstream Kdenlive revision
 `7de2ed9902b4288797a7781498546389a482a39e`.

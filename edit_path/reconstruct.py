@@ -180,6 +180,10 @@ def render_project(
             "acodec": "aac",
             "ab": "192k",
             "movflags": "+faststart",
+            # Reconstruction is an offline render. Without this consumer
+            # setting MLT can throttle or spend minutes scheduling even very
+            # short exact-state previews.
+            "real_time": "-1",
             **_encoder_settings(encoder),
         }
         selected_overrides = dict(overrides)

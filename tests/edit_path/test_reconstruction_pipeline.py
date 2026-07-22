@@ -224,6 +224,7 @@ class RuntimeTests(unittest.TestCase):
             commands = [call.args[0] for call in run.call_args_list]
             self.assertTrue(any("vcodec=libx264" in command for command in commands))
             self.assertTrue(any("vcodec=libopenh264" in command for command in commands))
+            self.assertTrue(all("real_time=-1" in command for command in commands))
 
     @mock.patch("edit_path.runtime.shutil.which", side_effect=lambda name: f"/usr/bin/{name}")
     @mock.patch("edit_path.runtime.subprocess.run")

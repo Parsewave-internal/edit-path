@@ -1,0 +1,43 @@
+name: Windows portable MVP
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature/gui-collector-mvp
+      - feature/video-path-reconstruction-architecture
+    paths:
+      - .github/workflows/windows-portable.yml
+      - CMakeLists.txt
+      - src/**
+      - edit_path/**
+      - video-path-pilot/**
+      - packaging/windows/**
+      - pyproject.toml
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows-portable:
+    runs-on: windows-2022
+    timeout-minutes: 360
+
+    steps:
+      - name: Check out the instrumented Kdenlive fork
+        uses: actions/checkout@v4
+
+      - name: Build and assemble the portable MVP
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Set-ExecutionPolicy -Scope Process Bypass
+          .\packaging\windows\build-editpath.ps1
+
+      - name: Upload portable Windows MVP
+        uses: actions/upload-artifact@v4
+        with:
+          name: EditPath-Windows-x64
+          path: windows-output/EditPath-Windows-x64.zip
+          if-no-files-found: error
+          retention-days: 14

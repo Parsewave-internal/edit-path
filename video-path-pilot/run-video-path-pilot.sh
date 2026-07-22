@@ -4,8 +4,8 @@
 
 set -euo pipefail
 
-if [[ $# -ne 1 ]]; then
-    echo "usage: $0 /absolute/path/session.jsonl" >&2
+if [[ $# -lt 1 || $# -gt 2 ]]; then
+    echo "usage: $0 /absolute/path/session.jsonl [/absolute/path/project.kdenlive]" >&2
     exit 2
 fi
 
@@ -21,17 +21,23 @@ fi
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 source_root=$(cd -- "$script_dir/.." && pwd)
-craft_root=${KDENLIVE_PILOT_CRAFT_ROOT:-/home/tenali/CraftRoot}
 binary="$source_root/build/bin/kdenlive"
+craft_root=${KDENLIVE_PILOT_CRAFT_ROOT:-}
 
 if [[ ! -x $binary ]]; then
     echo "error: pilot binary is missing; build it first: $binary" >&2
     exit 1
 fi
 
-export PATH="$craft_root/dev-utils/bin:$craft_root/bin:$craft_root/libexec:$PATH"
-export LD_LIBRARY_PATH="$craft_root/lib:$craft_root/usr/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-export PKG_CONFIG_PATH="$craft_root/lib/pkgconfig:$craft_root/share/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+if [[ -n $craft_root ]]; then
+    if [[ ! -d $craft_root ]]; then
+        echo "error: KDENLIVE_PILOT_CRAFT_ROOT does not exist: $craft_root" >&2
+        exit 1
+    fi
+    export PATH="$craft_root/dev-utils/bin:$craft_root/bin:$craft_root/libexec:$PATH"
+    export LD_LIBRARY_PATH="$craft_root/lib:$craft_root/usr/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    export PKG_CONFIG_PATH="$craft_root/lib/pkgconfig:$craft_root/share/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+fi
 
 # Craft installations do not always ship their own fontconfig configuration.
 # Pointing FONTCONFIG_FILE at a missing file makes Qt render every label as a
@@ -39,7 +45,7 @@ export PKG_CONFIG_PATH="$craft_root/lib/pkgconfig:$craft_root/share/pkgconfig${P
 fontconfig_file=""
 for candidate in \
     "${FONTCONFIG_FILE:-}" \
-    "$craft_root/etc/fonts/fonts.conf" \
+    "${craft_root:+$craft_root/etc/fonts/fonts.conf}" \
     /etc/fonts/fonts.conf \
     /usr/etc/fonts/fonts.conf; do
     if [[ -n $candidate && -r $candidate ]]; then
@@ -63,9 +69,11 @@ if command -v fc-match >/dev/null 2>&1; then
         exit 1
     fi
 fi
-export MLT_PREFIX="$craft_root"
-export MLT_DATA="$craft_root/share/mlt-7"
-export MLT_REPOSITORY="$craft_root/lib/mlt-7"
+if [[ -n $craft_root ]]; then
+    export MLT_PREFIX="$craft_root"
+    [[ -d $craft_root/share/mlt-7 ]] && export MLT_DATA="$craft_root/share/mlt-7"
+    [[ -d $craft_root/lib/mlt-7 ]] && export MLT_REPOSITORY="$craft_root/lib/mlt-7"
+fi
 export QT_DATA_DIRS="$source_root/data${QT_DATA_DIRS:+:$QT_DATA_DIRS}"
 export KDENLIVE_VIDEO_PATH_LOG=$log_path
 state_dir=${KDENLIVE_VIDEO_PATH_STATE_DIR:-${log_path%.jsonl}-states}
@@ -82,4 +90,15 @@ if [[ $state_parent != "$log_parent" && $state_parent != "$log_parent"/* ]]; the
 fi
 export KDENLIVE_VIDEO_PATH_STATE_DIR=$state_dir
 
-exec "$binary"
+arguments=()
+if [[ -n ${KDENLIVE_VIDEO_PATH_CONFIG:-} ]]; then
+    arguments+=(--config "$KDENLIVE_VIDEO_PATH_CONFIG" --no-welcome)
+fi
+if [[ -n ${KDENLIVE_VIDEO_PATH_CLIPS:-} ]]; then
+    arguments+=(-i "$KDENLIVE_VIDEO_PATH_CLIPS")
+fi
+if [[ $# -eq 2 ]]; then
+    arguments+=("$2")
+fi
+
+exec "$binary" "${arguments[@]}"

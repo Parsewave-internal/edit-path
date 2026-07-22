@@ -59,7 +59,7 @@ def validate_state_reference(value: object, prefix: str, errors: list[str]) -> s
     return value.get("sha256") if valid_hash(value.get("sha256")) else None
 
 
-def validate(path: Path) -> list[str]:
+def validate(path: Path, require_complete: bool = True) -> list[str]:
     errors: list[str] = []
     session_id: str | None = None
     expected_sequence = 1
@@ -244,9 +244,9 @@ def validate(path: Path) -> list[str]:
 
     if event_count == 0:
         errors.append("file has no events")
-    elif session_end_count == 0:
+    elif require_complete and session_end_count == 0:
         errors.append("incomplete session: missing session.end (application may have crashed or been force-quit)")
-    elif last_event_type != "session.end":
+    elif require_complete and last_event_type != "session.end":
         errors.append("session.end must be the final event")
     if saw_abort:
         errors.append("session was explicitly aborted")

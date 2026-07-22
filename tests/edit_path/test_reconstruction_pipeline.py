@@ -7,6 +7,7 @@ import hashlib
 import json
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -28,6 +29,9 @@ from edit_path.pipeline import (
 from edit_path.reconstruct import render_project
 from edit_path.runtime import runtime_fingerprint
 from edit_path.state import canonical_hash, load_state_reference, resolve_accepted_branch
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "video-path-pilot"))
+from job_pipeline import finalize_session
 
 
 def event(sequence: int, event_type: str, **values: object) -> dict:
@@ -124,7 +128,7 @@ class PublicationTests(unittest.TestCase):
             work.mkdir()
             asset = root / "assets" / "source.mp4"
             asset.write_bytes(b"asset")
-            manifest = {"schema": "video-path/assets@2", "assets": [{"asset_id": "asset_001", "original_filename": "source.mp4", "file": "assets/source.mp4", "sha256": sha256_file(asset), "bytes": 5, "license_status": "pending"}]}
+            manifest = {"schema": "video-path/assets@2", "assets": [{"asset_id": "asset_001", "original_filename": "source.mp4", "original_path": "/private/source.mp4", "source": str(asset), "file": "assets/source.mp4", "sha256": sha256_file(asset), "bytes": 5, "license_status": "pending"}]}
             write_json(root / "asset-manifest.json", manifest)
             project = work / "reconstructed.kdenlive"
             project.write_text(f'<mlt><producer><property name="resource">{asset}</property></producer></mlt>', encoding="utf-8")
@@ -139,6 +143,9 @@ class PublicationTests(unittest.TestCase):
             self.assertTrue((bundle / "assets" / "source.mp4").is_file())
             self.assertIn("assets/source.mp4", (bundle / "reconstructed.kdenlive").read_text(encoding="utf-8"))
             self.assertTrue((bundle / "bundle-manifest.json").is_file())
+            published = json.loads((bundle / "asset-manifest.json").read_text(encoding="utf-8"))
+            self.assertNotIn("source", published["assets"][0])
+            self.assertNotIn("original_path", published["assets"][0])
 
 
 class PilotRegressionTests(unittest.TestCase):
@@ -178,7 +185,7 @@ class MediaIntegrationTests(unittest.TestCase):
                 return f'''<?xml version="1.0" encoding="utf-8"?>
 <mlt LC_NUMERIC="C" root="{root}" producer="main">
  <profile frame_rate_num="25" frame_rate_den="1" width="320" height="180" progressive="1" sample_aspect_num="1" sample_aspect_den="1" display_aspect_num="16" display_aspect_den="9" colorspace="709"/>
- <producer id="clip" in="0" out="24"><property name="resource">{resource}</property><property name="mlt_service">{service}</property></producer>
+ <producer id="clip" in="0" out="24"><property name="resource">{resource}</property><property name="mlt_service">{service}</property><property name="kdenlive:id">1</property></producer>
  <playlist id="track"><entry producer="clip" in="0" out="24"/></playlist>
  <tractor id="main" in="0" out="24"><track producer="track"/></tractor>
 </mlt>'''.encode()
@@ -233,6 +240,29 @@ class MediaIntegrationTests(unittest.TestCase):
             index = build_dataset_index(dataset_root)
             self.assertEqual(index["samples"], [])
             self.assertEqual(index["excluded"][0]["session_id"], "session-test")
+
+            write_jsonl(root / "raw-events-001.jsonl", entries)
+            completed = finalize_session(
+                root,
+                final_project_path,
+                root / "output" / "final.mp4",
+                {
+                    "schema_version": "0.1.0",
+                    "job_id": "session-test",
+                    "task": {"prompt": None},
+                    "project": {"frame_rate": {"numerator": 25, "denominator": 1}, "width": 320, "height": 180},
+                },
+            )
+            self.assertTrue((completed / "final.mp4").is_file())
+            self.assertTrue((completed / "reference" / "editor-final.mp4").is_file())
+            self.assertTrue((completed / "evidence" / "raw-events-001.jsonl").is_file())
+            published_manifest = json.loads((completed / "asset-manifest.json").read_text(encoding="utf-8"))
+            self.assertTrue(published_manifest["assets"])
+            self.assertNotIn("source", published_manifest["assets"][0])
+            self.assertNotIn("original_path", published_manifest["assets"][0])
+            sample = json.loads((completed / "sample.json").read_text(encoding="utf-8"))
+            self.assertEqual(sample["task"]["prompt_status"], "pending_internal_entry")
+            self.assertEqual(sample["quality"]["media_reconstruction"], "passed")
 
 
 if __name__ == "__main__":

@@ -63,6 +63,7 @@ private:
     void flushPendingActions(bool attachTransaction);
     void addTransactionFields(QJsonObject &event, bool allowLastCompleted = false) const;
     QString stableEntityId(const QString &kind, const QString &nativeId) const;
+    void persistEntityMap() const;
     bool waitForStateSidecars();
     static QJsonObject diffSnapshots(const QJsonObject &before, const QJsonObject &after);
     bool eventFilter(QObject *watched, QEvent *event) override;
@@ -75,6 +76,7 @@ private:
     std::unique_ptr<QFile> m_file;
     QString m_logDirectory;
     QString m_stateDirectory;
+    QString m_entityMapPath;
     QString m_sessionId;
     qint64 m_sequence{0};
     QSet<QAction *> m_actions;

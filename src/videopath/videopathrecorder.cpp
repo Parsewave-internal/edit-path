@@ -101,8 +101,11 @@ VideoPathRecorder &VideoPathRecorder::instance()
 }
 
 VideoPathRecorder::VideoPathRecorder()
-    : m_sessionId(QUuid::createUuid().toString(QUuid::WithoutBraces))
+    : m_sessionId(qEnvironmentVariable("KDENLIVE_VIDEO_PATH_SESSION_ID"))
 {
+    if (m_sessionId.isEmpty()) {
+        m_sessionId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    }
     const QString path = qEnvironmentVariable("KDENLIVE_VIDEO_PATH_LOG");
     if (path.isEmpty()) {
         return;
@@ -122,6 +125,20 @@ VideoPathRecorder::VideoPathRecorder()
         m_file->close();
         m_file.reset();
         return;
+    }
+    m_entityMapPath = qEnvironmentVariable("KDENLIVE_VIDEO_PATH_ENTITY_MAP");
+    if (m_entityMapPath.isEmpty()) {
+        m_entityMapPath = QDir(m_logDirectory).filePath(QStringLiteral("entity-map.json"));
+    }
+    QFile entityMap(m_entityMapPath);
+    if (entityMap.open(QIODevice::ReadOnly)) {
+        const QJsonDocument document = QJsonDocument::fromJson(entityMap.readAll());
+        const QJsonObject values = document.object();
+        for (auto iterator = values.constBegin(); iterator != values.constEnd(); ++iterator) {
+            if (iterator.value().isString()) {
+                m_stableEntityIds.insert(iterator.key(), iterator.value().toString());
+            }
+        }
     }
     writeSessionStart();
 }
@@ -266,7 +283,25 @@ QString VideoPathRecorder::stableEntityId(const QString &kind, const QString &na
     }
     const QString value = QUuid::createUuid().toString(QUuid::WithoutBraces);
     m_stableEntityIds.insert(key, value);
+    persistEntityMap();
     return value;
+}
+
+void VideoPathRecorder::persistEntityMap() const
+{
+    if (m_entityMapPath.isEmpty()) {
+        return;
+    }
+    QJsonObject values;
+    for (auto iterator = m_stableEntityIds.constBegin(); iterator != m_stableEntityIds.constEnd(); ++iterator) {
+        values.insert(iterator.key(), iterator.value());
+    }
+    QDir().mkpath(QFileInfo(m_entityMapPath).absolutePath());
+    QSaveFile output(m_entityMapPath);
+    const QByteArray encoded = QJsonDocument(values).toJson(QJsonDocument::Indented);
+    if (output.open(QIODevice::WriteOnly) && output.write(encoded) == encoded.size()) {
+        output.commit();
+    }
 }
 
 void VideoPathRecorder::initialize(QApplication *application)
@@ -898,6 +933,10 @@ void VideoPathRecorder::writeSessionStart()
     event.insert(QStringLiteral("application_version"), applicationVersion);
     event.insert(QStringLiteral("os"), QSysInfo::prettyProductName());
     event.insert(QStringLiteral("cpu_architecture"), QSysInfo::currentCpuArchitecture());
+    const QString segment = qEnvironmentVariable("KDENLIVE_VIDEO_PATH_SEGMENT");
+    if (!segment.isEmpty()) {
+        event.insert(QStringLiteral("segment"), segment.toInt());
+    }
     m_file->write(QJsonDocument(event).toJson(QJsonDocument::Compact));
     m_file->write("\n");
     m_file->flush();

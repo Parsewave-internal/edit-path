@@ -241,6 +241,8 @@ def _reference_video(session_dir: Path) -> Path:
         session_dir / "output" / "final.mp4",
         session_dir / "final_ref.mp4",
         session_dir / "output" / "final.mkv",
+        session_dir / "output" / "final.mov",
+        session_dir / "output" / "final.webm",
     )
     for candidate in candidates:
         if candidate.is_file():
@@ -346,6 +348,16 @@ def _copy_if_present(source: Path, destination: Path) -> None:
         shutil.copy2(source, destination)
 
 
+def _public_asset_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
+    """Remove local source paths that are needed only during ingestion."""
+    value = copy.deepcopy(manifest)
+    for asset in value.get("assets", []):
+        if isinstance(asset, dict):
+            asset.pop("source", None)
+            asset.pop("original_path", None)
+    return value
+
+
 def publish_bundle(
     session_dir: Path,
     destination_root: Path,
@@ -362,6 +374,9 @@ def publish_bundle(
     temporary = Path(tempfile.mkdtemp(prefix=f".{session_id}-", dir=destination_root))
     try:
         shutil.copy2(artifacts["final_video"], temporary / "final.mp4")
+        reference_video = artifacts.get("reference_video")
+        if isinstance(reference_video, Path) and reference_video.is_file():
+            _copy_if_present(reference_video, temporary / "reference" / f"editor-final{reference_video.suffix.lower()}")
         _copy_assets(session_dir, temporary, manifest)
         portable_project = remap_project_assets(
             Path(artifacts["project"]).read_bytes(),
@@ -377,10 +392,18 @@ def publish_bundle(
         write_jsonl(temporary / "trajectory.jsonl", cleaned_events)
         raw_path = artifacts["raw_trajectory"]
         shutil.copy2(raw_path, temporary / "raw-trajectory.jsonl")
-        manifest_path = artifacts["manifest_path"]
-        shutil.copy2(manifest_path, temporary / "asset-manifest.json")
-        for optional in ("sample.json", "internal/collector-metadata.json", "internal/rationale.jsonl"):
+        write_json(temporary / "asset-manifest.json", _public_asset_manifest(manifest))
+        for optional in (
+            "sample.json",
+            "session.json",
+            "entity-map.json",
+            "internal/final.kdenlive",
+            "internal/collector-metadata.json",
+            "internal/rationale.jsonl",
+        ):
             _copy_if_present(session_dir / optional, temporary / optional)
+        for raw_segment in sorted((session_dir / "evidence").glob("raw-events-*.jsonl")) if (session_dir / "evidence").is_dir() else []:
+            _copy_if_present(raw_segment, temporary / "evidence" / raw_segment.name)
         bundle_manifest = {
             "schema": "video-path/bundle@1",
             "session_id": session_id,
@@ -533,6 +556,7 @@ def process_session(
                 session_id,
                 {
                     "final_video": reconstructed,
+                    "reference_video": _reference_video(session_dir),
                     "project": project,
                     "report": report_path,
                     "raw_trajectory": trajectory,

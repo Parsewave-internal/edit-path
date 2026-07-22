@@ -1,6 +1,6 @@
- /*
-    SPDX-FileCopyrightText: 2007 Marco Gittler <g.marco@freenet.de>
-    SPDX-FileCopyrightText: 2008 Jean-Baptiste Mardelle <jb@kdenlive.org>
+/*
+   SPDX-FileCopyrightText: 2007 Marco Gittler <g.marco@freenet.de>
+   SPDX-FileCopyrightText: 2008 Jean-Baptiste Mardelle <jb@kdenlive.org>
 
 SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-KDE-Accepted-GPL
 */
@@ -56,6 +56,7 @@ SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-KDE-Accepted-GPL
 #include <QQuickStyle>
 #include <QQuickWindow>
 #include <QResource>
+#include <QTimer>
 
 #include <QUndoGroup>
 #include <QUrl> //new
@@ -290,18 +291,19 @@ int main(int argc, char *argv[])
     KAboutData aboutData(QByteArray("kdenlive"), i18n("Kdenlive"), KDENLIVE_VERSION, i18n("An open source video editor."), KAboutLicense::GPL_V3,
                          i18n("Copyright © 2007–2025 Kdenlive authors"), otherText, QStringLiteral("https://kdenlive.org"));
     // main developers (alphabetical)
-    aboutData.addAuthor(i18n("Jean-Baptiste Mardelle"), i18n("Core team member, main developer and maintainer, MLT, and KDE SC 4 / KF5 port"), QStringLiteral("jb@kdenlive.org"));
+    aboutData.addAuthor(i18n("Jean-Baptiste Mardelle"), i18n("Core team member, main developer and maintainer, MLT, and KDE SC 4 / KF5 port"),
+                        QStringLiteral("jb@kdenlive.org"));
     // active developers with major involvement
     aboutData.addAuthor(i18n("Julius Künzel"), i18n("Core team member, feature development, packaging, bug fixing"), QStringLiteral("julius.kuenzel@kde.org"));
     aboutData.addAuthor(i18n("Vincent Pinon"), i18n("KF5 port, Windows cross-build, packaging, bug fixing"), QStringLiteral("vpinon@kde.org"));
     // other active developers (alphabetical)
-     aboutData.addAuthor(i18n("Eric Jiang"), i18n("Bug fixing and test improvements"), QStringLiteral("erjiang@alumni.iu.edu"));
+    aboutData.addAuthor(i18n("Eric Jiang"), i18n("Bug fixing and test improvements"), QStringLiteral("erjiang@alumni.iu.edu"));
     // non active developers with major improvement (alphabetical)
     aboutData.addAuthor(i18n("Simon A. Eugster"), i18n("Color scopes, decimal separator issue, bug fixing"), QStringLiteral("simon.eu@gmail.com"));
     aboutData.addAuthor(i18n("Jason Wood"), i18n("Original KDE 3 version author (not active anymore)"), QStringLiteral("jasonwood@blueyonder.co.uk"));
     // non developers (alphabetical)
     aboutData.addCredit(i18n("Farid Abdelnour"), i18n("Logo, promotion, testing"));
-    aboutData.addCredit(i18n("balooii"),  i18n("Monitor, scopes, and timeline QOL improvements"));
+    aboutData.addCredit(i18n("balooii"), i18n("Monitor, scopes, and timeline QOL improvements"));
     aboutData.addCredit(i18n("Nicolas Carion"), i18n("Code re-architecture & timeline rewrite (2019)"));
     aboutData.addCredit(i18n("Dan Dennedy"), i18n("MLT maintainer, Bug fixing, etc."));
     aboutData.addCredit(i18n("Darby Johnston"), i18n("OTIO rewrite"));
@@ -363,7 +365,8 @@ int main(int argc, char *argv[])
     QCommandLineOption debugOption(QStringLiteral("debug"), i18n("Show some development specific features in the UI, disable all exclude lists for assets."));
     parser.addOption(debugOption);
 
-    QCommandLineOption saveDebugOption(QStringLiteral("setup-report"), i18n("Save a json report about components in the given path."), QStringLiteral("reportFile"));
+    QCommandLineOption saveDebugOption(QStringLiteral("setup-report"), i18n("Save a json report about components in the given path."),
+                                       QStringLiteral("reportFile"));
     parser.addOption(saveDebugOption);
 
     parser.addPositionalArgument(QStringLiteral("file"), i18n("Kdenlive document to open."));
@@ -566,6 +569,18 @@ int main(int argc, char *argv[])
         result = EXIT_CLEAN_RESTART;
     } else {
         pCore->initGUI(parser.value(mltPathOption), app.url, clipsToLoad);
+        // Recorder sessions need a real project path from the beginning. This
+        // gives Kdenlive's normal autosave/backup recovery a stable target even
+        // when the editor has not manually used Save As before a crash.
+        const QString recorderProject = qEnvironmentVariable("KDENLIVE_VIDEO_PATH_PROJECT");
+        if (!recorderProject.isEmpty() && app.url.isEmpty() && !QFileInfo::exists(recorderProject)) {
+            QTimer::singleShot(1000, &app, [recorderProject]() {
+                QDir().mkpath(QFileInfo(recorderProject).absolutePath());
+                if (!pCore->projectManager()->saveFileAs(recorderProject, false)) {
+                    qWarning() << "Could not create recorder project" << recorderProject;
+                }
+            });
+        }
         VideoPathRecorder::instance().captureTimelineCheckpoint(QStringLiteral("gui.ready"));
         result = app.exec();
     }

@@ -42,6 +42,11 @@ cp -a "$craft_root/lib/mlt-7" "$appdir/usr/lib/"
 cp -a "$craft_root/share/mlt-7" "$appdir/usr/share/"
 install -Dm755 "$craft_root/plugins/platforms/libqoffscreen.so" \
     "$appdir/usr/plugins/platforms/libqoffscreen.so"
+# Kdenlive's splash screen imports this KDE style from its compiled QML
+# resource. qmlimportscanner cannot discover that import from source alone, so
+# seed the module explicitly; the Qt deploy plugin follows its dependencies.
+mkdir -p "$appdir/usr/qml/org/kde"
+cp -a "$craft_root/qml/org/kde/desktop" "$appdir/usr/qml/org/kde/"
 
 # Keep Python's standard library and the one third-party reconstruction module.
 cp -a "$craft_root/lib/python3.11" "$appdir/usr/lib/"

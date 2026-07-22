@@ -615,6 +615,8 @@ int runSelfTest()
     passed = checkFile(QStringLiteral("ffprobe"), ffprobe) && passed;
     passed = checkFile(QStringLiteral("melt"), melt) && passed;
     passed = checkFile(QStringLiteral("qt_multimedia_qml"), qtMultimediaQmlPath()) && passed;
+    const QString kdeDesktopQml = QDir(QLibraryInfo::path(QLibraryInfo::QmlImportsPath)).filePath(QStringLiteral("org/kde/desktop/qmldir"));
+    passed = checkFile(QStringLiteral("kde_desktop_qml"), kdeDesktopQml) && passed;
     const QString validator = QDir(root).filePath(QStringLiteral("video-path-pilot/validate_video_path.py"));
     passed = checkFile(QStringLiteral("validator"), validator) && passed;
     const QString pipeline = QDir(root).filePath(QStringLiteral("video-path-pilot/job_pipeline.py"));

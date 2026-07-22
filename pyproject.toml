@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: 2026 Edit Path contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "edit-path"
+version = "0.3.0"
+description = "Deterministic Kdenlive Video Path reconstruction and dataset pipeline"
+requires-python = ">=3.10"
+dependencies = ["zstandard>=0.22"]
+
+[project.scripts]
+edit-path = "edit_path.cli:main"
+
+[tool.setuptools]
+packages = ["edit_path"]

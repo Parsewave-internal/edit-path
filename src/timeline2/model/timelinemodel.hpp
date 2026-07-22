@@ -243,6 +243,7 @@ public:
     int getCompositionEnd(int compoId) const;
     std::pair<int, int> getMixInOut(int cid) const;
     int getMixDuration(int cid) const;
+    QDomElement getMixXml(QDomDocument &document, int cid) const;
 
     /** @brief Returns an item position, item can be clip, subtitle or composition */
     Q_INVOKABLE int getItemPosition(int itemId) const;
@@ -972,6 +973,8 @@ public:
     int getClipEndAt(int tid, int pos, int playlist) const;
     /** @brief returns true if the track trackId is Locked */
     bool trackIsLocked(int trackid) const;
+    bool trackIsMuted(int trackId) const;
+    bool trackIsHidden(int trackId) const;
     /** @brief returns this timeline's subtitle model */
     std::shared_ptr<SubtitleModel> getSubtitleModel();
     /** @brief returns this timeline's guide model */

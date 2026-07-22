@@ -58,11 +58,26 @@ if ($python64Bit -ne "True") {
 
 $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
 if (-not (Test-Path $vswhere)) {
-    Stop-Build "Visual Studio 2022 Build Tools with 'Desktop development with C++' is required: https://visualstudio.microsoft.com/downloads/"
+    Stop-Build "download Visual Studio 2022 Build Tools from https://aka.ms/vs/17/release/vs_BuildTools.exe and select 'Desktop development with C++'."
 }
-$visualStudio = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+$visualStudio = & $vswhere -latest -products * -version "[17.0,18.0)" -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
 if (-not $visualStudio) {
-    Stop-Build "install the Visual Studio 2022 'Desktop development with C++' workload."
+    Stop-Build "download Visual Studio 2022 Build Tools from https://aka.ms/vs/17/release/vs_BuildTools.exe and select 'Desktop development with C++'. Visual Studio 2026 is not supported by Craft yet."
+}
+
+$conflictingToolDirectories = @()
+foreach ($toolName in @("sh.exe", "gcc.exe", "g++.exe", "cpp.exe")) {
+    $tool = Get-Command $toolName -ErrorAction SilentlyContinue
+    if ($tool) {
+        $conflictingToolDirectories += (Split-Path $tool.Source -Parent).TrimEnd('\')
+    }
+}
+$conflictingToolDirectories = $conflictingToolDirectories | Sort-Object -Unique
+if ($conflictingToolDirectories) {
+    $env:Path = (($env:Path -split ';') | Where-Object {
+        $_ -and $conflictingToolDirectories -notcontains $_.TrimEnd('\')
+    }) -join ';'
+    Write-Host "Ignoring incompatible build tools in PATH: $($conflictingToolDirectories -join ', ')"
 }
 
 if ($PreflightOnly) {
@@ -115,6 +130,12 @@ if (-not (Test-Path $craftEnvironment)) {
 
 . $craftEnvironment
 
+$craftPython = $env:CRAFT_PYTHON
+$craftScript = Join-Path (Split-Path $craftEnvironment -Parent) "bin\craft.py"
+if (-not $craftPython -or -not (Test-Path $craftPython) -or -not (Test-Path $craftScript)) {
+    Stop-Build "the Craft Python launcher is incomplete."
+}
+
 $blueprint = Get-ChildItem $CraftRoot -Recurse -Filter kdenlive.py |
     Where-Object { $_.FullName -match 'craft-blueprints-kde.*kdenlive' } |
     Select-Object -First 1
@@ -132,7 +153,7 @@ if ($blueprintText.Contains($oldFilter)) {
 }
 
 Write-Host "Building EditPath and all required Kdenlive dependencies..."
-craft --ci-mode --src-dir $sourceRoot kde/kdemultimedia/kdenlive
+& $craftPython $craftScript --ci-mode --src-dir $sourceRoot kde/kdemultimedia/kdenlive
 if ($LASTEXITCODE -ne 0) { Stop-Build "Craft compilation failed." }
 
 $settings = Join-Path $CraftRoot "etc\CraftSettings.ini"
@@ -143,7 +164,7 @@ if ($settingsText.Contains('#PackageType = SevenZipPackager')) {
 }
 
 Write-Host "Creating dependency-complete portable package..."
-craft --ci-mode --src-dir $sourceRoot --package kde/kdemultimedia/kdenlive
+& $craftPython $craftScript --ci-mode --src-dir $sourceRoot --package kde/kdemultimedia/kdenlive
 if ($LASTEXITCODE -ne 0) { Stop-Build "Craft packaging failed." }
 
 $archive = Get-ChildItem $CraftRoot -Recurse -File -Filter '*kdenlive*.7z' |

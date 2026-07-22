@@ -41,6 +41,15 @@ class MvpTests(unittest.TestCase):
         self.assertIn('m_start->setText(QStringLiteral("Discard and Start New Session"))', source)
         self.assertIn('QMessageBox::question(this, QStringLiteral("Discard current session?")', source)
 
+    def test_windows_build_uses_supported_visual_studio_and_craft_launcher(self):
+        root = Path(__file__).parents[2]
+        source = (root / "packaging/windows/build-editpath.ps1").read_text(encoding="utf-8")
+        self.assertIn('-version "[17.0,18.0)"', source)
+        self.assertIn('$env:CRAFT_PYTHON', source)
+        self.assertIn('"bin\\craft.py"', source)
+        self.assertIn('& $craftPython $craftScript --ci-mode --src-dir $sourceRoot', source)
+        self.assertIn('@("sh.exe", "gcc.exe", "g++.exe", "cpp.exe")', source)
+
     def test_project_asset_binding_requires_path_or_content_identity(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

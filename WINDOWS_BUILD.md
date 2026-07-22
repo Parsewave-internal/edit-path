@@ -12,8 +12,12 @@ to install Python.
 - [Git for Windows](https://git-scm.com/download/win);
 - [Python 3.11 or newer, 64-bit](https://www.python.org/downloads/windows/),
   with **Add Python to PATH** selected;
-- [Visual Studio 2022 Build Tools](https://visualstudio.microsoft.com/downloads/)
+- [Visual Studio 2022 Build Tools](https://aka.ms/vs/17/release/vs_BuildTools.exe)
   with **Desktop development with C++** selected.
+
+Visual Studio 2026 is not currently supported by KDE Craft. The build script
+temporarily removes conflicting MinGW tools from its own `PATH`, so no manual
+environment cleanup is needed.
 
 Administrator access is useful for installing prerequisites, but the resulting
 portable application does not require administrator access.

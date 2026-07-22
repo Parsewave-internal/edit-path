@@ -20,92 +20,17 @@ jobs:
       - name: Check out the instrumented Kdenlive fork
         uses: actions/checkout@v4
 
-      - name: Bootstrap KDE Craft
+      - name: Build and assemble the portable MVP
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          Invoke-WebRequest `
-            https://raw.githubusercontent.com/KDE/craft/master/setup/install_craft.ps1 `
-            -OutFile "$env:RUNNER_TEMP\install_craft.ps1"
-          & "$env:RUNNER_TEMP\install_craft.ps1" `
-            -root C:\CraftRoot `
-            -python (Get-Command python.exe).Source `
-            -use-defaults
-
-      - name: Allow the EditPath supervisor in the Kdenlive package
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $blueprint = Get-ChildItem C:\CraftRoot -Recurse -Filter kdenlive.py |
-            Where-Object { $_.FullName -match 'craft-blueprints-kde.*kdenlive' } |
-            Select-Object -First 1
-          if (-not $blueprint) { throw "Kdenlive Craft blueprint was not found" }
-          $text = Get-Content $blueprint.FullName -Raw
-          $text = $text.Replace('bin/(?!(ff|kdenlive|kioworker|melt|update-mime-database|snoretoast|drmingw|data/kdenlive)).*',
-            'bin/(?!(ff|kdenlive|EditPath|kioworker|melt|update-mime-database|snoretoast|drmingw|data/kdenlive)).*')
-          Set-Content $blueprint.FullName $text -Encoding UTF8
-
-      - name: Build this checkout with Craft
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          . C:\CraftRoot\craft\craftenv.ps1
-          craft --ci-mode --src-dir "$env:GITHUB_WORKSPACE" kde/kdemultimedia/kdenlive
-
-      - name: Create the upstream portable package
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $settings = 'C:\CraftRoot\etc\CraftSettings.ini'
-          $text = Get-Content $settings -Raw
-          $text = $text.Replace('#PackageType = SevenZipPackager', 'PackageType = SevenZipPackager')
-          Set-Content $settings $text -Encoding UTF8
-          . C:\CraftRoot\craft\craftenv.ps1
-          craft --ci-mode --src-dir "$env:GITHUB_WORKSPACE" --package kde/kdemultimedia/kdenlive
-
-      - name: Assemble the EditPath portable folder
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $archive = Get-ChildItem C:\CraftRoot -Recurse -File -Filter '*kdenlive*.7z' |
-            Sort-Object LastWriteTimeUtc -Descending |
-            Select-Object -First 1
-          if (-not $archive) { throw "Craft did not produce a Kdenlive 7z package" }
-
-          $portable = Join-Path $env:RUNNER_TEMP 'EditPath-Windows-x64'
-          New-Item -ItemType Directory -Force $portable | Out-Null
-          & 7z x $archive.FullName "-o$portable" -y
-          if ($LASTEXITCODE -ne 0) { throw "Could not extract the Craft package" }
-
-          $editPath = Get-ChildItem $portable -Recurse -File -Filter EditPath.exe | Select-Object -First 1
-          $kdenlive = Get-ChildItem $portable -Recurse -File -Filter kdenlive.exe | Select-Object -First 1
-          if (-not $editPath) { throw "EditPath.exe is missing from the portable package" }
-          if (-not $kdenlive) { throw "kdenlive.exe is missing from the portable package" }
-
-          $bin = $editPath.Directory.FullName
-          $pythonZip = Join-Path $env:RUNNER_TEMP 'python-embed.zip'
-          Invoke-WebRequest `
-            https://www.python.org/ftp/python/3.11.9/python-3.11.9-embed-amd64.zip `
-            -OutFile $pythonZip
-          $pythonDir = Join-Path $bin 'python'
-          Expand-Archive $pythonZip $pythonDir -Force
-          Remove-Item (Join-Path $pythonDir 'python311._pth') -ErrorAction SilentlyContinue
-
-          @"
-          EditPath portable MVP
-
-          Start: bin\EditPath.exe
-          Do not start bin\kdenlive.exe directly; doing so bypasses recording.
-          Sessions are stored in the current user's Videos\EditPathSessions folder.
-          "@ | Set-Content (Join-Path $portable 'START-HERE.txt') -Encoding UTF8
-
-          $output = Join-Path $env:GITHUB_WORKSPACE 'EditPath-Windows-x64.zip'
-          Compress-Archive -Path (Join-Path $portable '*') -DestinationPath $output -CompressionLevel Optimal
+          Set-ExecutionPolicy -Scope Process Bypass
+          .\packaging\windows\build-editpath.ps1
 
       - name: Upload portable Windows MVP
         uses: actions/upload-artifact@v4
         with:
           name: EditPath-Windows-x64
-          path: EditPath-Windows-x64.zip
+          path: windows-output/EditPath-Windows-x64.zip
           if-no-files-found: error
           retention-days: 14

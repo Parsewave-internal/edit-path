@@ -106,9 +106,6 @@ public:
             QTimer::singleShot(0, this, [this] {
                 if (m_showExistingCompletion) {
                     showCompletionWindow();
-                } else if (m_autoRecover) {
-                    ++m_segment;
-                    launchSegment();
                 } else {
                     startNewSession();
                 }
@@ -268,7 +265,19 @@ private:
             m_showExistingCompletion = true;
         } else if (status == QStringLiteral("recovery_available") || status == QStringLiteral("recording")) {
             const QString project = QDir(previous).filePath(QStringLiteral("edit.kdenlive"));
-            m_autoRecover = QFileInfo::exists(project);
+            const bool canRecover = QFileInfo::exists(project);
+            m_recover->setVisible(canRecover);
+            offerConfirmedNewSession();
+            writeManifest(QStringLiteral("recovery_available"));
+            setStatus(
+                canRecover
+                    ? QStringLiteral("The previous editing session ended unexpectedly. Choose Recover and Continue to reopen its latest saved project.")
+                    : QStringLiteral("The previous session ended before a recoverable project was saved. Its event evidence remains in the session folder."),
+                true);
+            m_activity->appendPlainText(canRecover
+                                            ? QStringLiteral("Interrupted session detected. Recovery will create recording segment %1.").arg(m_segment + 1)
+                                            : QStringLiteral("Interrupted session detected, but edit.kdenlive is missing."));
+            m_showExistingCompletion = true;
         } else if (status == QStringLiteral("packaged")) {
             m_openCompleted->setEnabled(true);
             setStatus(QStringLiteral("Previous sample was generated."));
@@ -477,7 +486,7 @@ private:
     int m_lastEditorExitCode{0};
     QProcess m_editor, m_worker;
     QTimer m_heartbeat;
-    bool m_autoRecover{false}, m_showExistingCompletion{false}, m_lastEditorExitCrashed{false}, m_confirmNewSession{false};
+    bool m_showExistingCompletion{false}, m_lastEditorExitCrashed{false}, m_confirmNewSession{false};
     QLabel *m_title{}, *m_instructions{}, *m_status{}, *m_sessionLabel{};
     QPushButton *m_start{}, *m_recover{}, *m_finish{}, *m_openSession{}, *m_openCompleted{};
     QPlainTextEdit *m_activity{};

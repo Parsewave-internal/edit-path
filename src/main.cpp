@@ -11,6 +11,7 @@ SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-KDE-Accepted-GPL
 #endif
 #include "definitions.h"
 #include "dialogs/wizard.h"
+#include "doc/kdenlivedoc.h"
 #include "kdenlive_debug.h"
 #include "kdenlivesettings.h"
 // Required for MacOS definition of MLT_LC_NAME
@@ -580,6 +581,25 @@ int main(int argc, char *argv[])
                     qWarning() << "Could not create recorder project" << recorderProject;
                 }
             });
+        }
+        // Kdenlive's regular crash recovery writes a private stale file and
+        // asks about it on the next launch. Recorder sessions additionally
+        // checkpoint the assigned project itself so a killed supervisor can
+        // always reopen a recent, unambiguous edit.kdenlive.
+        if (!recorderProject.isEmpty()) {
+            bool intervalOk = false;
+            const int configuredInterval = qEnvironmentVariableIntValue("KDENLIVE_VIDEO_PATH_AUTOSAVE_MS", &intervalOk);
+            auto *checkpointTimer = new QTimer(&app);
+            checkpointTimer->setInterval(intervalOk ? qMax(5000, configuredInterval) : 30000);
+            QObject::connect(checkpointTimer, &QTimer::timeout, &app, [] {
+                KdenliveDoc *document = pCore->currentDoc();
+                if (document != nullptr && document->isModified() && QApplication::activeModalWidget() == nullptr) {
+                    if (!pCore->projectManager()->saveFile()) {
+                        qWarning() << "Could not checkpoint recorder project";
+                    }
+                }
+            });
+            checkpointTimer->start();
         }
         VideoPathRecorder::instance().captureTimelineCheckpoint(QStringLiteral("gui.ready"));
         result = app.exec();

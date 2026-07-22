@@ -40,6 +40,13 @@ class MvpTests(unittest.TestCase):
         self.assertIn("unset QSG_RHI_BACKEND LIBGL_ALWAYS_SOFTWARE", launcher)
         self.assertIn('m_start->setText(QStringLiteral("Discard and Start New Session"))', source)
         self.assertIn('QMessageBox::question(this, QStringLiteral("Discard current session?")', source)
+        self.assertNotIn("else if (m_autoRecover)", source)
+        self.assertIn("The previous editing session ended unexpectedly", source)
+
+        editor_main = (root / "src/main.cpp").read_text(encoding="utf-8")
+        self.assertIn('qEnvironmentVariableIntValue("KDENLIVE_VIDEO_PATH_AUTOSAVE_MS"', editor_main)
+        self.assertIn("document->isModified()", editor_main)
+        self.assertIn("pCore->projectManager()->saveFile()", editor_main)
 
     def test_windows_build_uses_supported_visual_studio_and_craft_launcher(self):
         root = Path(__file__).parents[2]

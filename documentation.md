@@ -778,6 +778,29 @@ available. The Linux launcher and child-editor environment also remove forced
 `QSG_RHI_BACKEND` and `LIBGL_ALWAYS_SOFTWARE` overrides, which caused severe UI
 stalls during the first optimized-build acceptance run.
 
+### Explicit interrupted-session recovery and project checkpoints
+
+A forced-quit acceptance run showed that the Linux desktop can terminate both
+Kdenlive and its hidden parent supervisor. The session manifest, event segments,
+state sidecars, and previously saved project survived, but restarting EditPath
+silently opened another segment. That looked like a new session when the most
+recent timeline work had not yet reached the project file.
+
+EditPath now stops at a visible interrupted-session screen. It identifies the
+existing session folder and requires the editor to choose **Recover and
+Continue** before creating the next numbered recording segment. Starting a new
+session remains possible, but is labelled as a discard and requires
+confirmation. No recovery segment is launched silently.
+
+Recorder-mode Kdenlive also writes the assigned `edit.kdenlive` itself whenever
+the project is modified, no modal dialog is active, and the 30-second checkpoint
+timer expires. This supplements Kdenlive's private stale-file recovery with an
+unambiguous session-owned project that the supervisor can reopen. The interval
+can be overridden for automated testing with
+`KDENLIVE_VIDEO_PATH_AUTOSAVE_MS`, with a five-second safety minimum. A sudden
+kill can still lose edits made since the latest checkpoint, but it no longer
+depends solely on a manual Ctrl+S or an opaque stale file.
+
 ## Historical Version 2 manual acceptance test
 
 1. Start a fresh recording and create/open a project.

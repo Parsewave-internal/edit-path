@@ -37,7 +37,8 @@ UUIDs or project-file resolution before scaled collection.
 
 ## Undo and redo
 
-Undo/redo and abandoned edits remain in `evidence/raw-events.jsonl`. The clean
-`edit_path.operations` contains only the final accepted branch. This teaches
-the intended edit rather than editor correction behavior while preserving the
-evidence needed to audit normalization.
+Undo and redo are preserved chronologically in `edit_path.operations` as
+`history.undo` and `history.redo`. Each contains the actual reverse or restored
+state change and resulting state hash. Raw UI/history evidence also remains in
+`evidence/raw-events*.jsonl`. The MVP intentionally retains more information;
+a final-branch-only view can be derived later without recollecting data.

@@ -1,66 +1,34 @@
 <!-- SPDX-FileCopyrightText: 2026 Video Path Pilot contributors -->
 <!-- SPDX-License-Identifier: GPL-3.0-only -->
 
-# Editor workflow for the two-sample MVP
+# Editor workflow for the freeform recorder MVP
 
-Use a fresh directory for every sample. Do not reuse a crashed or incomplete
-recording. Commands below are run from the repository root.
+The editor may find, download, generate, or import media at any point. Nothing
+must be prepared in the app before editing.
 
-## 1. Initialize
+1. Double-click `run-collector-app.sh` and choose **Run**. The supervisor stays
+   hidden and Kdenlive opens directly; remote X11 startup can take 15–60 seconds.
+2. There is no initialization screen or Start button before editing.
+3. Make the requested video normally. Import or create assets whenever needed.
+4. The recorder creates `edit.kdenlive` in the session folder automatically.
+   Save normally while editing; do not create a second project file.
+5. Render exactly one final video (`.mp4`, `.mov`, `.mkv`, or `.webm`) into that
+   same folder.
+6. Close Kdenlive normally. The completion screen then appears and validates
+   the recording.
+7. If Kdenlive ended unexpectedly, restart the recorder and use **Recover and
+   Continue**. It reopens `edit.kdenlive` (and Kdenlive may offer its latest
+   autosave) while creating a new numbered event segment without overwriting
+   prior evidence.
+8. Click **Finish Session**. The app discovers resources from the saved project,
+   hashes and copies them, resolves Kdenlive IDs, generates `sample.json`,
+   reconstructs supported edits, renders, and compares media.
+9. Use **Open Generated Sample** to inspect the result.
 
-```bash
-python3 video-path-pilot/sample_collector.py init \
-  /home/tenali/parsewave/samples/sample_001 \
-  --editor-id editor_001 \
-  --prompt "Create a 20-second energetic product montage." \
-  --plan "Select the strongest moments, establish context, accelerate the cuts, and end on the product." \
-  /path/to/video-a.mp4 /path/to/video-b.mp4 /path/to/music.wav
-```
+The generated sample marks the verbal task prompt as
+`pending_internal_entry`. The internal team attaches the exact instruction
+before client review. No editor intent is collected.
 
-The command copies and hashes assets. It never modifies the originals.
-
-## 2. Launch and edit
-
-```bash
-python3 video-path-pilot/sample_collector.py launch \
-  /home/tenali/parsewave/samples/sample_001
-```
-
-In Kdenlive, create a blank project with the requested resolution and frame
-rate. Import files from the sample's `assets/` folder **in filename order**.
-Edit normally. Save the project outside the sample or directly as
-`internal/final.kdenlive`.
-
-Add a rationale note when making a meaningful creative decision (not for every
-click). Open another terminal and run:
-
-```bash
-python3 video-path-pilot/sample_collector.py note \
-  /home/tenali/parsewave/samples/sample_001 \
-  --reason "The opening felt slow." \
-  --decision "Used three short detail shots before the wide shot to create momentum."
-```
-
-Render the final video, then close Kdenlive normally. A force-quit makes the
-sample incomplete and it should be recollected.
-
-## 3. Finalize
-
-```bash
-python3 video-path-pilot/sample_collector.py finalize \
-  /home/tenali/parsewave/samples/sample_001 \
-  --project /path/to/saved-project.kdenlive \
-  --output /path/to/rendered-video.mp4 \
-  --review "The output follows the prompt; pacing and audio ending were checked."
-```
-
-Finalization validates the raw session, copies the native project and render,
-hashes every artifact, removes undone work from the accepted branch, creates
-`sample.json`, and validates the completed package.
-
-## 4. Human review before client delivery
-
-Watch `output/final.*` completely. Open `sample.json` and verify that assets,
-operation order, frames, prompt, plan, notes, and output are plausible. The MVP
-marks every sample `needs_human_review`; a reviewer should record approval in
-the client-delivery notes. Do not send local caches or unrelated project files.
+Unsupported effects, transitions, speed changes, or other reconstruction gaps
+do not destroy the sample; they are reported and keep
+`ready_for_client_review` false.

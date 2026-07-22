@@ -3,16 +3,16 @@
   "$id": "https://parsewave.example/schemas/edit-path-sample-0.1.0.json",
   "title": "Edit-path training sample MVP",
   "type": "object",
-  "required": ["schema_version", "sample_id", "task", "project", "inputs", "edit_path", "rationale", "output", "quality", "evidence", "provenance"],
+  "required": ["schema_version", "sample_id", "task", "project", "inputs", "edit_path", "output", "quality", "evidence", "provenance"],
   "properties": {
     "schema_version": {"const": "0.1.0"},
     "sample_id": {"type": "string", "minLength": 1},
     "task": {
       "type": "object",
-      "required": ["prompt", "editor_plan"],
+      "required": ["prompt"],
       "properties": {
-        "prompt": {"type": "string", "minLength": 1},
-        "editor_plan": {"type": "string", "minLength": 1}
+        "prompt": {"type": ["string", "null"], "minLength": 1},
+        "prompt_status": {"enum": ["provided", "pending_internal_entry"]}
       }
     },
     "project": {

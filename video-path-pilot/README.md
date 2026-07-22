@@ -5,24 +5,65 @@ SPDX-License-Identifier: GPL-3.0-only
 
 # Kdenlive Video Path Pilot
 
-This fork includes an MVP training-sample collector around the Kdenlive
-recorder. It packages the prompt, hashed assets, editor plan and rationale,
-accepted software-independent edit path, final render, native project, and raw
-audit evidence into one sample directory.
+This fork includes a freeform recording MVP around Kdenlive. Editors can import,
+download, or create media at any point. The app records canonical outcomes,
+discovers actual resources from the final project, resolves them by SHA-256,
+normalizes the accepted path, and generates `sample.json` automatically.
 
 For the two-sample client trial, begin with `EDITOR_WORKFLOW.md`. The clean
 format and language are in `sample.schema.json` and `VOCABULARY.md`.
 
-## MVP collector
+## MVP recorder
+
+The editor-facing interface is a native Qt desktop app. On Linux, double-click:
+
+```text
+video-path-pilot/run-collector-app.sh
+```
+
+Choose **Run** if the file manager asks whether to display or execute the file.
+The app starts as a hidden supervisor: it creates a session folder and launches
+blank Kdenlive directly with an isolated configuration. During editing it
+creates a session-owned `edit.kdenlive` and records numbered segments. After
+Kdenlive closes, the supervisor shows a completion or recovery screen that
+validates termination and packages the completed sample. There is no assigned
+job, initialization screen, or terminal workflow.
+
+### Windows portable MVP
+
+The editor deliverable is built by the manually triggered **Windows portable
+MVP** GitHub Actions workflow. It uses the maintained KDE Craft Kdenlive
+blueprint to compile this checkout and its dependencies for 64-bit Windows,
+then adds an embedded Python runtime for local validation and sample packaging.
+The uploaded artifact is `EditPath-Windows-x64.zip`.
+The local/hosted build runs `EditPath.exe --self-test` before creating the ZIP;
+the resulting `SELF-TEST.json` must report `passed: true`. A separate
+`-PreflightOnly` mode checks the Windows machine before the long Craft build.
+
+After extracting the archive, start `bin\\EditPath.exe`. Do not start
+`bin\\kdenlive.exe` directly because that bypasses session supervision and
+recording. The initial MVP artifact is unsigned, so Windows may display a
+SmartScreen warning. Code signing and an installer are later distribution
+steps; the portable package is the first functional test target.
+
+Canonical state replay must reproduce every recorded state hash. A first MLT
+media adapter reconstructs cut/trim/move edits with normal-speed clips and no
+effects/transitions, renders `reconstructed.mp4`, and compares resolution,
+frame rate, duration, video SSIM, and audio PSNR. Unsupported editing features
+are reported explicitly and prevent client-readiness; adapter coverage must be
+expanded before general collection.
+
+The underlying command interface remains available to developers and tests:
 
 ```bash
 python3 video-path-pilot/sample_collector.py --help
 ```
 
-`init` creates a workspace, `launch` starts the recorder, `note` captures an
-occasional creative decision, and `finalize` normalizes and validates
-`sample.json`. Undo/redo remains in evidence but is removed from the clean
-successful trajectory.
+`job_pipeline.py` discovers project resources and packages completed sessions.
+It can also create controlled jobs for automated testing, but the editor GUI
+does not require them. A verbal task becomes an explicit pending prompt in the
+generated sample; the internal team attaches the exact wording later. Undo/redo
+remains in raw evidence but is removed from the clean successful trajectory.
 
 The pilot is based on upstream Kdenlive revision
 `7de2ed9902b4288797a7781498546389a482a39e`.

@@ -26,12 +26,17 @@ def validate_sample(path: Path, check_files: bool = False) -> list[str]:
         sample = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         return [f"cannot read sample: {exc}"]
-    for key in ("schema_version", "sample_id", "task", "project", "inputs", "edit_path", "rationale", "output", "quality", "evidence", "provenance"):
+    for key in ("schema_version", "sample_id", "task", "project", "inputs", "edit_path", "output", "quality", "evidence", "provenance"):
         if key not in sample: errors.append(f"missing top-level field: {key}")
+    if "rationale" in sample: errors.append("editor intent is prohibited: remove rationale")
     if sample.get("schema_version") != "0.1.0": errors.append("unsupported schema_version")
     task = sample.get("task", {})
-    for field in ("prompt", "editor_plan"):
-        if not isinstance(task.get(field), str) or not task[field].strip(): errors.append(f"task.{field} must be non-empty")
+    if "editor_plan" in task: errors.append("editor intent is prohibited: remove task.editor_plan")
+    prompt = task.get("prompt")
+    if prompt is None:
+        if task.get("prompt_status") != "pending_internal_entry": errors.append("missing prompt must be marked pending_internal_entry")
+    elif not isinstance(prompt, str) or not prompt.strip():
+        errors.append("task.prompt must be non-empty or explicitly pending")
     rate = sample.get("project", {}).get("frame_rate", {})
     if not isinstance(rate.get("numerator"), int) or rate.get("numerator", 0) <= 0: errors.append("invalid frame-rate numerator")
     if not isinstance(rate.get("denominator"), int) or rate.get("denominator", 0) <= 0: errors.append("invalid frame-rate denominator")
@@ -41,16 +46,22 @@ def validate_sample(path: Path, check_files: bool = False) -> list[str]:
     if len(ids) != len(set(ids)): errors.append("asset IDs must be unique")
     operations = sample.get("edit_path", {}).get("operations", [])
     if not operations: errors.append("edit_path requires at least one accepted operation")
+    for index, operation in enumerate(operations):
+        if isinstance(operation, dict) and "rationale_note_ids" in operation:
+            errors.append(f"editor intent is prohibited: remove operation {index + 1} rationale_note_ids")
     if sample.get("quality", {}).get("unresolved_asset_ids"): errors.append("sample has unresolved asset bindings")
-    if not sample.get("rationale", {}).get("editor_review", "").strip(): errors.append("editor final review is required")
+    if sample.get("quality", {}).get("output_completion_confirmed") is not True: errors.append("output completion must be confirmed")
     if check_files:
         root = path.parent
         references = [(a.get("file"), a.get("sha256")) for a in assets if isinstance(a, dict)]
         references += [
             (sample.get("output", {}).get("video"), sample.get("output", {}).get("sha256")),
-            (sample.get("evidence", {}).get("raw_events"), sample.get("evidence", {}).get("raw_events_sha256")),
             (sample.get("evidence", {}).get("native_project"), sample.get("evidence", {}).get("native_project_sha256")),
         ]
+        if sample.get("output", {}).get("reconstructed_video"):
+            references.append((sample["output"]["reconstructed_video"], sample["output"].get("reconstructed_video_sha256")))
+        for raw in sample.get("evidence", {}).get("raw_events", []):
+            if isinstance(raw, dict): references.append((raw.get("file"), raw.get("sha256")))
         for relative, expected in references:
             if not isinstance(relative, str): errors.append("artifact path is missing"); continue
             artifact = root / relative

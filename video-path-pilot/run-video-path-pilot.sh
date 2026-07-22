@@ -4,8 +4,8 @@
 
 set -euo pipefail
 
-if [[ $# -ne 1 ]]; then
-    echo "usage: $0 /absolute/path/session.jsonl" >&2
+if [[ $# -lt 1 || $# -gt 2 ]]; then
+    echo "usage: $0 /absolute/path/session.jsonl [/absolute/path/project.kdenlive]" >&2
     exit 2
 fi
 
@@ -40,4 +40,15 @@ export MLT_REPOSITORY="$craft_root/lib/mlt-7"
 export QT_DATA_DIRS="$source_root/data${QT_DATA_DIRS:+:$QT_DATA_DIRS}"
 export KDENLIVE_VIDEO_PATH_LOG=$log_path
 
-exec "$binary"
+arguments=()
+if [[ -n ${KDENLIVE_VIDEO_PATH_CONFIG:-} ]]; then
+    arguments+=(--config "$KDENLIVE_VIDEO_PATH_CONFIG" --no-welcome)
+fi
+if [[ -n ${KDENLIVE_VIDEO_PATH_CLIPS:-} ]]; then
+    arguments+=(-i "$KDENLIVE_VIDEO_PATH_CLIPS")
+fi
+if [[ $# -eq 2 ]]; then
+    arguments+=("$2")
+fi
+
+exec "$binary" "${arguments[@]}"

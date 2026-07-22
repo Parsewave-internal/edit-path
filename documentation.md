@@ -460,8 +460,10 @@ normalizer improvements. There is no `initial.kdenlive`: editors begin from a
 blank project and the recorder establishes the canonical baseline. The final
 video is mandatory because it is the target artifact and enables human review.
 
-`normalize_sample.py` removes undone or abandoned commands from the clean path
-while retaining them in raw evidence. Accepted operations use integer frames,
+`normalize_sample.py` preserves undo and redo chronologically in the sample as
+`history.undo` and `history.redo`, including their reverse/restored changes and
+resulting hashes. A final-branch-only view can be derived later if required;
+the MVP favors retaining more training information. Operations use integer frames,
 software-independent entity names, sample-local canonical IDs, before/after
 changes, resulting state hashes, and pointers to raw events. Kdenlive labels
 are isolated under `extensions.kdenlive`. Ambiguous outcomes deliberately use
@@ -484,6 +486,195 @@ Operational instructions are in `video-path-pilot/EDITOR_WORKFLOW.md`, the
 language in `video-path-pilot/VOCABULARY.md`, and the machine contract in
 `video-path-pilot/sample.schema.json`. Automated tests cover branch compaction,
 normalization, asset binding, hashes, and package validation.
+
+### No-terminal GUI enhancement
+
+Editor feedback changed the delivery requirement: the MVP must not expose a
+terminal workflow. A native Qt 6 Widgets application now wraps the tested
+collector engine without duplicating its business logic. The window supports
+new/existing sample selection, prompt and plan entry, project profile, ordered
+asset picking, instrumented Kdenlive launch, rationale notes, project/render
+selection, final review, finalization, validation, and visible task status.
+
+The implementation lives under `video-path-pilot/gui/`. The clickable
+`run-collector-app.sh` launcher builds the GUI on first use against the same
+Craft Qt environment used by Kdenlive and then launches it without requiring
+typed commands. Python remains an internal runtime implementation detail;
+editors do not type or see collector commands.
+
+This iteration uses the GitHub feature branch `feature/gui-collector-mvp` so
+the working command-based MVP remains stable on `video-path-pilot`. It should
+be reviewed through a pull request before merge. The current launcher is
+shareable among Linux machines with the project and Craft dependencies; a
+self-contained AppImage or installer is a separate distribution gate before
+sharing outside that controlled environment.
+
+### MVP scope correction: recording only
+
+The operational plan was narrowed after internal direction. Editors will be
+given the application, task instructions, and assets; they will perform the
+edit and return the recording, native project, render, and source assets. The
+Parsewave team—not the editor—will construct the two canonical samples and ask
+the client for feedback. Consequently, the editor-facing MVP must not collect
+editor intent.
+
+The GUI initialization, prompt, plan, asset-copying, rationale, decision-note,
+subjective-review, normalization, and finalization screens were removed. The
+app is now a one-screen **Edit Path Recorder** with Start Session and Open
+Session Folder actions. Starting creates a unique directory under the user's
+Videos folder, supplies a unique Kdenlive configuration so an old project is
+not reopened, records JSONL and console evidence, and validates the raw session
+after Kdenlive closes.
+
+The sample schema and internal prototype were also revised so editor plan,
+rationale notes, and subjective editor review cannot leak into generated
+samples. The externally assigned task prompt remains valid sample input; it is
+not collected from the editor application. Objective completion confirmation
+and later internal human review remain quality-control concerns, not editor
+intent.
+
+### Assigned jobs, automatic packaging, and reconstruction foundation
+
+The recorder now consumes a controlled `job.json` containing job ID, external
+task prompt, project profile, and hashed asset manifest. Opening the job shows
+the task and automatically imports its assets when an isolated Kdenlive session
+starts. Editors do not identify or order assets manually.
+
+`job_pipeline.py` creates and validates assigned jobs and packages completed
+sessions. It parses both MLT `chain` and `producer` resources from the saved
+`.kdenlive` XML, resolves each native bin ID to a job asset by SHA-256, and
+rejects any unresolved native asset used by recorded operations. This replaces
+the invalid first-use-order assumption exposed by the first GUI test. A pipeline
+acceptance check reproduced that case: native ID 4 correctly resolved to
+`asset_002`, not the first audio asset.
+
+Clean operations are generated automatically after the editor closes Kdenlive
+and clicks Finish Job. Numbered raw segments, project, render, assets, hashes,
+and `sample.json` are packaged under `completed-sample/`. The validator checks
+the resulting artifact paths and hashes.
+
+The first reconstruction stage is implemented as independent canonical replay.
+Starting at each recorded checkpoint, the pipeline applies the accepted state
+diffs and recomputes deterministic SHA-256 timeline hashes after every step.
+It also checks state continuity across crash-recovery segments. The replay was
+verified against sessions 015, 019, 020, 023, 024, 025, 026, and 028 with exact
+hash matches across clips, effects, mixes, speed, fades, track state/structure,
+ripple delete, and keyframes.
+
+The first limited media adapter is now implemented. It builds a new MLT project
+from the canonical final state for normal-speed cut/trim/move timelines without
+effects, mixes, or transitions, renders `reconstructed.mp4`, probes both media
+files, and compares profile, duration, video SSIM (minimum 0.95), and audio PSNR
+(minimum 40 dB). A controlled single-clip reconstruction produced matching
+1280×720/30 fps/eight-second media, video SSIM 0.974985, and audio PSNR
+172.592 dB. Unsupported operations produce an explicit `unsupported` result
+and `quality.ready_for_client_review` remains false. Expanding the adapter to
+effects, transitions, speed, keyframes, titles, and other operations remains a
+production gate.
+
+Crash handling now preserves numbered JSONL and console segments. An invalid or
+missing final `session.end` enables Recover and Continue, which reuses the same
+isolated Kdenlive configuration so its recovery mechanism can restore work.
+Only the final segment must close normally; prior crash segments must remain
+structurally valid and continuity is checked during canonical replay.
+`session.json` persists the job, isolated configuration, segment number, process
+ID, and lifecycle status so reopening the recorder can offer recovery or resume
+finalization instead of losing supervisor state.
+
+An end-to-end synthetic acceptance job exercised the complete supported path:
+job creation and hashing, raw checkpoint/diff recording, project resource
+resolution, clean operation generation, canonical replay, new MLT project
+generation, rendering, decoded comparison, sample validation, and readiness
+calculation. Native asset ID 4 resolved to `asset_001`, canonical replay passed,
+media reconstruction passed with SSIM 0.974985 and audio PSNR 172.592 dB, every
+packaged hash validated, and `quality.ready_for_client_review` was true.
+
+### Freeform editor workflow correction
+
+Testing showed that an assigned-job initialization screen was the wrong product
+assumption. Editors may obtain or create assets throughout an edit rather than
+receiving a complete manifest at startup. The editor GUI was reduced again to
+Start Session, Recover and Continue, Finish Session, and folder actions. It
+launches blank isolated Kdenlive and does not preload media.
+
+On Finish, `finalize-freeform` parses every file-backed `chain` and `producer`
+from the saved project, deduplicates resources by SHA-256, assigns canonical
+asset IDs, copies the discovered media, and resolves native IDs before sample
+normalization. A freeform end-to-end test discovered the project asset,
+generated the package, passed canonical and media reconstruction, and validated
+all hashes.
+
+Software cannot recover a verbal instruction. Therefore `sample.json` is still
+generated at the editor end but contains `task.prompt: null`,
+`prompt_status: pending_internal_entry`, and `ready_for_client_review: false`.
+The internal `attach-prompt` operation inserts the exact known instruction and
+recomputes readiness. The acceptance test changed readiness to true after that
+attachment without collecting any editor intent.
+
+The latest reported “crash” was also audited. Both recent JSONL files ended with
+valid `session.end`, Kdenlive logged requested close events, session manifests
+reached `ready_to_finish`, and no core dump existed. The recording did not
+crash, although remote X11 responsiveness made the shutdown appear abrupt.
+
+The first freeform interruption audit found a different failure mode in
+`session_20260722_113348_7e8d3a1e`. Kdenlive stopped without `session.end`, the
+manifest remained `recording`, no core dump was registered, and the console
+ended while painting the imported clip. The JSONL lines that had already been
+flushed survived, but the editor had never saved the initially untitled
+project, so there was no project state for **Recover and Continue** to reopen.
+
+Crash recovery was consequently hardened around a session-owned project. A
+new session now creates and opens `edit.kdenlive` automatically. On recovery,
+the launcher passes that same file back to Kdenlive and starts the next
+numbered JSONL/log segment. This stable project path also enables Kdenlive's
+existing autosave/backup recovery to offer recent unsaved changes after a
+force-kill. The editor should save normally and must not create a second
+project file in the session folder. A GUI force-kill acceptance test is still
+required because the autosave prompt and restored timeline cannot be verified
+headlessly.
+
+The first GUI run of that hardening exposed an initialization-order regression:
+calling Kdenlive's save path immediately after `initGUI()` but before Qt's event
+loop caused the application to exit during startup. The session correctly
+became `recovery_available`, but contained only `session.start` and no project.
+Project creation is now deferred until the GUI event loop is active; recovery
+still passes an existing `edit.kdenlive` on Kdenlive's command line.
+
+The editor-facing lifecycle was then simplified after the recorder wrapper
+itself rendered black and became unresponsive over remote X11 before any new
+session was created. The recorder is now a hidden supervisor during editing.
+Launching the product opens Kdenlive directly and creates a session
+automatically; only after Kdenlive exits does the supervisor show completion,
+packaging, or recovery controls. A prior interrupted session is resumed
+automatically only when its session-owned `edit.kdenlive` exists. This removes
+the redundant initialization screen from the normal editor workflow.
+
+### Windows portable build
+
+Windows is the editor deployment target. The supervisor now has a native
+Windows launch path: it starts the adjacent `kdenlive.exe` directly with the
+isolated recorder configuration and JSONL environment instead of invoking a
+Bash script. Validation and finalization use `bin/python/python.exe`, an
+embedded standard-library Python runtime included in the portable package.
+Linux retains its development shell launcher; its recovery argument handling
+was corrected to accept and reopen an existing project.
+
+The manually triggered `.github/workflows/windows-portable.yml` workflow
+bootstraps KDE Craft on a Windows 2022 runner, compiles this checkout through
+the maintained Qt 6 Kdenlive blueprint, creates the dependency-complete Craft
+archive, injects embedded Python, verifies `EditPath.exe` and `kdenlive.exe`,
+and uploads `EditPath-Windows-x64.zip`. The first artifact is intentionally a
+portable, unsigned engineering build. Installer creation, code signing, and
+update delivery follow only after functional testing on the editor's machine.
+
+To reduce first-artifact turnaround, the local build script now provides a
+fast `-PreflightOnly` prerequisite check, appends a durable
+`windows-build.log`, and prevents sleep while compiling. Before emitting the
+ZIP it runs `EditPath.exe --self-test`, `kdenlive.exe --version`, invokes the
+embedded Python validator, verifies FFmpeg-generated synthetic media, and
+requires a passing `SELF-TEST.json`. This catches missing executables, packaged
+scripts, Python runtime failures, and basic dependency-layout mistakes before
+the editor receives the artifact.
 
 ### Privacy and security
 

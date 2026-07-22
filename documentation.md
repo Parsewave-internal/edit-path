@@ -631,6 +631,13 @@ project file in the session folder. A GUI force-kill acceptance test is still
 required because the autosave prompt and restored timeline cannot be verified
 headlessly.
 
+The first GUI run of that hardening exposed an initialization-order regression:
+calling Kdenlive's save path immediately after `initGUI()` but before Qt's event
+loop caused the application to exit during startup. The session correctly
+became `recovery_available`, but contained only `session.start` and no project.
+Project creation is now deferred until the GUI event loop is active; recovery
+still passes an existing `edit.kdenlive` on Kdenlive's command line.
+
 ### Privacy and security
 
 The collector can reveal editor behavior, project structure, local file paths,

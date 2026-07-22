@@ -56,6 +56,7 @@ SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-KDE-Accepted-GPL
 #include <QQuickStyle>
 #include <QQuickWindow>
 #include <QResource>
+#include <QTimer>
 
 #include <QUndoGroup>
 #include <QUrl> //new
@@ -573,10 +574,12 @@ int main(int argc, char *argv[])
         // when the editor has not manually used Save As before a crash.
         const QString recorderProject = qEnvironmentVariable("KDENLIVE_VIDEO_PATH_PROJECT");
         if (!recorderProject.isEmpty() && app.url.isEmpty() && !QFileInfo::exists(recorderProject)) {
-            QDir().mkpath(QFileInfo(recorderProject).absolutePath());
-            if (!pCore->projectManager()->saveFileAs(recorderProject, false)) {
-                qWarning() << "Could not create recorder project" << recorderProject;
-            }
+            QTimer::singleShot(1000, &app, [recorderProject]() {
+                QDir().mkpath(QFileInfo(recorderProject).absolutePath());
+                if (!pCore->projectManager()->saveFileAs(recorderProject, false)) {
+                    qWarning() << "Could not create recorder project" << recorderProject;
+                }
+            });
         }
         VideoPathRecorder::instance().captureTimelineCheckpoint(QStringLiteral("gui.ready"));
         result = app.exec();

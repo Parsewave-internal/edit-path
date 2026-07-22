@@ -638,6 +638,15 @@ became `recovery_available`, but contained only `session.start` and no project.
 Project creation is now deferred until the GUI event loop is active; recovery
 still passes an existing `edit.kdenlive` on Kdenlive's command line.
 
+The editor-facing lifecycle was then simplified after the recorder wrapper
+itself rendered black and became unresponsive over remote X11 before any new
+session was created. The recorder is now a hidden supervisor during editing.
+Launching the product opens Kdenlive directly and creates a session
+automatically; only after Kdenlive exits does the supervisor show completion,
+packaging, or recovery controls. A prior interrupted session is resumed
+automatically only when its session-owned `edit.kdenlive` exists. This removes
+the redundant initialization screen from the normal editor workflow.
+
 ### Privacy and security
 
 The collector can reveal editor behavior, project structure, local file paths,

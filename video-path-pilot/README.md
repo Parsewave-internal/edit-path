@@ -22,11 +22,12 @@ video-path-pilot/run-collector-app.sh
 ```
 
 Choose **Run** if the file manager asks whether to display or execute the file.
-The one-screen app creates a session folder, launches blank Kdenlive with an
-isolated configuration, creates a session-owned `edit.kdenlive`, records
-numbered segments, offers crash recovery,
-validates termination, and packages the completed sample. There is no assigned
-job or initialization screen. No terminal commands are required.
+The app starts as a hidden supervisor: it creates a session folder and launches
+blank Kdenlive directly with an isolated configuration. During editing it
+creates a session-owned `edit.kdenlive` and records numbered segments. After
+Kdenlive closes, the supervisor shows a completion or recovery screen that
+validates termination and packages the completed sample. There is no assigned
+job, initialization screen, or terminal workflow.
 
 Canonical state replay must reproduce every recorded state hash. A first MLT
 media adapter reconstructs cut/trim/move edits with normal-speed clips and no

@@ -531,6 +531,62 @@ not collected from the editor application. Objective completion confirmation
 and later internal human review remain quality-control concerns, not editor
 intent.
 
+### Assigned jobs, automatic packaging, and reconstruction foundation
+
+The recorder now consumes a controlled `job.json` containing job ID, external
+task prompt, project profile, and hashed asset manifest. Opening the job shows
+the task and automatically imports its assets when an isolated Kdenlive session
+starts. Editors do not identify or order assets manually.
+
+`job_pipeline.py` creates and validates assigned jobs and packages completed
+sessions. It parses both MLT `chain` and `producer` resources from the saved
+`.kdenlive` XML, resolves each native bin ID to a job asset by SHA-256, and
+rejects any unresolved native asset used by recorded operations. This replaces
+the invalid first-use-order assumption exposed by the first GUI test. A pipeline
+acceptance check reproduced that case: native ID 4 correctly resolved to
+`asset_002`, not the first audio asset.
+
+Clean operations are generated automatically after the editor closes Kdenlive
+and clicks Finish Job. Numbered raw segments, project, render, assets, hashes,
+and `sample.json` are packaged under `completed-sample/`. The validator checks
+the resulting artifact paths and hashes.
+
+The first reconstruction stage is implemented as independent canonical replay.
+Starting at each recorded checkpoint, the pipeline applies the accepted state
+diffs and recomputes deterministic SHA-256 timeline hashes after every step.
+It also checks state continuity across crash-recovery segments. The replay was
+verified against sessions 015, 019, 020, 023, 024, 025, 026, and 028 with exact
+hash matches across clips, effects, mixes, speed, fades, track state/structure,
+ripple delete, and keyframes.
+
+The first limited media adapter is now implemented. It builds a new MLT project
+from the canonical final state for normal-speed cut/trim/move timelines without
+effects, mixes, or transitions, renders `reconstructed.mp4`, probes both media
+files, and compares profile, duration, video SSIM (minimum 0.95), and audio PSNR
+(minimum 40 dB). A controlled single-clip reconstruction produced matching
+1280×720/30 fps/eight-second media, video SSIM 0.974985, and audio PSNR
+172.592 dB. Unsupported operations produce an explicit `unsupported` result
+and `quality.ready_for_client_review` remains false. Expanding the adapter to
+effects, transitions, speed, keyframes, titles, and other operations remains a
+production gate.
+
+Crash handling now preserves numbered JSONL and console segments. An invalid or
+missing final `session.end` enables Recover and Continue, which reuses the same
+isolated Kdenlive configuration so its recovery mechanism can restore work.
+Only the final segment must close normally; prior crash segments must remain
+structurally valid and continuity is checked during canonical replay.
+`session.json` persists the job, isolated configuration, segment number, process
+ID, and lifecycle status so reopening the recorder can offer recovery or resume
+finalization instead of losing supervisor state.
+
+An end-to-end synthetic acceptance job exercised the complete supported path:
+job creation and hashing, raw checkpoint/diff recording, project resource
+resolution, clean operation generation, canonical replay, new MLT project
+generation, rendering, decoded comparison, sample validation, and readiness
+calculation. Native asset ID 4 resolved to `asset_001`, canonical replay passed,
+media reconstruction passed with SSIM 0.974985 and audio PSNR 172.592 dB, every
+packaged hash validated, and `quality.ready_for_client_review` was true.
+
 ### Privacy and security
 
 The collector can reveal editor behavior, project structure, local file paths,

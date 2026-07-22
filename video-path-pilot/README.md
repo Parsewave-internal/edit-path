@@ -5,10 +5,10 @@ SPDX-License-Identifier: GPL-3.0-only
 
 # Kdenlive Video Path Pilot
 
-This fork includes an editor-facing recording MVP around Kdenlive. The app
-records editing interactions and canonical timeline outcomes without collecting
-editor intent. The internal project team later combines the recording, native
-project, render, source assets, and externally assigned prompt into a sample.
+This fork includes an assigned-job recording MVP around Kdenlive. The app
+records interactions and canonical outcomes without collecting editor intent,
+resolves assets from the saved project by SHA-256, normalizes the accepted path,
+and generates `sample.json` automatically.
 
 For the two-sample client trial, begin with `EDITOR_WORKFLOW.md`. The clean
 format and language are in `sample.schema.json` and `VOCABULARY.md`.
@@ -22,11 +22,18 @@ video-path-pilot/run-collector-app.sh
 ```
 
 Choose **Run** if the file manager asks whether to display or execute the file.
-The one-screen app creates a session folder automatically, launches Kdenlive
-with an isolated fresh configuration, records the edit, validates normal
-termination, and opens the return folder. It never asks for an editor plan,
-rationale, creative decisions, or subjective review. No terminal commands are
-required.
+The app opens a supplied `job.json`, creates a session folder, launches
+Kdenlive with an isolated configuration and preloaded assets, records numbered
+segments, offers crash recovery, validates termination, and packages the
+completed sample. It never asks for an editor plan, rationale, creative
+decisions, or subjective review. No terminal commands are required.
+
+Canonical state replay must reproduce every recorded state hash. A first MLT
+media adapter reconstructs cut/trim/move edits with normal-speed clips and no
+effects/transitions, renders `reconstructed.mp4`, and compares resolution,
+frame rate, duration, video SSIM, and audio PSNR. Unsupported editing features
+are reported explicitly and prevent client-readiness; adapter coverage must be
+expanded before general collection.
 
 The underlying command interface remains available to developers and tests:
 
@@ -34,9 +41,10 @@ The underlying command interface remains available to developers and tests:
 python3 video-path-pilot/sample_collector.py --help
 ```
 
-The underlying Python sample tools are internal prototypes, not part of the
-editor workflow. Undo/redo remains in raw evidence and can be removed later
-when the internal team constructs the clean successful trajectory.
+`job_pipeline.py` is used internally to create assigned jobs and by the app to
+package completed samples. The older first-use-order collector was removed so
+it cannot produce incorrect asset identities. Undo/redo remains in raw evidence
+but is removed from the clean successful trajectory.
 
 The pilot is based on upstream Kdenlive revision
 `7de2ed9902b4288797a7781498546389a482a39e`.

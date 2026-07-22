@@ -52,9 +52,12 @@ def validate_sample(path: Path, check_files: bool = False) -> list[str]:
         references = [(a.get("file"), a.get("sha256")) for a in assets if isinstance(a, dict)]
         references += [
             (sample.get("output", {}).get("video"), sample.get("output", {}).get("sha256")),
-            (sample.get("evidence", {}).get("raw_events"), sample.get("evidence", {}).get("raw_events_sha256")),
             (sample.get("evidence", {}).get("native_project"), sample.get("evidence", {}).get("native_project_sha256")),
         ]
+        if sample.get("output", {}).get("reconstructed_video"):
+            references.append((sample["output"]["reconstructed_video"], sample["output"].get("reconstructed_video_sha256")))
+        for raw in sample.get("evidence", {}).get("raw_events", []):
+            if isinstance(raw, dict): references.append((raw.get("file"), raw.get("sha256")))
         for relative, expected in references:
             if not isinstance(relative, str): errors.append("artifact path is missing"); continue
             artifact = root / relative

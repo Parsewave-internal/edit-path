@@ -14,33 +14,39 @@ display or execute it. No terminal commands are part of the editor workflow.
 
 ## Record a session
 
-1. Click **Start Editing Session**. The app automatically creates a unique
-   folder under `Videos/EditPathSessions/` and launches an isolated Kdenlive
-   configuration that does not reopen the previous project.
-2. Edit normally using the task instructions and assets supplied separately.
-3. Save the native `.kdenlive` project and rendered final video inside the
+1. Click **Open Assigned Job** and select the provided `job.json`. The app shows
+   the externally assigned task, project profile, and asset count.
+2. Click **Start Editing Session**. The app creates a unique folder under the
+   job's `sessions/` directory, launches an isolated Kdenlive configuration,
+   and imports the job assets automatically.
+3. Edit normally using the displayed task and supplied assets.
+4. Save the native `.kdenlive` project and rendered final video inside the
    session folder displayed by the recorder.
-4. Close Kdenlive normally. Do not force-quit it.
-5. Wait until the recorder reports that `raw-events.jsonl` passed validation.
-6. Click **Open Session Folder** and return the complete folder plus the source
-   assets to the Parsewave team.
+5. Close Kdenlive normally. If it crashes, click **Recover and Continue**; the
+   app preserves the prior segment and reopens the same isolated Kdenlive
+   recovery context.
+6. After recording validation, click **Finish Job**. The app resolves project
+   bin IDs by asset SHA-256, normalizes the accepted edit path, generates and
+   validates `sample.json`, and replays canonical state hashes.
+7. Click **Open Completed Sample** and return the job directory.
 
 The session folder contains at least:
 
 ```text
-session_YYYYMMDD_HHMMSS_xxxxxxxx/
-├── raw-events.jsonl
-├── kdenlive-console.log
+session_YYYYMMDD_HHMMSS/
+├── raw-events-001.jsonl
+├── kdenlive-console-001.log
 ├── final.kdenlive       # saved by editor
 └── final.mp4            # rendered by editor
 ```
 
-If Kdenlive crashes or the recorder reports an incomplete session, create a
-fresh session and repeat the edit.
+Crash recovery creates `raw-events-002.jsonl`, `raw-events-003.jsonl`, and so
+on. Earlier incomplete segments remain auditable instead of being overwritten.
 
 ## Internal team workflow
 
-The editor does not generate `sample.json`. After receiving the session,
-project, render, assets, and externally assigned task prompt, the internal team
-validates the evidence, resolves project asset identities, normalizes the
-accepted edit path, packages the sample, and performs human quality review.
+The editor application generates `sample.json` automatically. The internal team
+still performs final human review. Canonical replay is required. The initial
+media adapter also reconstructs and renders ordinary cut/trim/move timelines;
+effects, transitions, speed changes, and other unsupported features are clearly
+reported and the sample is marked not ready for client review.

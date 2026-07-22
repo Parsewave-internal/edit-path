@@ -44,5 +44,8 @@ arguments=()
 if [[ -n ${KDENLIVE_VIDEO_PATH_CONFIG:-} ]]; then
     arguments+=(--config "$KDENLIVE_VIDEO_PATH_CONFIG" --no-welcome)
 fi
+if [[ -n ${KDENLIVE_VIDEO_PATH_CLIPS:-} ]]; then
+    arguments+=(-i "$KDENLIVE_VIDEO_PATH_CLIPS")
+fi
 
 exec "$binary" "${arguments[@]}"

@@ -6,11 +6,13 @@
 from __future__ import annotations
 
 import json
+import copy
 from pathlib import Path
 from typing import Any
 
 
 ENTITY_PREFIX = {"clip": "clip", "track": "track", "composition": "transition", "mix": "transition", "master_effect": "master"}
+COLLECTION = {"clip": "clips", "track": "tracks", "composition": "compositions", "mix": "mixes", "master_effect": "master_effects"}
 
 
 def read_jsonl(path: Path) -> list[dict]:
@@ -82,7 +84,7 @@ def normalized_change(change: dict, ids: dict[tuple[str, str], str], assets: dic
             result["track_id"] = ids[track_key]
         if "asset_reference" in result:
             ref = str(result.pop("asset_reference"))
-            result["asset_id"] = assets.setdefault(ref, f"asset_{len(assets) + 1:03d}")
+            result["asset_id"] = assets.setdefault(ref, f"unresolved_native_asset_{ref}")
         return result
 
     result = {"change": change.get("change"), "entity_type": entity, "entity_id": ids[key]}
@@ -91,12 +93,40 @@ def normalized_change(change: dict, ids: dict[tuple[str, str], str], assets: dic
     return result
 
 
+def apply_native_diff(snapshot: dict, diff: dict) -> None:
+    for change in diff.get("changes", []):
+        collection = snapshot.setdefault(COLLECTION[change["entity"]], [])
+        position = next((i for i, value in enumerate(collection) if value.get("native_id") == change.get("native_id")), None)
+        if change["change"] == "removed" and position is not None:
+            collection.pop(position)
+        elif change["change"] == "added":
+            collection.append(copy.deepcopy(change["after"]))
+        elif change["change"] == "updated" and position is not None:
+            collection[position] = copy.deepcopy(change["after"])
+    if "duration_after" in diff:
+        snapshot["duration_frames"] = diff["duration_after"]
+
+
+def normalized_state(snapshot: dict, ids: dict[tuple[str, str], str], assets: dict[str, str]) -> dict:
+    state = {"duration_frames": snapshot.get("duration_frames", 0)}
+    for singular, collection_name in COLLECTION.items():
+        state[collection_name] = [normalized_change({"entity": singular, "native_id": value.get("native_id"),
+                                  "change": "added", "after": value}, ids, assets)["after"] | {
+                                  f"{singular}_id": ids[(singular, str(value.get("native_id")))]}
+                                  for value in snapshot.get(collection_name, [])]
+    return state
+
+
 def build_sample(root: Path, metadata: dict) -> dict:
-    events = read_jsonl(root / "evidence" / "raw-events.jsonl")
+    raw_artifacts = metadata["artifacts"]["raw_events"]
+    if isinstance(raw_artifacts, str):
+        raw_artifacts = [{"file": raw_artifacts}]
+    event_groups = [read_jsonl(root / artifact["file"]) for artifact in raw_artifacts]
     ids: dict[tuple[str, str], str] = {}
-    asset_refs: dict[str, str] = {}
+    asset_refs: dict[str, str] = dict(metadata.get("native_asset_bindings", {}))
     operations = []
-    for index, event in enumerate(accepted_commits(events), 1):
+    commits = [event for events in event_groups for event in accepted_commits(events)]
+    for index, event in enumerate(commits, 1):
         diff = event.get("diff", {})
         operations.append({
             "operation_id": f"op_{index:04d}",
@@ -106,15 +136,26 @@ def build_sample(root: Path, metadata: dict) -> dict:
             "evidence": {"raw_event_id": event.get("event_id"), "raw_sequence": event.get("sequence")},
             "extensions": {"kdenlive": {"command_label": event.get("label")}},
         })
-    input_assets = [{k: a[k] for k in ("asset_id", "original_filename", "file", "sha256", "bytes")} for a in metadata["assets"]]
-    unresolved = sorted(set(asset_refs.values()) - {a["asset_id"] for a in input_assets})
+    first_checkpoint = next((event for event in event_groups[0] if event.get("event_type") == "state.checkpoint"), None)
+    if not first_checkpoint:
+        raise ValueError("recording has no canonical checkpoint")
+    initial_native = copy.deepcopy(first_checkpoint["snapshot"])
+    final_native = copy.deepcopy(initial_native)
+    for event in commits:
+        apply_native_diff(final_native, event.get("diff", {}))
+    initial_state = normalized_state(initial_native, ids, asset_refs)
+    final_state = normalized_state(final_native, ids, asset_refs)
+    input_assets = [{"asset_id": a["asset_id"], "original_filename": a.get("original_filename", Path(a["file"]).name),
+                     "file": a["file"], "sha256": a["sha256"], "bytes": a["bytes"]} for a in metadata["assets"]]
+    valid_asset_ids = {a["asset_id"] for a in input_assets}
+    unresolved = sorted(value for value in set(asset_refs.values()) if value not in valid_asset_ids)
     return {
         "schema_version": "0.1.0",
         "sample_id": metadata["sample_id"],
         "task": {"prompt": metadata["prompt"]},
         "project": metadata["project"],
         "inputs": {"assets": input_assets},
-        "edit_path": {"time_unit": "frame", "operations": operations},
+        "edit_path": {"time_unit": "frame", "initial_state": initial_state, "operations": operations, "final_state": final_state},
         "output": {"video": metadata["artifacts"]["final_video"], "sha256": metadata["artifacts"]["final_video_sha256"]},
         "quality": {
             "raw_session_complete": True,
@@ -125,10 +166,9 @@ def build_sample(root: Path, metadata: dict) -> dict:
             "output_completion_confirmed": metadata["output_completion_confirmed"],
         },
         "evidence": {
-            "raw_events": metadata["artifacts"]["raw_events"],
-            "raw_events_sha256": metadata["artifacts"]["raw_events_sha256"],
+            "raw_events": raw_artifacts,
             "native_project": metadata["artifacts"]["native_project"],
             "native_project_sha256": metadata["artifacts"]["native_project_sha256"],
         },
-        "provenance": {"editor_id": metadata["editor"]["editor_id"], "collector": "kdenlive-video-path-mvp", "collector_version": "0.1.0"},
+        "provenance": {"job_id": metadata.get("job_id", metadata["sample_id"]), "collector": "kdenlive-video-path-mvp", "collector_version": "0.2.0"},
     }

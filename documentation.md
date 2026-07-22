@@ -740,6 +740,21 @@ media test when the host lacks Melt or FFmpeg.
    evidence for quarantine/review. The verbal prompt remains pending until
    internal staff attach the exact known instruction.
 
+### Delayed semantic-action transaction fix
+
+A Linux GUI recovery test exposed a schema-0.3 validation failure after a
+normal clip insertion and clean shutdown. The state diff had the correct
+transaction and undo-entry IDs, but the corresponding buffered `clip.insert`
+action was written at shutdown without a `transaction_id`; the supervisor then
+misclassified the otherwise clean recording as `recovery_available`.
+
+`VideoPathRecorder::recordAction` now captures the active or just-completed
+transaction before buffering an action, so delayed emission cannot lose its
+transaction context. A source-level regression check protects the required
+ordering. The optimized Linux build and all MVP, reconstruction, segment, and
+real-media tests passed after this fix. A fresh GUI session remains required to
+confirm the corrected event on the live Kdenlive path.
+
 ## Historical Version 2 manual acceptance test
 
 1. Start a fresh recording and create/open a project.

@@ -321,6 +321,11 @@ void VideoPathRecorder::recordAction(const QString &action, const QString &timel
     event.insert(QStringLiteral("action"), action);
     event.insert(QStringLiteral("timeline_id"), timelineId);
     event.insert(QStringLiteral("parameters"), parameters);
+    // Some timeline operations emit their semantic action after the undo-stack
+    // push has already captured the state diff. Preserve the active (or just
+    // completed) transaction when the action is observed instead of waiting
+    // until shutdown, when that transaction context is no longer available.
+    addTransactionFields(event, true);
     m_pendingActions.append(event);
 }
 

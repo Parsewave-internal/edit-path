@@ -19,6 +19,16 @@ HASH_B = "b" * 64
 
 
 class MvpTests(unittest.TestCase):
+    def test_recorder_binds_delayed_actions_before_buffering(self):
+        source = (Path(__file__).parents[2] / "src/videopath/videopathrecorder.cpp").read_text(encoding="utf-8")
+        record_action = source.split("void VideoPathRecorder::recordAction", 1)[1].split(
+            "void VideoPathRecorder::flushPendingActions", 1
+        )[0]
+        self.assertLess(
+            record_action.index("addTransactionFields(event, true)"),
+            record_action.index("m_pendingActions.append(event)"),
+        )
+
     def test_project_asset_binding_requires_path_or_content_identity(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

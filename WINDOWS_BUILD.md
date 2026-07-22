@@ -24,6 +24,19 @@ portable application does not require administrator access.
 
 ## Build
 
+Use the current `main` branch. A fresh short-path checkout is preferred:
+
+```powershell
+cd C:\
+mkdir src -ErrorAction SilentlyContinue
+cd C:\src
+git clone --branch main --single-branch https://github.com/Parsewave-internal/edit-path.git
+cd edit-path
+```
+
+For an existing checkout, run `git switch main` and `git pull origin main`
+before building.
+
 Run the fast prerequisite check first. It does not download or compile Kdenlive:
 
 ```powershell
@@ -77,3 +90,8 @@ If the script fails, save the complete PowerShell output and send the last 100
 lines of `windows-output\windows-build.log` along with
 `windows-output\build-manifest.json` if it exists. Do not
 delete `C:\CraftRoot`, because it contains reusable dependency builds.
+
+The GitHub workflow is a convenience wrapper around the same script. If a job
+fails with zero executed steps and no assigned runner, check the organization's
+Actions billing/spending limit; that condition is not a compiler or application
+failure. A local PowerShell build remains the supported fallback.

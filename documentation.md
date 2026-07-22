@@ -8,11 +8,12 @@ SPDX-License-Identifier: GPL-3.0-only
 ## Purpose
 
 Edit Path is an experimental Kdenlive fork for collecting training data that
-describes how an editor transforms source media into an edited video. A
-**video path** is the ordered record of editor intent, interaction, and the
-resulting project changes.
+describes how an editor transforms source media into an edited video. In the
+current MVP, a **video path** is the ordered record of editor interactions and
+resulting project changes. Editor plans, explanations, decisions, and intent
+are not collected.
 
-The long-term dataset unit is:
+The current dataset item is:
 
 1. input assets;
 2. ordered video-path events;
@@ -21,6 +22,10 @@ The long-term dataset unit is:
 
 The dataset vocabulary must remain independent of Kdenlive so paths can be
 learned, compared, and eventually replayed in other editing systems.
+`sample.json` is authoritative, and the role-oriented on-disk organization is
+defined in `DATASET_ITEM.md`. Sections below named Version 1 or Version 2 are a
+historical development record and may describe experiments that are not part
+of the current editor workflow.
 
 ## Repository baseline and licensing
 
@@ -548,7 +553,7 @@ acceptance check reproduced that case: native ID 4 correctly resolved to
 `asset_002`, not the first audio asset.
 
 Clean operations are generated automatically after the editor closes Kdenlive
-and clicks Finish Job. Numbered raw segments, project, render, assets, hashes,
+and clicks **Create Dataset Sample**. Numbered raw segments, project, render, assets, hashes,
 and `sample.json` are packaged under `completed-sample/`. The validator checks
 the resulting artifact paths and hashes.
 
@@ -562,11 +567,11 @@ ripple delete, and keyframes.
 
 Production finalization now uses the schema-0.3 exact committed project-state
 sidecar as its reconstruction source. It remaps content-addressed assets,
-renders a fresh `reconstructed-output.mp4`, and compares that render with the
+renders `verification/reconstructed.mp4`, and compares that render with the
 editor's independent output using profile, duration, video SSIM, and audio
 metrics. It separately joins every raw command, shortcut, and pointer gesture
 to its semantic before/after state and renders a complete nonlinear-editor
-training replay as `final.mp4`. The view includes the project bin, exact-state
+training replay as `edit-path/replay.mp4`. The view includes the project bin, exact-state
 monitor, effects/properties, multitrack timeline, selection and cursor motion,
 keyboard overlays, and applied-operation feedback. This preserves effects,
 transitions, speed, keyframes, titles, and other serializable Kdenlive/MLT
@@ -574,7 +579,7 @@ state. The earlier cut/trim/move semantic adapter remains a useful diagnostic,
 but it is no longer the acceptance authority.
 
 Crash handling now preserves numbered JSONL and console segments. An invalid or
-missing final `session.end` enables Recover and Continue, which reuses the same
+missing final `session.end` enables **Resume Editing**, which reuses the same
 isolated Kdenlive configuration so its recovery mechanism can restore work.
 Only the final segment must close normally; prior crash segments must remain
 structurally valid and continuity is checked during canonical replay.
@@ -595,10 +600,10 @@ packaged hash validated, and `quality.ready_for_client_review` was true.
 Testing showed that an assigned-job initialization screen was the wrong product
 assumption. Editors may obtain or create assets throughout an edit rather than
 receiving a complete manifest at startup. The editor GUI was reduced again to
-Start Session, Recover and Continue, Finish Session, and folder actions. It
+Start New Edit, Resume Editing, Create Dataset Sample, and folder actions. It
 launches blank isolated Kdenlive and does not preload media.
 
-On Finish, `finalize-freeform` parses every file-backed `chain` and `producer`
+On **Create Dataset Sample**, `finalize-freeform` parses every file-backed `chain` and `producer`
 from the saved project, deduplicates resources by SHA-256, assigns canonical
 asset IDs, copies the discovered media, and resolves native IDs before sample
 normalization. A freeform end-to-end test discovered the project asset,
@@ -626,7 +631,7 @@ The first freeform interruption audit found a different failure mode in
 manifest remained `recording`, no core dump was registered, and the console
 ended while painting the imported clip. The JSONL lines that had already been
 flushed survived, but the editor had never saved the initially untitled
-project, so there was no project state for **Recover and Continue** to reopen.
+project, so there was no project state for **Resume Editing** to reopen.
 
 Crash recovery was consequently hardened around a session-owned project. A
 new session now creates and opens `edit.kdenlive` automatically. On recovery,
@@ -650,8 +655,8 @@ itself rendered black and became unresponsive over remote X11 before any new
 session was created. The recorder is now a hidden supervisor during editing.
 Launching the product opens Kdenlive directly and creates a session
 automatically; only after Kdenlive exits does the supervisor show completion,
-packaging, or recovery controls. A prior interrupted session is resumed
-automatically only when its session-owned `edit.kdenlive` exists. This removes
+packaging, or recovery controls. A prior interrupted session offers **Resume
+Editing** only when its session-owned `edit.kdenlive` exists. This removes
 the redundant initialization screen from the normal editor workflow.
 
 ### Windows portable build
@@ -664,7 +669,7 @@ embedded standard-library Python runtime included in the portable package.
 Linux retains its development shell launcher; its recovery argument handling
 was corrected to accept and reopen an existing project.
 
-The manually triggered `.github/workflows/windows-portable.yml` workflow
+The manually triggered or `main`-push `.github/workflows/windows-portable.yml` workflow
 bootstraps KDE Craft on a Windows 2022 runner, compiles this checkout through
 the maintained Qt 6 Kdenlive blueprint, creates the dependency-complete Craft
 archive, injects embedded Python, verifies `EditPath.exe` and `kdenlive.exe`,

@@ -25,7 +25,7 @@ state and never attempts to replay mouse timing or shortcuts.
 7. final exact-state render and comparison to the editor's final reference;
 8. event-level reconstruction of raw commands, shortcuts, pointer gestures,
    and exact before/after states into the full nonlinear-editor training view
-   `final.mp4`.
+   `edit-path/replay.mp4`.
 
 For 0.3 sessions, missing checkpoint references or exact state sidecars fail
 closed. Legacy 0.1/0.2 samples remain readable, and a finalized legacy sample
@@ -96,11 +96,11 @@ module (`qimage`, `kdenlivetitle`, and Glaxnimate services), Frei0r effects,
 FFmpeg/AVFilter, and the audio backends pulled by MLT. It does not need the
 QtMultimedia QML import because it never starts the interactive editor.
 
-The immutable accepted bundle contains the command-level editor-training
-`final.mp4`, the
-validated final-state `reconstructed-output.mp4`, a portable
-`reconstructed.kdenlive`, cleaned and raw trajectories, exact state sidecars,
-checkpoint references, hashed assets, the asset manifest, and a render report.
+The immutable accepted bundle follows `DATASET_ITEM.md`: the editor target is
+under `outputs/`, the visual process replay is `edit-path/replay.mp4`, the
+validated final-state render and portable project are under `verification/`,
+and native/raw evidence is under `provenance/`. `sample.json` is the
+authoritative software-independent record.
 The entire directory is assembled under a temporary name and installed with
 one atomic rename.
 

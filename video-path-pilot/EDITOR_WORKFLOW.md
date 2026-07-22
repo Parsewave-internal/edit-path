@@ -10,7 +10,9 @@ must be prepared in the app before editing.
    `./video-path-pilot/run-collector-app.sh` on Linux/macOS. The supervisor
    stays hidden and Kdenlive opens directly; remote X11 startup can take
    15–60 seconds.
-2. There is no initialization screen or Start button before editing.
+2. A fresh installation starts the edit without an initialization form. On a
+   later launch, EditPath may first show the previous completed or interrupted
+   session; choose **Start New Edit** or **Resume Editing** as appropriate.
 3. Make the requested video normally. Import or create assets whenever needed.
 4. The recorder creates `edit.kdenlive` in the session folder automatically.
    Save normally while editing; do not create a second project file.
@@ -18,15 +20,16 @@ must be prepared in the app before editing.
    same folder.
 6. Close Kdenlive normally. The completion screen then appears and validates
    the recording.
-7. If Kdenlive ended unexpectedly, restart the recorder and use **Recover and
-   Continue**. It reopens `edit.kdenlive` (and Kdenlive may offer its latest
+7. If Kdenlive ended unexpectedly, restart the recorder and use **Resume
+   Editing**. It reopens `edit.kdenlive` (and Kdenlive may offer its latest
    autosave) while creating a new numbered event segment without overwriting
    prior evidence.
-8. Click **Finish Session**. The app discovers resources from the saved project,
+8. Click **Create Dataset Sample**. The app discovers resources from the saved project,
    hashes and copies them, resolves Kdenlive IDs, generates `sample.json`,
    reconstructs the exact accepted Kdenlive/MLT state, renders, and compares
    media.
-9. Use **Open Generated Sample** to inspect the result.
+9. Use **Open Dataset Sample** to inspect the result. `sample.json` is the
+   authoritative record; see `../DATASET_ITEM.md` for the packaged layout.
 
 The generated sample marks the verbal task prompt as
 `pending_internal_entry`. The internal team attaches the exact instruction

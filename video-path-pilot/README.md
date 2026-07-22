@@ -206,7 +206,7 @@ Failures are atomically published under `quarantine/<session_id>/` with a
 machine-readable `rejection.json` naming the failed gate and sequence.
 
 In the freeform GUI flow, save exactly one independent `.mp4`, `.mov`, `.mkv`,
-or `.webm` render directly in the session folder, then click **Finish Session**.
+or `.webm` render directly in the session folder, then click **Create Dataset Sample**.
 H.264 is optional. The finished trajectory and reconstruction are in
 `completed-sample/edit-path/events.jsonl`,
 `completed-sample/verification/reconstructed.kdenlive`,

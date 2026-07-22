@@ -14,7 +14,8 @@ Perform the normal-session test before the crash-recovery test.
 ## Test A: normal session
 
 1. Extract `EditPath-Windows-x64.zip` to a normal writable folder.
-2. Confirm `SELF-TEST.json` exists and contains `"passed": true`.
+2. Confirm `SELF-TEST.json` exists and contains `"passed": true`, then run
+   `bin\EditPath.exe --self-test` from PowerShell and retain its complete output.
 3. Double-click `bin\EditPath.exe`. Do not open `kdenlive.exe`.
 4. Confirm Kdenlive opens directly with no terminal or initialization screen.
 5. Import all three files from `test-media`.
@@ -26,8 +27,8 @@ Perform the normal-session test before the crash-recovery test.
    session contains `edit.kdenlive`.
 11. Render one MP4 directly into the displayed session folder.
 12. Close Kdenlive normally.
-13. Confirm the Edit Path completion screen appears, then click **Finish
-    Session**.
+13. Confirm the EditPath completion screen appears, then click **Create Dataset
+    Sample**.
 14. Open the generated sample and confirm `sample.json`, assets, final video,
     raw events, native project, and validation reports exist.
 
@@ -43,7 +44,7 @@ Record PASS/FAIL and notes for every check:
 - Operations contain integer frame positions/state changes.
 - `history.undo` and `history.redo` are present.
 - Asset IDs and SHA-256 hashes are present.
-- `render-report.json` exists and its exact-state reconstruction and independent
+- `verification/report.json` exists and its exact-state reconstruction and independent
   media comparison passed, or failed with an explicit gate and reason.
 
 ## Test B: crash recovery
@@ -54,7 +55,7 @@ Record PASS/FAIL and notes for every check:
 4. Open Windows Task Manager, select Kdenlive, and choose **End task**. Do not
    terminate EditPath.
 5. Confirm the recovery screen appears.
-6. Choose **Recover and Continue**.
+6. Choose **Resume Editing**.
 7. Confirm `edit.kdenlive` reopens and the saved timeline edit remains.
 8. Make one additional edit, save, render an MP4, and close normally.
 9. Finish the session and confirm multiple numbered raw-event and console-log

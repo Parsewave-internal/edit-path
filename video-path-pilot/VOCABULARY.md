@@ -30,15 +30,14 @@ lossless while two real samples reveal which distinctions are dependable.
 ## Identity and asset binding
 
 Canonical IDs (`asset_001`, `clip_001`, `track_001`, …) are local to a sample.
-The MVP maps Kdenlive bin references to assets by first use, so editors must
-import the copied files from `assets/` in filename order. This assumption is
-recorded in `quality.asset_binding_method` and must be replaced by persistent
-UUIDs or project-file resolution before scaled collection.
+The MVP resolves Kdenlive project resources by content hash and records native
+bin-ID bindings separately under `provenance/asset-bindings.json`. Editors may
+import media in any order and may discover or create assets during the edit.
 
 ## Undo and redo
 
 Undo and redo are preserved chronologically in `edit_path.operations` as
 `history.undo` and `history.redo`. Each contains the actual reverse or restored
 state change and resulting state hash. Raw UI/history evidence also remains in
-`evidence/raw-events*.jsonl`. The MVP intentionally retains more information;
+`provenance/segments/raw-events-*.jsonl`. The MVP intentionally retains more information;
 a final-branch-only view can be derived later without recollecting data.

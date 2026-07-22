@@ -4,8 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - feature/gui-collector-mvp
-      - feature/video-path-reconstruction-architecture
+      - main
     paths:
       - .github/workflows/windows-portable.yml
       - CMakeLists.txt

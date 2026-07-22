@@ -11,6 +11,9 @@ auditable video-editing trajectories and deterministic training samples. It
 records semantic timeline changes and exact Kdenlive/MLT project states; it
 does not attempt to reproduce a session by replaying mouse gestures or keyboard
 timing.
+The MVP does not ask editors for plans, explanations, decisions, or creative
+intent. The internal team adds the task prompt later when preparing client
+samples.
 
 The production pipeline is:
 
@@ -135,31 +138,32 @@ for developer testing rather than editor distribution.
    undo/redo identities, exact compressed Kdenlive/MLT states, project context,
    and independent checkpoint proxies. UI events remain audit evidence.
 3. If Kdenlive stops unexpectedly, existing evidence remains immutable.
-   **Recover and Continue** reopens the same project and configuration, retains
+   **Resume Editing** reopens the same project and configuration, retains
    stable entity IDs, and records the continuation as a new numbered segment.
 4. The editor renders one independent final video into the displayed session
    folder and closes Kdenlive normally. The accepted extensions are `.mp4`,
    `.mov`, `.mkv`, and `.webm`; H.264 is not required. There must be exactly
    one top-level rendered video in the session folder.
-5. **Finish Session** discovers and hashes project assets, assembles recovery
+5. **Create Dataset Sample** discovers and hashes project assets, assembles recovery
    segments, resolves the accepted commit/undo/redo branch, and reconstructs
    from the exact accepted project state—not from mouse/keyboard replay.
 6. Melt first renders a validation file matched to the independent editor
-   render, then creates `reconstructed-output.mp4` with the first available supported
+   render, then creates `verification/reconstructed.mp4` with the first available supported
    encoder (`libx264`, `libopenh264`, then `mpeg4`). FFprobe rejects an
    audio-only encoder "success". FFmpeg compares structure, duration, audio,
    and video SSIM. The pipeline then joins the raw UI evidence to each exact
-   before/after state and renders a full nonlinear-editor replay as `final.mp4`:
+   before/after state and renders a full nonlinear-editor replay as `edit-path/replay.mp4`:
    project bin, monitor, effects/properties, multitrack timeline, selections,
    cursor motion, shortcuts, command feedback, and semantic apply events. Passing
    samples are atomically published; failures are quarantined with the precise
    gate and sequence.
 
-The finished edit path and reconstruction are under the displayed session's
-`completed-sample/` directory. The main files are `trajectory.jsonl`,
-`reconstructed.kdenlive`, `reconstructed-output.mp4`, `final.mp4`,
-`reference/editor-final.*`,
-`render-report.json`, and `sample.json`.
+The finished dataset item is under the displayed session's
+`completed-sample/` directory. `sample.json` is its authoritative entry point;
+source media is under `inputs/`, the editor target under `outputs/`, the
+normalized path and replay under `edit-path/`, derived QA under
+`verification/`, and native audit material under `provenance/`. See
+[`DATASET_ITEM.md`](DATASET_ITEM.md) for the complete layout.
 
 For long-lived WSL GUI containers, create the container with `docker run
 --init ...` so a tiny init process reaps Kdenlive render children. The recorder
@@ -185,10 +189,11 @@ python3 -m edit_path qa-sample /path/to/dataset --sample-rate 0.10
 python3 -m edit_path index /path/to/dataset
 ```
 
-Accepted samples contain the command-level editor-training `final.mp4`, the separately
-validated final-state `reconstructed-output.mp4`, a portable reconstructed
-Kdenlive project, cleaned and raw trajectories, assets and manifest, exact
-states, checkpoint references, and a render report. Rejected sessions retain
+Accepted samples contain `outputs/final.*`, the visual path replay at
+`edit-path/replay.mp4`, the separately validated
+`verification/reconstructed.mp4`, a portable reconstructed Kdenlive project,
+normalized operations and events, source assets, exact states, checkpoint
+references, and a verification report. Rejected sessions retain
 their raw evidence and a machine-readable gate failure under `quarantine/`.
 
 The pinned reconstruction image is defined in

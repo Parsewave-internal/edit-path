@@ -5,6 +5,7 @@
 
 #include "videopathrecorder.hpp"
 
+#include "config-kdenlive.h"
 #include "core.h"
 #include "assets/model/assetparametermodel.hpp"
 #include "effects/effectstack/model/effectstackmodel.hpp"
@@ -17,8 +18,10 @@
 #include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QDateTime>
+#include <QDir>
 #include <QDomDocument>
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QKeyEvent>
@@ -26,12 +29,19 @@
 #include <QMenu>
 #include <QMouseEvent>
 #include <QMutexLocker>
+#include <QProcess>
+#include <QSaveFile>
 #include <QShortcutEvent>
 #include <QSysInfo>
 #include <QTimer>
 #include <QToolButton>
 #include <QUuid>
 #include <QWidget>
+#include <QtConcurrent/QtConcurrentRun>
+
+#ifdef VIDEOPATH_HAVE_ZSTD
+#include <zstd.h>
+#endif
 
 namespace {
 QJsonObject canonicalXmlElement(const QDomElement &element)
@@ -102,15 +112,161 @@ VideoPathRecorder::VideoPathRecorder()
         m_file.reset();
         return;
     }
+    const QFileInfo logInfo(path);
+    m_logDirectory = logInfo.absolutePath();
+    m_stateDirectory = qEnvironmentVariable("KDENLIVE_VIDEO_PATH_STATE_DIR");
+    if (m_stateDirectory.isEmpty()) {
+        m_stateDirectory = QDir(m_logDirectory).filePath(QStringLiteral("%1-states").arg(logInfo.completeBaseName()));
+    }
+    if (!QDir().mkpath(m_stateDirectory)) {
+        m_file->close();
+        m_file.reset();
+        return;
+    }
     writeSessionStart();
 }
 
-VideoPathRecorder::~VideoPathRecorder() = default;
+VideoPathRecorder::~VideoPathRecorder()
+{
+    if (m_file && m_file->isOpen() && !m_sessionEnded) {
+        flushPendingActions(false);
+        recordLifecycle(QStringLiteral("session.abort"), QStringLiteral("recorder.destroyed_without_session_end"));
+        waitForStateSidecars();
+    }
+}
 
 bool VideoPathRecorder::isEnabled() const
 {
     QMutexLocker locker(&m_mutex);
     return m_file && m_file->isOpen();
+}
+
+void VideoPathRecorder::beginTransaction(const QString &boundary, const QString &label, const QString &undoEntryKey)
+{
+    if (!isEnabled()) {
+        return;
+    }
+    m_transactionId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    m_transactionBoundary = boundary;
+    m_transactionLabel = label;
+    bindTransactionUndoEntry(undoEntryKey);
+}
+
+void VideoPathRecorder::bindTransactionUndoEntry(const QString &undoEntryKey)
+{
+    if (undoEntryKey.isEmpty()) {
+        m_undoEntryId.clear();
+        m_targetTransactionId.clear();
+        return;
+    }
+    m_undoEntryId = m_undoEntryIds.value(undoEntryKey);
+    if (m_undoEntryId.isEmpty()) {
+        m_undoEntryId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        m_undoEntryIds.insert(undoEntryKey, m_undoEntryId);
+    }
+    m_targetTransactionId.clear();
+    if (m_transactionBoundary == QLatin1String("commit") && m_commitTransactions.contains(m_undoEntryId)) {
+        // QUndoStack merged this push into the retained command. All diffs in
+        // that undo-stack entry deliberately share one transaction ID.
+        m_transactionId = m_commitTransactions.value(m_undoEntryId);
+    } else if (m_transactionBoundary == QLatin1String("undo") || m_transactionBoundary == QLatin1String("redo")) {
+        m_targetTransactionId = m_commitTransactions.value(m_undoEntryId);
+    }
+}
+
+void VideoPathRecorder::forgetUndoEntry(const QString &undoEntryKey)
+{
+    const QString undoEntryId = m_undoEntryIds.take(undoEntryKey);
+    if (!undoEntryId.isEmpty()) {
+        m_commitTransactions.remove(undoEntryId);
+    }
+}
+
+void VideoPathRecorder::resetUndoEntries()
+{
+    m_undoEntryIds.clear();
+    m_commitTransactions.clear();
+}
+
+void VideoPathRecorder::endTransaction()
+{
+    if (m_transactionId.isEmpty()) {
+        return;
+    }
+    flushPendingActions(true);
+    if (m_transactionBoundary == QLatin1String("commit")) {
+        m_commitTransactions.insert(m_undoEntryId, m_transactionId);
+    }
+    m_lastCompletedTransactionId = m_transactionId;
+    m_lastCompletedUndoEntryId = m_undoEntryId;
+    m_lastCompletedTransaction.restart();
+    m_transactionId.clear();
+    m_transactionBoundary.clear();
+    m_transactionLabel.clear();
+    m_undoEntryId.clear();
+    m_targetTransactionId.clear();
+}
+
+void VideoPathRecorder::setProjectStateProvider(std::function<QByteArray()> provider)
+{
+    m_projectStateProvider = std::move(provider);
+}
+
+void VideoPathRecorder::recordProjectContext(const QJsonObject &context)
+{
+    if (!isEnabled() || m_projectContextRecorded) {
+        return;
+    }
+    QJsonObject event;
+    event.insert(QStringLiteral("event_type"), QStringLiteral("project.context"));
+    event.insert(QStringLiteral("context"), context);
+    writeEvent(event);
+    m_projectContextRecorded = true;
+}
+
+void VideoPathRecorder::recordLifecycle(const QString &eventType, const QString &reason, const QJsonObject &details)
+{
+    if (!isEnabled() || (eventType != QLatin1String("session.abort") && eventType != QLatin1String("session.recovered"))) {
+        return;
+    }
+    QJsonObject event;
+    event.insert(QStringLiteral("event_type"), eventType);
+    event.insert(QStringLiteral("reason"), reason);
+    if (!details.isEmpty()) {
+        event.insert(QStringLiteral("details"), details);
+    }
+    writeEvent(event);
+}
+
+void VideoPathRecorder::addTransactionFields(QJsonObject &event, bool allowLastCompleted) const
+{
+    QString transactionId = m_transactionId;
+    QString undoEntryId = m_undoEntryId;
+    if (transactionId.isEmpty() && allowLastCompleted && m_lastCompletedTransaction.isValid() && m_lastCompletedTransaction.elapsed() < 2000) {
+        transactionId = m_lastCompletedTransactionId;
+        undoEntryId = m_lastCompletedUndoEntryId;
+    }
+    if (!transactionId.isEmpty()) {
+        event.insert(QStringLiteral("transaction_id"), transactionId);
+    }
+    if (!undoEntryId.isEmpty()) {
+        event.insert(QStringLiteral("undo_entry_id"), undoEntryId);
+    }
+    if (!m_targetTransactionId.isEmpty()) {
+        event.insert(QStringLiteral("target_transaction_id"), m_targetTransactionId);
+    }
+}
+
+QString VideoPathRecorder::stableEntityId(const QString &kind, const QString &nativeId) const
+{
+    const QString key = QStringLiteral("%1:%2").arg(kind, nativeId);
+    auto iterator = m_stableEntityIds.constFind(key);
+    if (iterator != m_stableEntityIds.constEnd()) {
+        return iterator.value();
+    }
+    const QString value = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    m_stableEntityIds.insert(key, value);
+    return value;
 }
 
 void VideoPathRecorder::initialize(QApplication *application)
@@ -130,7 +286,18 @@ void VideoPathRecorder::recordAction(const QString &action, const QString &timel
     event.insert(QStringLiteral("action"), action);
     event.insert(QStringLiteral("timeline_id"), timelineId);
     event.insert(QStringLiteral("parameters"), parameters);
-    writeEvent(event);
+    m_pendingActions.append(event);
+}
+
+void VideoPathRecorder::flushPendingActions(bool attachTransaction)
+{
+    for (QJsonObject &event : m_pendingActions) {
+        if (attachTransaction) {
+            addTransactionFields(event);
+        }
+        writeEvent(event);
+    }
+    m_pendingActions.clear();
 }
 
 void VideoPathRecorder::recordHistory(const QString &operation, const QString &label)
@@ -139,6 +306,7 @@ void VideoPathRecorder::recordHistory(const QString &operation, const QString &l
     event.insert(QStringLiteral("event_type"), QStringLiteral("history"));
     event.insert(QStringLiteral("action"), QStringLiteral("history.%1").arg(operation));
     event.insert(QStringLiteral("label"), label);
+    addTransactionFields(event);
     if (m_lastShortcut.isValid() && m_lastShortcut.elapsed() < 1000 && !m_lastInputInteractionId.isEmpty()) {
         event.insert(QStringLiteral("interaction_id"), m_lastInputInteractionId);
     }
@@ -160,6 +328,7 @@ QJsonObject VideoPathRecorder::currentTimelineSnapshot() const
         const int trackId = model->getTrackIndexFromPosition(position);
         QJsonObject track;
         track.insert(QStringLiteral("native_id"), trackId);
+        track.insert(QStringLiteral("entity_id"), stableEntityId(QStringLiteral("track"), QString::number(trackId)));
         track.insert(QStringLiteral("position"), position);
         track.insert(QStringLiteral("kind"), model->isAudioTrack(trackId) ? QStringLiteral("audio") : QStringLiteral("video"));
         track.insert(QStringLiteral("tag"), model->getTrackTagById(trackId));
@@ -191,7 +360,10 @@ QJsonObject VideoPathRecorder::currentTimelineSnapshot() const
             const auto state = model->getClipState(itemId);
             QJsonObject clip;
             clip.insert(QStringLiteral("native_id"), itemId);
-            clip.insert(QStringLiteral("asset_reference"), model->getClipBinId(itemId));
+            clip.insert(QStringLiteral("entity_id"), stableEntityId(QStringLiteral("clip"), QString::number(itemId)));
+            const QString assetReference = model->getClipBinId(itemId);
+            clip.insert(QStringLiteral("asset_reference"), assetReference);
+            clip.insert(QStringLiteral("asset_id"), stableEntityId(QStringLiteral("asset"), assetReference));
             clip.insert(QStringLiteral("track_native_id"), model->getClipTrackId(itemId));
             clip.insert(QStringLiteral("timeline_start_frame"), model->getClipPosition(itemId));
             clip.insert(QStringLiteral("duration_frames"), model->getClipPlaytime(itemId));
@@ -208,6 +380,7 @@ QJsonObject VideoPathRecorder::currentTimelineSnapshot() const
                 if (!mixElement.isNull()) {
                     QJsonObject mix;
                     mix.insert(QStringLiteral("native_id"), itemId);
+                    mix.insert(QStringLiteral("entity_id"), stableEntityId(QStringLiteral("mix"), QString::number(itemId)));
                     mix.insert(QStringLiteral("track_native_id"), model->getClipTrackId(itemId));
                     mix.insert(QStringLiteral("parameters"), canonicalXmlElement(mixElement));
                     mixes.append(mix);
@@ -216,6 +389,7 @@ QJsonObject VideoPathRecorder::currentTimelineSnapshot() const
         } else if (model->isComposition(itemId)) {
             QJsonObject composition;
             composition.insert(QStringLiteral("native_id"), itemId);
+            composition.insert(QStringLiteral("entity_id"), stableEntityId(QStringLiteral("composition"), QString::number(itemId)));
             composition.insert(QStringLiteral("track_native_id"), model->getCompositionTrackId(itemId));
             composition.insert(QStringLiteral("timeline_start_frame"), model->getCompositionPosition(itemId));
             composition.insert(QStringLiteral("duration_frames"), model->getCompositionPlaytime(itemId));
@@ -237,9 +411,146 @@ QJsonObject VideoPathRecorder::currentTimelineSnapshot() const
     snapshot.insert(QStringLiteral("mixes"), mixes);
     QJsonObject masterEffects;
     masterEffects.insert(QStringLiteral("native_id"), 0);
+    masterEffects.insert(QStringLiteral("entity_id"), stableEntityId(QStringLiteral("master_effect"), QStringLiteral("0")));
     masterEffects.insert(QStringLiteral("effects"), canonicalEffectStack(model->getMasterEffectStackModel()));
     snapshot.insert(QStringLiteral("master_effects"), QJsonArray{masterEffects});
     return snapshot;
+}
+
+QJsonObject VideoPathRecorder::projectStateReference(QByteArray *rawState)
+{
+    if (!m_projectStateProvider) {
+        return {};
+    }
+    const QByteArray state = m_projectStateProvider();
+    if (state.isEmpty()) {
+        return {};
+    }
+    if (rawState) {
+        *rawState = state;
+    }
+    const QString digest = QString::fromLatin1(QCryptographicHash::hash(state, QCryptographicHash::Sha256).toHex());
+#ifdef VIDEOPATH_HAVE_ZSTD
+    const QString encoding = QStringLiteral("zstd");
+    const QString extension = QStringLiteral(".kdenlive.zst");
+#else
+    const QString encoding = QStringLiteral("qt-qcompress");
+    const QString extension = QStringLiteral(".kdenlive.qz");
+#endif
+    const QString target = QDir(m_stateDirectory).filePath(digest + extension);
+    const QString relative = QDir(m_logDirectory).relativeFilePath(target);
+    if (!m_scheduledStateHashes.contains(digest) && !QFileInfo::exists(target)) {
+        m_scheduledStateHashes.insert(digest);
+        m_stateSidecarWrites.append(QtConcurrent::run([state, target]() -> bool {
+            QByteArray compressed;
+#ifdef VIDEOPATH_HAVE_ZSTD
+            const size_t bound = ZSTD_compressBound(static_cast<size_t>(state.size()));
+            compressed.resize(static_cast<qsizetype>(bound));
+            const size_t written = ZSTD_compress(compressed.data(), bound, state.constData(), static_cast<size_t>(state.size()), 3);
+            if (ZSTD_isError(written)) {
+                return false;
+            }
+            compressed.resize(static_cast<qsizetype>(written));
+#else
+            compressed = qCompress(state, 9);
+#endif
+            QSaveFile output(target);
+            if (!output.open(QIODevice::WriteOnly) || output.write(compressed) != compressed.size()) {
+                return false;
+            }
+            return output.commit();
+        }));
+    }
+    QJsonObject reference;
+    reference.insert(QStringLiteral("encoding"), encoding);
+    reference.insert(QStringLiteral("path"), relative);
+    reference.insert(QStringLiteral("sha256"), digest);
+    reference.insert(QStringLiteral("bytes"), state.size());
+    reference.insert(QStringLiteral("durability"), QStringLiteral("complete_on_session_end"));
+    return reference;
+}
+
+QJsonObject VideoPathRecorder::scheduleCheckpointProxy(const QByteArray &projectState)
+{
+    if (projectState.isEmpty() || qEnvironmentVariable("KDENLIVE_VIDEO_PATH_CHECKPOINT_PROXIES") == QLatin1String("0")) {
+        return {};
+    }
+    QDomDocument document;
+    if (!document.setContent(projectState)) {
+        return {};
+    }
+    const QDomElement profile = document.documentElement().firstChildElement(QStringLiteral("profile"));
+    const int sourceWidth = profile.attribute(QStringLiteral("width")).toInt();
+    const int sourceHeight = profile.attribute(QStringLiteral("height")).toInt();
+    if (sourceWidth <= 0 || sourceHeight <= 0) {
+        return {};
+    }
+    const int width = std::min(sourceWidth, 640);
+    int height = qRound(double(sourceHeight) * width / sourceWidth);
+    height = std::max(2, height - (height % 2));
+    const QString digest = QString::fromLatin1(QCryptographicHash::hash(projectState, QCryptographicHash::Sha256).toHex());
+    const QString proxyDirectory = QDir(m_stateDirectory).filePath(QStringLiteral("checkpoint_refs"));
+    if (!QDir().mkpath(proxyDirectory)) {
+        return {};
+    }
+    const QString target = QDir(proxyDirectory).filePath(digest + QStringLiteral(".mp4"));
+    if (!m_scheduledCheckpointHashes.contains(digest) && !QFileInfo::exists(target)) {
+        m_scheduledCheckpointHashes.insert(digest);
+        m_stateSidecarWrites.append(QtConcurrent::run([projectState, target, width, height]() -> bool {
+            const QString token = QUuid::createUuid().toString(QUuid::WithoutBraces);
+            const QString temporaryProject = QFileInfo(target).absolutePath() + QStringLiteral("/.%1.kdenlive").arg(token);
+            const QString temporaryVideo = QFileInfo(target).absolutePath() + QStringLiteral("/.%1.mp4").arg(token);
+            QSaveFile projectFile(temporaryProject);
+            if (!projectFile.open(QIODevice::WriteOnly) || projectFile.write(projectState) != projectState.size() || !projectFile.commit()) {
+                return false;
+            }
+            const QString melt = qEnvironmentVariable("KDENLIVE_VIDEO_PATH_MELT", QStringLiteral("melt"));
+            const QStringList arguments{
+                QStringLiteral("-progress"),
+                temporaryProject,
+                QStringLiteral("-consumer"),
+                QStringLiteral("avformat:%1").arg(temporaryVideo),
+                QStringLiteral("f=mp4"),
+                QStringLiteral("vcodec=libx264"),
+                QStringLiteral("crf=28"),
+                QStringLiteral("preset=ultrafast"),
+                QStringLiteral("acodec=aac"),
+                QStringLiteral("ab=64k"),
+                QStringLiteral("width=%1").arg(width),
+                QStringLiteral("height=%1").arg(height),
+                QStringLiteral("rescale=bilinear"),
+            };
+            const int result = QProcess::execute(melt, arguments);
+            QFile::remove(temporaryProject);
+            if (result != 0 || !QFileInfo::exists(temporaryVideo)) {
+                QFile::remove(temporaryVideo);
+                return false;
+            }
+            if (QFileInfo::exists(target)) {
+                QFile::remove(temporaryVideo);
+                return true;
+            }
+            return QFile::rename(temporaryVideo, target);
+        }));
+    }
+    QJsonObject reference;
+    reference.insert(QStringLiteral("path"), QDir(m_logDirectory).relativeFilePath(target));
+    reference.insert(QStringLiteral("base"), QStringLiteral("trajectory"));
+    reference.insert(QStringLiteral("width"), width);
+    reference.insert(QStringLiteral("height"), height);
+    reference.insert(QStringLiteral("render_preset"), QStringLiteral("checkpoint-proxy-v1"));
+    reference.insert(QStringLiteral("durability"), QStringLiteral("complete_on_session_end"));
+    return reference;
+}
+
+bool VideoPathRecorder::waitForStateSidecars()
+{
+    bool result = true;
+    for (QFuture<bool> &future : m_stateSidecarWrites) {
+        future.waitForFinished();
+        result = future.result() && result;
+    }
+    return result;
 }
 
 QJsonObject VideoPathRecorder::diffSnapshots(const QJsonObject &before, const QJsonObject &after)
@@ -312,6 +623,18 @@ void VideoPathRecorder::captureTimelineCheckpoint(const QString &label)
     event.insert(QStringLiteral("timeline_id"), timelineId);
     event.insert(QStringLiteral("state_hash"), QString::fromLatin1(QCryptographicHash::hash(canonical, QCryptographicHash::Sha256).toHex()));
     event.insert(QStringLiteral("snapshot"), snapshot);
+    QByteArray rawProjectState;
+    const QJsonObject projectState = projectStateReference(&rawProjectState);
+    if (!projectState.isEmpty()) {
+        event.insert(QStringLiteral("project_state"), projectState);
+        m_lastProjectStateHash = projectState.value(QStringLiteral("sha256")).toString();
+    }
+    const QJsonObject referenceProxy = scheduleCheckpointProxy(rawProjectState);
+    if (!referenceProxy.isEmpty()) {
+        event.insert(QStringLiteral("reference_proxy"), referenceProxy);
+    }
+    addTransactionFields(event);
+    flushPendingActions(true);
     writeEvent(event);
 }
 
@@ -340,10 +663,21 @@ void VideoPathRecorder::captureTimelineChange(const QString &label, const QStrin
     event.insert(QStringLiteral("before_hash"), QString::fromLatin1(QCryptographicHash::hash(beforeJson, QCryptographicHash::Sha256).toHex()));
     event.insert(QStringLiteral("after_hash"), QString::fromLatin1(QCryptographicHash::hash(afterJson, QCryptographicHash::Sha256).toHex()));
     event.insert(QStringLiteral("diff"), diffSnapshots(before, after));
+    const QJsonObject projectState = projectStateReference();
+    if (!projectState.isEmpty()) {
+        event.insert(QStringLiteral("project_state"), projectState);
+        event.insert(QStringLiteral("project_before_hash"), m_lastProjectStateHash);
+        event.insert(QStringLiteral("project_after_hash"), projectState.value(QStringLiteral("sha256")).toString());
+    }
+    addTransactionFields(event);
+    flushPendingActions(true);
     if (m_lastInteraction.isValid() && m_lastInteraction.elapsed() < 2000 && !m_lastInputInteractionId.isEmpty()) {
         event.insert(QStringLiteral("interaction_id"), m_lastInputInteractionId);
     }
     writeEvent(event);
+    if (!projectState.isEmpty()) {
+        m_lastProjectStateHash = projectState.value(QStringLiteral("sha256")).toString();
+    }
     m_lastSnapshots.insert(timelineId, after);
 }
 
@@ -411,6 +745,7 @@ void VideoPathRecorder::recordCommand(QAction *action, bool checked)
     event.insert(QStringLiteral("checked"), checked);
     event.insert(QStringLiteral("shortcuts"), shortcuts);
     event.insert(QStringLiteral("focus"), describeObject(QApplication::focusWidget()));
+    addTransactionFields(event, true);
     m_lastInputInteractionId = interactionId;
     m_lastInteraction.restart();
     writeEvent(event);
@@ -538,7 +873,7 @@ void VideoPathRecorder::writeEvent(QJsonObject event)
     if (!m_file || !m_file->isOpen()) {
         return;
     }
-    event.insert(QStringLiteral("schema_version"), QStringLiteral("0.2.0"));
+    event.insert(QStringLiteral("schema_version"), QStringLiteral("0.3.0"));
     event.insert(QStringLiteral("session_id"), m_sessionId);
     event.insert(QStringLiteral("sequence"), ++m_sequence);
     event.insert(QStringLiteral("event_id"), QUuid::createUuid().toString(QUuid::WithoutBraces));
@@ -552,13 +887,15 @@ void VideoPathRecorder::writeSessionStart()
 {
     QJsonObject event;
     event.insert(QStringLiteral("event_type"), QStringLiteral("session.start"));
-    event.insert(QStringLiteral("schema_version"), QStringLiteral("0.2.0"));
+    event.insert(QStringLiteral("schema_version"), QStringLiteral("0.3.0"));
     event.insert(QStringLiteral("session_id"), m_sessionId);
     event.insert(QStringLiteral("sequence"), ++m_sequence);
     event.insert(QStringLiteral("event_id"), QUuid::createUuid().toString(QUuid::WithoutBraces));
     event.insert(QStringLiteral("timestamp_utc"), QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
     event.insert(QStringLiteral("application"), QStringLiteral("kdenlive-video-path-pilot"));
-    event.insert(QStringLiteral("application_version"), QCoreApplication::applicationVersion());
+    const QString applicationVersion = QCoreApplication::applicationVersion().isEmpty() ? QString::fromLatin1(KDENLIVE_VERSION)
+                                                                                         : QCoreApplication::applicationVersion();
+    event.insert(QStringLiteral("application_version"), applicationVersion);
     event.insert(QStringLiteral("os"), QSysInfo::prettyProductName());
     event.insert(QStringLiteral("cpu_architecture"), QSysInfo::currentCpuArchitecture());
     m_file->write(QJsonDocument(event).toJson(QJsonDocument::Compact));
@@ -568,8 +905,15 @@ void VideoPathRecorder::writeSessionStart()
 
 void VideoPathRecorder::writeSessionEnd()
 {
+    if (m_sessionEnded) {
+        return;
+    }
+    m_sessionEnded = true;
+    flushPendingActions(false);
+    captureTimelineCheckpoint(QStringLiteral("session.final"));
     QJsonObject event;
     event.insert(QStringLiteral("event_type"), QStringLiteral("session.end"));
     event.insert(QStringLiteral("reason"), QStringLiteral("application.quit"));
+    event.insert(QStringLiteral("state_sidecars_complete"), waitForStateSidecars());
     writeEvent(event);
 }

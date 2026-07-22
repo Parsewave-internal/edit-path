@@ -4,6 +4,7 @@ SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-KDE-Accepted-GPL
 */
 
 #include "projectmanager.h"
+#include "config-kdenlive.h"
 #include "bin/bin.h"
 #include "bin/projectclip.h"
 #include "bin/projectitemmodel.h"
@@ -25,10 +26,12 @@ SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-KDE-Accepted-GPL
 #include "timeline2/model/timelineitemmodel.hpp"
 #include "utils/qstringutils.h"
 #include "utils/thumbnailcache.hpp"
+#include "videopath/videopathrecorder.hpp"
 #include "xml/xml.hpp"
 #include <audiomixer/mixermanager.hpp>
 #include <bin/clipcreator.hpp>
 #include <lib/localeHandling.h>
+#include <framework/mlt_version.h>
 
 // Temporary for testing
 #include "bin/model/markerlistmodel.hpp"
@@ -848,6 +851,7 @@ bool ProjectManager::isKdenliveProjectFile(const QUrl url)
 
 void ProjectManager::abortLoading()
 {
+    VideoPathRecorder::instance().recordLifecycle(QStringLiteral("session.abort"), QStringLiteral("project.load_failed"));
     if (pCore->closing) {
         pCore->closeApp();
         return;
@@ -863,6 +867,42 @@ void ProjectManager::abortLoading()
 void ProjectManager::finalizeDocumentOpening(KdenliveDoc *document)
 {
     m_notesPlugin->setProject(document);
+    VideoPathRecorder &recorder = VideoPathRecorder::instance();
+    if (recorder.isEnabled()) {
+        recorder.setProjectStateProvider([this]() -> QByteArray {
+            if (!m_project || !m_activeTimelineModel) {
+                return {};
+            }
+            const QString outputFolder = m_project->url().isEmpty() ? QDir::tempPath() : QFileInfo(m_project->url().toLocalFile()).absolutePath();
+            return projectSceneList(outputFolder).first.toUtf8();
+        });
+
+        const std::unique_ptr<ProfileModel> &profile = pCore->getCurrentProfile();
+        if (profile) {
+            QJsonObject context;
+            context.insert(QStringLiteral("project_id"), document->uuid().toString(QUuid::WithoutBraces));
+            context.insert(QStringLiteral("fps_numerator"), profile->frame_rate_num());
+            context.insert(QStringLiteral("fps_denominator"), profile->frame_rate_den());
+            context.insert(QStringLiteral("width"), profile->width());
+            context.insert(QStringLiteral("height"), profile->height());
+            context.insert(QStringLiteral("sample_aspect_numerator"), profile->sample_aspect_num());
+            context.insert(QStringLiteral("sample_aspect_denominator"), profile->sample_aspect_den());
+            context.insert(QStringLiteral("display_aspect_numerator"), profile->display_aspect_num());
+            context.insert(QStringLiteral("display_aspect_denominator"), profile->display_aspect_den());
+            context.insert(QStringLiteral("colorspace"), profile->colorspace());
+            context.insert(QStringLiteral("progressive"), profile->progressive());
+            context.insert(QStringLiteral("bottom_field_first"), profile->bottom_field_first());
+            context.insert(QStringLiteral("audio_channels"), document->audioChannels());
+            // Kdenlive stores the sample rate in the selected render preset, not
+            // in the project profile. Null is deliberately more truthful than
+            // recording a guessed default.
+            context.insert(QStringLiteral("audio_sample_rate"), QJsonValue::Null);
+            context.insert(QStringLiteral("kdenlive_version"), QString::fromLatin1(KDENLIVE_VERSION));
+            context.insert(QStringLiteral("kdenlive_build"), QString::fromLatin1(KDENLIVE_FULL_VERSION_STRING));
+            context.insert(QStringLiteral("mlt_version"), QString::fromLatin1(mlt_version_get_string()));
+            recorder.recordProjectContext(context);
+        }
+    }
     Q_EMIT pCore->closeSplash();
 }
 
@@ -1108,6 +1148,13 @@ void ProjectManager::doOpenFile(const QUrl &url, KAutoSaveFile *stale, bool isBa
     pCore->window()->connectDocument();
 
     finalizeDocumentOpening(m_project);
+    if (stale || isBackup) {
+        QJsonObject details;
+        details.insert(QStringLiteral("project_url"), url.toString());
+        details.insert(QStringLiteral("autosave"), stale != nullptr);
+        details.insert(QStringLiteral("backup"), isBackup);
+        VideoPathRecorder::instance().recordLifecycle(QStringLiteral("session.recovered"), QStringLiteral("project.recovery_opened"), details);
+    }
     if (pCore->monitorManager()) {
         Q_EMIT pCore->monitorManager()->updatePreviewScaling();
         pCore->monitorManager()->projectMonitor()->slotActivateMonitor();

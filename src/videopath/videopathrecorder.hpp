@@ -6,6 +6,7 @@
 #pragma once
 
 #include <QElapsedTimer>
+#include <QFuture>
 #include <QHash>
 #include <QJsonObject>
 #include <QMutex>
@@ -14,6 +15,7 @@
 #include <QSet>
 #include <QString>
 
+#include <functional>
 #include <memory>
 
 class QFile;
@@ -30,8 +32,16 @@ public:
 
     void initialize(QApplication *application);
     bool isEnabled() const;
+    void beginTransaction(const QString &boundary, const QString &label, const QString &undoEntryKey);
+    void bindTransactionUndoEntry(const QString &undoEntryKey);
+    void forgetUndoEntry(const QString &undoEntryKey);
+    void resetUndoEntries();
+    void endTransaction();
     void recordAction(const QString &action, const QString &timelineId, const QJsonObject &parameters);
     void recordHistory(const QString &operation, const QString &label);
+    void setProjectStateProvider(std::function<QByteArray()> provider);
+    void recordProjectContext(const QJsonObject &context);
+    void recordLifecycle(const QString &eventType, const QString &reason, const QJsonObject &details = {});
     void captureTimelineCheckpoint(const QString &label);
     void captureTimelineChange(const QString &label, const QString &boundary);
 
@@ -48,6 +58,12 @@ private:
     void recordCommand(QAction *action, bool checked);
     void recordShortcut(const QKeySequence &sequence, bool ambiguous);
     QJsonObject currentTimelineSnapshot() const;
+    QJsonObject projectStateReference(QByteArray *rawState = nullptr);
+    QJsonObject scheduleCheckpointProxy(const QByteArray &projectState);
+    void flushPendingActions(bool attachTransaction);
+    void addTransactionFields(QJsonObject &event, bool allowLastCompleted = false) const;
+    QString stableEntityId(const QString &kind, const QString &nativeId) const;
+    bool waitForStateSidecars();
     static QJsonObject diffSnapshots(const QJsonObject &before, const QJsonObject &after);
     bool eventFilter(QObject *watched, QEvent *event) override;
     static QString describeObject(const QObject *object);
@@ -57,6 +73,8 @@ private:
 
     mutable QMutex m_mutex;
     std::unique_ptr<QFile> m_file;
+    QString m_logDirectory;
+    QString m_stateDirectory;
     QString m_sessionId;
     qint64 m_sequence{0};
     QSet<QAction *> m_actions;
@@ -72,4 +90,23 @@ private:
     QString m_pointerTarget;
     int m_pointerButton{0};
     QHash<QString, QJsonObject> m_lastSnapshots;
+    std::function<QByteArray()> m_projectStateProvider;
+    QList<QFuture<bool>> m_stateSidecarWrites;
+    QSet<QString> m_scheduledStateHashes;
+    QSet<QString> m_scheduledCheckpointHashes;
+    QString m_lastProjectStateHash;
+    QList<QJsonObject> m_pendingActions;
+    mutable QHash<QString, QString> m_stableEntityIds;
+    QHash<QString, QString> m_undoEntryIds;
+    QHash<QString, QString> m_commitTransactions;
+    QString m_transactionId;
+    QString m_transactionBoundary;
+    QString m_transactionLabel;
+    QString m_undoEntryId;
+    QString m_targetTransactionId;
+    QString m_lastCompletedTransactionId;
+    QString m_lastCompletedUndoEntryId;
+    QElapsedTimer m_lastCompletedTransaction;
+    bool m_sessionEnded{false};
+    bool m_projectContextRecorded{false};
 };

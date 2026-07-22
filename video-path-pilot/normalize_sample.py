@@ -6,8 +6,12 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 from typing import Any
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from edit_path.state import resolve_accepted_branch
 
 
 ENTITY_PREFIX = {"clip": "clip", "track": "track", "composition": "transition", "mix": "transition", "master_effect": "master"}
@@ -19,6 +23,12 @@ def read_jsonl(path: Path) -> list[dict]:
 
 def accepted_commits(events: list[dict]) -> list[dict]:
     """Return the final successful branch; raw undo/redo remains in evidence."""
+    if any(event.get("event_type") == "state.checkpoint" for event in events):
+        return resolve_accepted_branch(
+            events,
+            require_targets=any(event.get("schema_version") == "0.3.0" for event in events),
+        ).accepted
+    # Compatibility for early MVP unit fixtures and pre-checkpoint 0.1 logs.
     stack: list[dict] = []
     redo: list[dict] = []
     for event in events:
@@ -68,13 +78,17 @@ def normalized_change(change: dict, ids: dict[tuple[str, str], str], assets: dic
     native = str(change.get("native_id"))
     key = (entity, native)
     if key not in ids:
-        prefix = ENTITY_PREFIX.get(entity, entity)
-        ids[key] = f"{prefix}_{sum(1 for e, _ in ids if e == entity) + 1:03d}"
+        recorded_id = change.get("after", {}).get("entity_id") or change.get("before", {}).get("entity_id")
+        if recorded_id:
+            ids[key] = str(recorded_id)
+        else:
+            prefix = ENTITY_PREFIX.get(entity, entity)
+            ids[key] = f"{prefix}_{sum(1 for e, _ in ids if e == entity) + 1:03d}"
 
     def clean(value: Any) -> Any:
         if not isinstance(value, dict):
             return value
-        result = {k: v for k, v in value.items() if k != "native_id"}
+        result = {k: v for k, v in value.items() if k not in {"native_id", "entity_id"}}
         if "track_native_id" in result:
             track_key = ("track", str(result.pop("track_native_id")))
             if track_key not in ids:
@@ -94,7 +108,11 @@ def normalized_change(change: dict, ids: dict[tuple[str, str], str], assets: dic
 def build_sample(root: Path, metadata: dict) -> dict:
     events = read_jsonl(root / "evidence" / "raw-events.jsonl")
     ids: dict[tuple[str, str], str] = {}
-    asset_refs: dict[str, str] = {}
+    asset_refs: dict[str, str] = {
+        str(asset["bin_reference"]): asset["asset_id"]
+        for asset in metadata["assets"]
+        if asset.get("bin_reference") is not None
+    }
     operations = []
     for index, event in enumerate(accepted_commits(events), 1):
         diff = event.get("diff", {})

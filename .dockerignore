@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: 2026 Edit Path contributors
+# SPDX-License-Identifier: GPL-3.0-only
+
+*
+!pyproject.toml
+!edit_path/
+!edit_path/**
+!reconstruction/
+!reconstruction/Containerfile

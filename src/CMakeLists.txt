@@ -106,6 +106,17 @@ ki18n_wrap_ui(kdenlive_UIS ${kdenlive_UIS})
 
 add_library(kdenliveLib STATIC ${kdenlive_SRCS} ${kdenlive_UIS} definitions.h lib/localeHandling.cpp lib/localeHandling.h)
 
+# Video Path stores exact project states as content-addressed Zstandard
+# sidecars when libzstd is available. Builds without it retain a Qt-compressed
+# compatibility path and remain able to record legacy sessions.
+find_path(VIDEOPATH_ZSTD_INCLUDE_DIR NAMES zstd.h)
+find_library(VIDEOPATH_ZSTD_LIBRARY NAMES zstd libzstd)
+if(VIDEOPATH_ZSTD_INCLUDE_DIR AND VIDEOPATH_ZSTD_LIBRARY)
+    target_compile_definitions(kdenliveLib PRIVATE VIDEOPATH_HAVE_ZSTD)
+    target_include_directories(kdenliveLib PRIVATE ${VIDEOPATH_ZSTD_INCLUDE_DIR})
+    target_link_libraries(kdenliveLib PRIVATE ${VIDEOPATH_ZSTD_LIBRARY})
+endif()
+
 kconfig_target_kcfg_file(kdenliveLib
     FILE kdenlivesettings.kcfg
     CLASS_NAME KdenliveSettings

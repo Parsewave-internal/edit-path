@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://example.invalid/video-path/0.2.0/event.schema.json",
+  "$id": "https://example.invalid/video-path/0.3.0/event.schema.json",
   "title": "Video Path hybrid pilot event",
   "type": "object",
   "required": [
@@ -12,13 +12,13 @@
     "event_type"
   ],
   "properties": {
-    "schema_version": { "enum": ["0.1.0", "0.2.0"] },
+    "schema_version": { "enum": ["0.1.0", "0.2.0", "0.3.0"] },
     "session_id": { "type": "string", "minLength": 1 },
     "sequence": { "type": "integer", "minimum": 1 },
     "event_id": { "type": "string", "minLength": 1 },
     "timestamp_utc": { "type": "string", "format": "date-time" },
     "event_type": {
-      "enum": ["session.start", "session.end", "action", "history", "ui.command", "ui.shortcut", "ui.gesture", "state.checkpoint", "state.diff"]
+      "enum": ["session.start", "session.end", "session.abort", "session.recovered", "project.context", "action", "history", "ui.command", "ui.shortcut", "ui.gesture", "state.checkpoint", "state.diff"]
     },
     "action": {
       "enum": [
@@ -49,6 +49,17 @@
     "snapshot": { "type": "object" },
     "diff": { "type": "object" },
     "boundary": { "enum": ["commit", "undo", "redo"] }
+    ,"transaction_id": { "type": "string", "minLength": 1 }
+    ,"undo_entry_id": { "type": "string", "minLength": 1 }
+    ,"target_transaction_id": { "type": "string", "minLength": 1 }
+    ,"project_before_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+    ,"project_after_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+    ,"project_state": { "$ref": "#/$defs/stateReference" }
+    ,"reference_proxy": { "$ref": "#/$defs/referenceProxy" }
+    ,"context": { "type": "object" }
+    ,"details": { "type": "object" }
+    ,"reason": { "type": "string" }
+    ,"state_sidecars_complete": { "type": "boolean" }
   },
   "allOf": [
     {
@@ -78,6 +89,34 @@
     {
       "if": { "properties": { "event_type": { "const": "state.diff" } } },
       "then": { "required": ["timeline_id", "label", "boundary", "before_hash", "after_hash", "diff"] }
+    },
+    {
+      "if": { "properties": { "event_type": { "const": "project.context" } } },
+      "then": { "required": ["context"] }
+    },
+    {
+      "if": { "properties": { "event_type": { "enum": ["session.abort", "session.recovered"] } } },
+      "then": { "required": ["reason"] }
+    },
+    {
+      "if": {
+        "properties": {
+          "schema_version": { "const": "0.3.0" },
+          "event_type": { "const": "state.checkpoint" }
+        },
+        "required": ["schema_version", "event_type"]
+      },
+      "then": { "required": ["project_state", "reference_proxy"] }
+    },
+    {
+      "if": {
+        "properties": {
+          "schema_version": { "const": "0.3.0" },
+          "event_type": { "const": "state.diff" }
+        },
+        "required": ["schema_version", "event_type"]
+      },
+      "then": { "required": ["transaction_id", "undo_entry_id", "project_before_hash", "project_after_hash", "project_state"] }
     }
   ],
   "$defs": {
@@ -86,6 +125,33 @@
       "required": ["x", "y"],
       "properties": { "x": { "type": "number" }, "y": { "type": "number" } },
       "additionalProperties": false
+    },
+    "stateReference": {
+      "type": "object",
+      "required": ["encoding", "sha256", "bytes"],
+      "properties": {
+        "encoding": { "enum": ["raw", "zstd", "qt-qcompress", "qt-qcompress-base64"] },
+        "path": { "type": "string", "minLength": 1 },
+        "data": { "type": "string", "minLength": 1 },
+        "base": { "enum": ["trajectory", "session"] },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "bytes": { "type": "integer", "minimum": 1 },
+        "durability": { "type": "string" }
+      },
+      "anyOf": [{ "required": ["path"] }, { "required": ["data"] }],
+      "additionalProperties": true
+    },
+    "referenceProxy": {
+      "type": "object",
+      "required": ["path"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "base": { "enum": ["trajectory", "session"] },
+        "width": { "type": "integer", "minimum": 2 },
+        "height": { "type": "integer", "minimum": 2 },
+        "render_preset": { "type": "string" }
+      },
+      "additionalProperties": true
     }
   },
   "additionalProperties": true

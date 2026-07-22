@@ -12,8 +12,17 @@ import shutil
 import subprocess
 import sys
 import uuid
+import urllib.parse
+import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from edit_path.io import find_trajectory, read_jsonl
+from edit_path.errors import EditPathError
+from edit_path.pipeline import build_dataset_index, process_session, semantic_activity, validate_event_envelope
+from edit_path.reconstruct import materialize_project, render_session
+from edit_path.state import resolve_accepted_branch, validate_state_transitions
 
 from normalize_sample import build_sample
 from validate_sample import validate_sample
@@ -36,6 +45,59 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def bind_project_assets(project: Path, root: Path, assets: list[dict]) -> list[dict]:
+    """Resolve Kdenlive bin IDs to collector assets using exact files/hashes."""
+    xml = ET.fromstring(project.read_bytes())
+    by_path = {(root / asset["file"]).resolve(): asset for asset in assets}
+    by_digest = {asset["sha256"]: asset for asset in assets}
+    bindings: dict[str, str] = {}
+    for producer in xml.iter("producer"):
+        properties = {
+            child.get("name"): child.text or ""
+            for child in producer.findall("property")
+            if child.get("name")
+        }
+        bin_reference = properties.get("kdenlive:id")
+        if not bin_reference:
+            continue
+        candidates = [properties.get("kdenlive:originalurl"), properties.get("resource")]
+        matched: dict | None = None
+        for candidate_value in candidates:
+            if not candidate_value or candidate_value.startswith(("color:", "colour:", "<", "kdenlivetitle:")):
+                continue
+            candidate = candidate_value
+            if candidate.startswith("file://"):
+                candidate = urllib.parse.unquote(urllib.parse.urlparse(candidate).path)
+            if candidate.startswith("timewarp:"):
+                candidate = candidate.split(":", 2)[-1]
+            value = Path(candidate)
+            if not value.is_absolute():
+                value = project.parent / value
+            resolved = value.resolve()
+            if resolved in by_path:
+                matched = by_path[resolved]
+                break
+            if resolved.is_file():
+                digest_match = by_digest.get(sha256(resolved))
+                if digest_match and resolved.stat().st_size == digest_match["bytes"]:
+                    matched = digest_match
+                    break
+        if matched:
+            previous = bindings.get(bin_reference)
+            if previous and previous != matched["asset_id"]:
+                raise ValueError(f"bin reference {bin_reference} maps to multiple assets")
+            bindings[bin_reference] = matched["asset_id"]
+    result = []
+    for asset in assets:
+        value = dict(asset)
+        references = sorted(reference for reference, asset_id in bindings.items() if asset_id == asset["asset_id"])
+        if len(references) != 1:
+            raise ValueError(f"could not bind exactly one Kdenlive bin reference for {asset['asset_id']}")
+        value["bin_reference"] = references[0]
+        result.append(value)
+    return result
+
+
 def command_init(args: argparse.Namespace) -> int:
     root = args.sample_dir.resolve()
     if root.exists():
@@ -52,20 +114,26 @@ def command_init(args: argparse.Namespace) -> int:
     (root / "evidence").mkdir()
 
     assets = []
-    for index, source in enumerate(args.assets, 1):
-        asset_id = f"asset_{index:03d}"
-        destination = root / "assets" / f"{asset_id}{source.suffix.lower()}"
+    seen_digests: set[str] = set()
+    for source in args.assets:
+        digest = sha256(source)
+        if digest in seen_digests:
+            continue
+        seen_digests.add(digest)
+        asset_id = f"asset_{len(assets) + 1:03d}"
+        destination = root / "assets" / f"{digest}{source.suffix.lower()}"
         shutil.copy2(source.resolve(), destination)
         assets.append({
             "asset_id": asset_id,
             "original_filename": source.name,
             "file": destination.relative_to(root).as_posix(),
-            "sha256": sha256(destination),
+            "sha256": digest,
             "bytes": destination.stat().st_size,
+            "license_status": "pending",
         })
 
     metadata = {
-        "collector_version": "0.1.0",
+        "collector_version": "0.3.0",
         "sample_id": args.sample_id or root.name,
         "created_at_utc": utc_now(),
         "status": "initialized",
@@ -78,12 +146,12 @@ def command_init(args: argparse.Namespace) -> int:
             "height": args.height,
         },
         "assets": assets,
-        "asset_binding_method": "first_use_order",
+        "asset_binding_method": "kdenlive_bin_reference",
     }
     dump(root / "internal" / "collector-metadata.json", metadata)
     (root / "internal" / "rationale.jsonl").touch()
     print(f"created sample workspace: {root}")
-    print("Import the files from its assets/ directory into Kdenlive in filename order.")
+    print("Import the files from its assets/ directory into Kdenlive.")
     print(f"Then launch with: {Path(__file__).name} launch {root}")
     return 0
 
@@ -138,7 +206,13 @@ def command_finalize(args: argparse.Namespace) -> int:
     if raw_errors:
         raise ValueError("raw recording is invalid:\n  " + "\n  ".join(raw_errors))
 
+    if metadata.get("collector_version") == "0.3.0":
+        metadata["assets"] = bind_project_assets(args.project.resolve(), root, metadata["assets"])
     copy_artifact(args.project, root / "internal" / "final.kdenlive")
+    events = read_jsonl(raw)
+    contexts = [event.get("context") for event in events if event.get("event_type") == "project.context"]
+    if contexts:
+        metadata["project"]["recorded_context"] = contexts[-1]
     suffix = args.output.suffix.lower() or ".mp4"
     final_video = root / "output" / f"final{suffix}"
     copy_artifact(args.output, final_video)
@@ -154,6 +228,7 @@ def command_finalize(args: argparse.Namespace) -> int:
         "raw_events_sha256": sha256(raw),
     }
     dump(root / "internal" / "collector-metadata.json", metadata)
+    dump(root / "asset-manifest.json", {"schema": "video-path/assets@2", "assets": metadata["assets"]})
     dump(root / "sample.json", build_sample(root, metadata))
     errors = validate_sample(root / "sample.json", check_files=True)
     if errors:
@@ -170,6 +245,51 @@ def command_validate(args: argparse.Namespace) -> int:
             print(error, file=sys.stderr)
         return 1
     print(f"valid sample: {root / 'sample.json'}")
+    return 0
+
+
+def command_inspect(args: argparse.Namespace) -> int:
+    root = args.sample_dir.resolve()
+    events = read_jsonl(find_trajectory(root))
+    envelope = validate_event_envelope(events, require_complete=False)
+    _, states = validate_state_transitions(events)
+    branch = resolve_accepted_branch(events, require_targets=any(event.get("schema_version") == "0.3.0" for event in events))
+    print(json.dumps({
+        "session": envelope,
+        "state_events": len(states),
+        "accepted_commits": len(branch.accepted),
+        "final_hash": branch.final_hash,
+        "semantic_activity": semantic_activity(branch.accepted),
+    }, indent=2, sort_keys=True))
+    return 0
+
+
+def command_reconstruct(args: argparse.Namespace) -> int:
+    root = args.sample_dir.resolve()
+    output = args.output.resolve() if args.output else None
+    result = materialize_project(root, output) if args.project_only else render_session(root, output, melt_binary=args.melt)
+    print(result)
+    return 0
+
+
+def command_process(args: argparse.Namespace) -> int:
+    result = process_session(
+        args.sample_dir.resolve(),
+        args.output_root.resolve(),
+        minimum_ssim=args.minimum_ssim,
+        minimum_commits=args.minimum_commits,
+        minimum_changed_entities=args.minimum_changed_entities,
+        require_license=args.require_license,
+        require_complete=not args.allow_partial,
+        melt_binary=args.melt,
+        runtime_lock=args.runtime_lock.resolve() if args.runtime_lock else None,
+    )
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return 0 if result["status"] == "accepted" else 2
+
+
+def command_index(args: argparse.Namespace) -> int:
+    print(json.dumps(build_dataset_index(args.output_root.resolve()), indent=2, sort_keys=True))
     return 0
 
 
@@ -209,6 +329,33 @@ def parser() -> argparse.ArgumentParser:
     validate = sub.add_parser("validate", help="validate a finalized sample")
     validate.add_argument("sample_dir", type=Path)
     validate.set_defaults(function=command_validate)
+
+    inspect = sub.add_parser("inspect", help="validate state/hash chains and show the accepted branch")
+    inspect.add_argument("sample_dir", type=Path)
+    inspect.set_defaults(function=command_inspect)
+
+    reconstruct = sub.add_parser("reconstruct", help="materialize the final project or render its MP4")
+    reconstruct.add_argument("sample_dir", type=Path)
+    reconstruct.add_argument("--output", type=Path)
+    reconstruct.add_argument("--project-only", action="store_true")
+    reconstruct.add_argument("--melt")
+    reconstruct.set_defaults(function=command_reconstruct)
+
+    process = sub.add_parser("process", help="run all gates and route to accepted/ or quarantine/")
+    process.add_argument("sample_dir", type=Path)
+    process.add_argument("output_root", type=Path)
+    process.add_argument("--minimum-ssim", type=float, default=0.995)
+    process.add_argument("--minimum-commits", type=int, default=1)
+    process.add_argument("--minimum-changed-entities", type=int, default=1)
+    process.add_argument("--allow-partial", action="store_true")
+    process.add_argument("--require-license", action="store_true", help="optional late publication gate")
+    process.add_argument("--melt")
+    process.add_argument("--runtime-lock", type=Path)
+    process.set_defaults(function=command_process)
+
+    index = sub.add_parser("index", help="rebuild the accepted dataset index")
+    index.add_argument("output_root", type=Path)
+    index.set_defaults(function=command_index)
     return result
 
 
@@ -216,7 +363,7 @@ def main() -> int:
     args = parser().parse_args()
     try:
         return args.function(args)
-    except (OSError, ValueError, json.JSONDecodeError) as exc:
+    except (EditPathError, OSError, ValueError, json.JSONDecodeError, ET.ParseError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 

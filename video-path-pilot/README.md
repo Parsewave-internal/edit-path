@@ -19,24 +19,33 @@ format and language are in `sample.schema.json` and `VOCABULARY.md`.
 python3 video-path-pilot/sample_collector.py --help
 ```
 
-`init` creates a workspace, `launch` starts the recorder, `note` captures an
-occasional creative decision, and `finalize` normalizes and validates
-`sample.json`. Undo/redo remains in evidence but is removed from the clean
-successful trajectory.
+`init` creates a workspace with content-addressed assets, `launch` starts the
+recorder, `note` captures an occasional creative decision, and `finalize`
+binds those assets to exact Kdenlive bin references and validates `sample.json`.
+`inspect`, `reconstruct`, `process`, and `index` expose the production
+reconstruction pipeline without removing any older collector commands.
 
 The pilot is based on upstream Kdenlive revision
 `7de2ed9902b4288797a7781498546389a482a39e`.
 
-## Recorded operations
+## Recorded format
 
-Version 2 interaction events:
+Schema 0.3 adds the prerequisites for deterministic reconstruction:
 
-- `ui.command` for discovered Qt actions;
-- `ui.shortcut` for modified/function keys without raw typed text;
-- `ui.gesture` for timeline clicks and drags;
-- `session.end` on normal application exit.
-- `state.checkpoint` for the canonical timeline baseline;
-- `state.diff` after committed edits, undo, and redo.
+- content-addressed Zstandard Kdenlive/MLT state sidecars on checkpoints and
+  committed state changes (Qt compression remains a build-time fallback);
+- independent low-resolution checkpoint renders, produced asynchronously;
+- stable entity IDs plus exact transaction and undo-entry IDs;
+- global project hashes as well as per-timeline semantic hash chains;
+- a one-time `project.context` with frame/profile and tool versions;
+- explicit `session.abort` and `session.recovered` lifecycle evidence;
+- `session.end.state_sidecars_complete`, written only after asynchronous state
+  and reference artifacts have finished.
+
+Schema 0.1 and 0.2 remain readable and validatable. A finalized legacy sample
+can still reconstruct from `internal/final.kdenlive`; only 0.3 recordings are
+required to contain the stronger transaction, state-sidecar, and checkpoint
+evidence.
 
 Version 1 semantic events retained as outcome signals:
 
@@ -47,9 +56,9 @@ Version 1 semantic events retained as outcome signals:
 - `clip.delete` for a simple single-clip deletion
 - `history.undo` and `history.redo` for functional undo commands
 
-Kdenlive's numeric object IDs are included as session-scoped replay handles.
-They are explicitly not stable dataset identities. A production collector must
-assign persistent UUIDs to assets, clip instances, tracks, and effects.
+Kdenlive's numeric object IDs remain as session-scoped diagnostic handles for
+backward compatibility. Schema 0.3 also records UUID entity IDs; normalization
+uses those stable IDs and the manifest's exact `bin_reference` mapping.
 
 ## Build
 
@@ -85,17 +94,43 @@ video-path-pilot/run-video-path-pilot.sh /absolute/path/session.jsonl
 ```
 
 The launcher supplies the Craft runtime library paths and refuses to mix two
-sessions in the same file.
+sessions in the same file. It also selects a readable system fontconfig file
+when Craft does not provide one and refuses to launch if no usable UI font is
+installed. On a minimal openSUSE container, install the required fonts with:
+
+```bash
+zypper --non-interactive install --no-recommends dejavu-fonts liberation-fonts
+```
 
 If the environment variable is absent, recording is disabled. Events are
 appended and flushed after every line so a crash should not lose the whole
-session. Use a new output file for each editor session.
+session. Exact states are written beside the log in `<log-name>-states/`; set
+`KDENLIVE_VIDEO_PATH_STATE_DIR` to override that location. Checkpoint proxies
+are enabled by default and may be disabled for recorder diagnostics with
+`KDENLIVE_VIDEO_PATH_CHECKPOINT_PROXIES=0` (a production 0.3 session with them
+disabled will not pass the checkpoint gate). Use a new output file for each
+editor session.
 
 Validate a recorded session with:
 
 ```bash
 python3 video-path-pilot/validate_video_path.py /absolute/path/session.jsonl
 ```
+
+## Reconstruct and publish
+
+The full implementation and operator commands are documented in
+`RECONSTRUCTION.md`. The short path after `finalize` is:
+
+```bash
+python3 -m edit_path inspect /path/to/sample
+python3 -m edit_path process /path/to/sample /path/to/dataset
+python3 -m edit_path index /path/to/dataset
+```
+
+Successful samples are atomically published under `accepted/<session_id>/`.
+Failures are atomically published under `quarantine/<session_id>/` with a
+machine-readable `rejection.json` naming the failed gate and sequence.
 
 ## Manual acceptance scenario
 
@@ -113,20 +148,15 @@ UI command/shortcut/gesture events in editor order, and `session.end` after a
 normal exit. Semantic actions may still be absent due to the Version 1 coverage
 limitations documented in `documentation.md`.
 
-## Known gaps
+## Deliberate boundaries
 
-- Asset import is not yet recorded. In the controlled MVP, copied assets must
-  be imported in filename order and native references are bound by first use.
-- Native IDs do not survive project reload or independent replay.
-- Titles, subtitles, markers, bin identity, multicamera editing, advanced time
-  remapping, render settings, and specialized effects are not yet covered.
-- Undo/redo capture currently covers `FunctionalUndoCommand`; specialized Qt
-  undo commands may not emit history events.
-- There is no replay engine. Canonical timeline hashes exist, but production
-  still requires persistent entity identities.
-- The log contains file-system and project-derived identifiers. Treat it as
-  potentially sensitive editor data.
-
-The immediate gate is two complete human-reviewed samples for client feedback.
-Persistent IDs and deterministic project-file asset resolution come before
-scaling collection.
+- Reconstruction uses exact state, never UI gesture replay. Semantic action
+  coverage can expand without changing render determinism.
+- The asset manifest records `license_status: pending`, but licensing is not an
+  acceptance gate unless the operator explicitly passes `--require-license`.
+- The project profile has no authoritative audio sample-rate field before a
+  render preset is selected, so capture records it as null instead of guessing.
+- Specialized editing features still depend on Kdenlive's exact MLT snapshot
+  for rendering even when they do not yet have a fine-grained vocabulary label.
+- The log contains file-system and project-derived identifiers. Treat raw
+  sessions as potentially sensitive editor data.

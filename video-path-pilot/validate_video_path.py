@@ -25,6 +25,9 @@ ALLOWED_ACTIONS = {
 ALLOWED_EVENT_TYPES = {
     "session.start",
     "session.end",
+    "session.abort",
+    "session.recovered",
+    "project.context",
     "action",
     "history",
     "ui.command",
@@ -33,6 +36,27 @@ ALLOWED_EVENT_TYPES = {
     "state.checkpoint",
     "state.diff",
 }
+
+SHA256 = re.compile(r"[0-9a-f]{64}")
+
+
+def valid_hash(value: object) -> bool:
+    return isinstance(value, str) and SHA256.fullmatch(value) is not None
+
+
+def validate_state_reference(value: object, prefix: str, errors: list[str]) -> str | None:
+    if not isinstance(value, dict):
+        errors.append(f"{prefix}: requires project_state object")
+        return None
+    if value.get("encoding") not in {"raw", "zstd", "qt-qcompress", "qt-qcompress-base64"}:
+        errors.append(f"{prefix}: unsupported project_state encoding")
+    if not valid_hash(value.get("sha256")):
+        errors.append(f"{prefix}: invalid project_state sha256")
+    if not isinstance(value.get("bytes"), int) or value.get("bytes", 0) < 1:
+        errors.append(f"{prefix}: project_state requires positive bytes")
+    if not isinstance(value.get("path"), str) and not isinstance(value.get("data"), str):
+        errors.append(f"{prefix}: project_state requires path or inline data")
+    return value.get("sha256") if valid_hash(value.get("sha256")) else None
 
 
 def validate(path: Path) -> list[str]:
@@ -44,6 +68,10 @@ def validate(path: Path) -> list[str]:
     session_end_count = 0
     last_event_type: str | None = None
     timeline_hashes: dict[str, str] = {}
+    project_hash: str | None = None
+    project_context_count = 0
+    saw_abort = False
+    saw_v03 = False
 
     with path.open("r", encoding="utf-8") as stream:
         for line_number, raw_line in enumerate(stream, 1):
@@ -68,7 +96,9 @@ def validate(path: Path) -> list[str]:
                 if field not in event:
                     errors.append(f"{prefix}: missing {field}")
 
-            if event.get("schema_version") not in {"0.1.0", "0.2.0"}:
+            schema_version = event.get("schema_version")
+            saw_v03 = saw_v03 or schema_version == "0.3.0"
+            if schema_version not in {"0.1.0", "0.2.0", "0.3.0"}:
                 errors.append(f"{prefix}: unsupported schema_version")
             if session_id is None:
                 session_id = event.get("session_id")
@@ -99,6 +129,30 @@ def validate(path: Path) -> list[str]:
                 session_end_count += 1
                 if session_end_count > 1:
                     errors.append(f"{prefix}: duplicate session.end")
+                if schema_version == "0.3.0" and event.get("state_sidecars_complete") is not True:
+                    errors.append(f"{prefix}: v0.3 session.end requires state_sidecars_complete=true")
+            elif event_type == "session.abort":
+                saw_abort = True
+                if not isinstance(event.get("reason"), str):
+                    errors.append(f"{prefix}: session.abort requires reason")
+            elif event_type == "session.recovered":
+                if not isinstance(event.get("reason"), str):
+                    errors.append(f"{prefix}: session.recovered requires reason")
+            elif event_type == "project.context":
+                project_context_count += 1
+                context = event.get("context")
+                if not isinstance(context, dict):
+                    errors.append(f"{prefix}: project.context requires context object")
+                elif schema_version == "0.3.0":
+                    for field in (
+                        "project_id", "fps_numerator", "fps_denominator", "width", "height",
+                        "sample_aspect_numerator", "sample_aspect_denominator",
+                        "display_aspect_numerator", "display_aspect_denominator", "colorspace",
+                        "progressive", "bottom_field_first", "audio_channels",
+                        "audio_sample_rate", "kdenlive_version", "kdenlive_build", "mlt_version",
+                    ):
+                        if field not in context:
+                            errors.append(f"{prefix}: project.context missing {field}")
             if event_type in {"action", "history"}:
                 action = event.get("action")
                 if action not in ALLOWED_ACTIONS:
@@ -108,6 +162,8 @@ def validate(path: Path) -> list[str]:
                     errors.append(f"{prefix}: action requires timeline_id")
                 if not isinstance(event.get("parameters"), dict):
                     errors.append(f"{prefix}: action requires parameters object")
+                if schema_version == "0.3.0" and not isinstance(event.get("transaction_id"), str):
+                    errors.append(f"{prefix}: v0.3 action requires transaction_id")
             elif event_type == "history" and not isinstance(event.get("label"), str):
                 errors.append(f"{prefix}: history event requires label")
             elif event_type == "ui.command":
@@ -140,7 +196,17 @@ def validate(path: Path) -> list[str]:
                 if isinstance(state_hash, str) and not re.fullmatch(r"[0-9a-f]{64}", state_hash):
                     errors.append(f"{prefix}: invalid state_hash")
                 if isinstance(timeline_id, str) and isinstance(state_hash, str):
+                    if timeline_id in timeline_hashes and timeline_hashes[timeline_id] != state_hash:
+                        errors.append(f"{prefix}: checkpoint does not match timeline hash chain")
                     timeline_hashes[timeline_id] = state_hash
+                if schema_version == "0.3.0":
+                    checkpoint_project_hash = validate_state_reference(event.get("project_state"), prefix, errors)
+                    if project_hash is not None and checkpoint_project_hash != project_hash:
+                        errors.append(f"{prefix}: checkpoint does not match project hash chain")
+                    project_hash = checkpoint_project_hash
+                    proxy = event.get("reference_proxy")
+                    if not isinstance(proxy, dict) or not isinstance(proxy.get("path"), str):
+                        errors.append(f"{prefix}: v0.3 checkpoint requires reference_proxy path")
             elif event_type == "state.diff":
                 for field in ("timeline_id", "label", "boundary", "before_hash", "after_hash"):
                     if not isinstance(event.get(field), str):
@@ -159,6 +225,22 @@ def validate(path: Path) -> list[str]:
                     errors.append(f"{prefix}: before_hash does not continue timeline hash chain")
                 if isinstance(timeline_id, str) and isinstance(after_hash, str):
                     timeline_hashes[timeline_id] = after_hash
+                if schema_version == "0.3.0":
+                    for field in ("transaction_id", "undo_entry_id"):
+                        if not isinstance(event.get(field), str) or not event.get(field):
+                            errors.append(f"{prefix}: v0.3 state.diff requires {field}")
+                    if event.get("boundary") in {"undo", "redo"} and not isinstance(event.get("target_transaction_id"), str):
+                        errors.append(f"{prefix}: v0.3 undo/redo requires target_transaction_id")
+                    before_project = event.get("project_before_hash")
+                    after_project = event.get("project_after_hash")
+                    if not valid_hash(before_project) or not valid_hash(after_project):
+                        errors.append(f"{prefix}: v0.3 state.diff requires valid project before/after hashes")
+                    if project_hash is not None and before_project != project_hash:
+                        errors.append(f"{prefix}: project_before_hash does not continue project hash chain")
+                    state_digest = validate_state_reference(event.get("project_state"), prefix, errors)
+                    if state_digest is not None and after_project != state_digest:
+                        errors.append(f"{prefix}: project_after_hash does not match project_state sha256")
+                    project_hash = after_project if valid_hash(after_project) else state_digest
 
     if event_count == 0:
         errors.append("file has no events")
@@ -166,6 +248,10 @@ def validate(path: Path) -> list[str]:
         errors.append("incomplete session: missing session.end (application may have crashed or been force-quit)")
     elif last_event_type != "session.end":
         errors.append("session.end must be the final event")
+    if saw_abort:
+        errors.append("session was explicitly aborted")
+    if event_count and saw_v03 and project_context_count != 1:
+        errors.append(f"v0.3 session requires exactly one project.context; found {project_context_count}")
     return errors
 
 

@@ -1,6 +1,10 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-3.0-only
-APPDIR="${APPDIR:-$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)}"
+# Never trust an inherited APPDIR. Diagnostic/extracted runs may leave it set
+# to an older AppImage, causing EditPath to launch a Kdenlive path that no
+# longer exists.
+APPDIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+export APPDIR
 export EDIT_PATH_REPO_ROOT="$APPDIR/usr"
 export PATH="$APPDIR/usr/bin:$PATH"
 export LD_LIBRARY_PATH="$APPDIR/usr/lib:$APPDIR/usr/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"

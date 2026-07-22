@@ -6,6 +6,7 @@ set -euo pipefail
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$script_dir/.." && pwd)
 binary="$repo_root/build/collector-gui/EditPath"
+platform=$(uname -s)
 craft_root=${KDENLIVE_PILOT_CRAFT_ROOT:-}
 if [[ -n $craft_root && ! -d $craft_root ]]; then
     echo "error: KDENLIVE_PILOT_CRAFT_ROOT does not exist: $craft_root" >&2
@@ -25,9 +26,13 @@ cmake --build "$repo_root/build/collector-gui"
 
 export EDIT_PATH_REPO_ROOT="$repo_root"
 if [[ -n $craft_root ]]; then
-    export LD_LIBRARY_PATH="$craft_root/lib:$craft_root/usr/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-    [[ -r $craft_root/etc/fonts/fonts.conf ]] && export FONTCONFIG_FILE="$craft_root/etc/fonts/fonts.conf"
-    [[ -d $craft_root/etc/fonts ]] && export FONTCONFIG_PATH="$craft_root/etc/fonts"
+    if [[ $platform == Darwin ]]; then
+        export DYLD_LIBRARY_PATH="$craft_root/lib${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
+    else
+        export LD_LIBRARY_PATH="$craft_root/lib:$craft_root/usr/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+        [[ -r $craft_root/etc/fonts/fonts.conf ]] && export FONTCONFIG_FILE="$craft_root/etc/fonts/fonts.conf"
+        [[ -d $craft_root/etc/fonts ]] && export FONTCONFIG_PATH="$craft_root/etc/fonts"
+    fi
     [[ -d $craft_root/share/mlt-7 ]] && export MLT_DATA="$craft_root/share/mlt-7"
     [[ -d $craft_root/lib/mlt-7 ]] && export MLT_REPOSITORY="$craft_root/lib/mlt-7"
     export MLT_PREFIX="$craft_root"

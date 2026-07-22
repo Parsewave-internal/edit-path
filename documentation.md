@@ -681,31 +681,66 @@ sensitive data. Do not collect passwords or raw typed text. Production use
 requires informed editor consent, access control, retention limits, asset
 licensing records, and a documented deletion process.
 
-## Build and run
+## Current cross-platform build and run
 
-Build using the local Craft environment:
+The authoritative quick start and support matrix are in `README.md`. Windows is
+the primary portable editor deployment: build with
+`packaging/windows/build-editpath.ps1`, extract
+`EditPath-Windows-x64.zip`, verify `SELF-TEST.json`, and start
+`bin\EditPath.exe` rather than `kdenlive.exe`.
 
-```bash
-source /home/tenali/CraftRoot/craft/craftenv.sh
-cmake --build /home/tenali/parsewave/kdenlive-video-path-pilot/build
-```
-
-Run with a new absolute output path for every session:
-
-```bash
-cd /home/tenali/parsewave/kdenlive-video-path-pilot
-video-path-pilot/run-video-path-pilot.sh \
-  /home/tenali/parsewave/pilot-session-005.jsonl
-```
-
-Validate after closing Kdenlive normally:
+Linux is the validated source-build path. macOS uses the same source path but
+does not yet have a signed/notarized bundle. After installing the upstream
+Kdenlive dependencies, the complete MLT plugins, FFmpeg/FFprobe, Python 3.10+
+and Zstandard:
 
 ```bash
-python3 video-path-pilot/validate_video_path.py \
-  /home/tenali/parsewave/pilot-session-005.jsonl
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -e .
+cmake -S . -B build -GNinja -DBUILD_TESTING=OFF
+cmake --build build --parallel
+python -m edit_path doctor
+./video-path-pilot/run-collector-app.sh
 ```
 
-## Version 2 manual acceptance test
+Set `KDENLIVE_PILOT_CRAFT_ROOT=/absolute/path/to/CraftRoot` when using Craft.
+On macOS, the full-build supervisor can also be started with
+`EDIT_PATH_REPO_ROOT="$PWD" ./build/bin/EditPath`. The raw JSONL launcher is a
+diagnostic path, not the normal editor experience:
+
+```bash
+./video-path-pilot/run-video-path-pilot.sh /absolute/path/session.jsonl
+python3 video-path-pilot/validate_video_path.py /absolute/path/session.jsonl
+```
+
+Reconstruction can run natively on any OS with the required tools, or in the
+pinned container on Linux, Windows Docker Desktop, and macOS Docker Desktop.
+`./scripts/run-verification.sh` automatically uses the container for its real
+media test when the host lacks Melt or FFmpeg.
+
+## Current system operation
+
+1. The EditPath supervisor creates a unique session and isolated Kdenlive
+   configuration, then opens the session-owned `edit.kdenlive` project.
+2. Schema-0.3 recorder hooks capture transaction-safe semantic diffs, undo/redo
+   identity, exact compressed project states, project context, and independent
+   checkpoint renders. The supervisor remains hidden while the editor works.
+3. A crash preserves completed JSONL lines and state files. Recovery reopens
+   the same project/configuration, keeps the session and entity IDs, and writes
+   another numbered segment. Segment assembly rejects discontinuous state.
+4. On Finish, the pipeline discovers saved-project resources, verifies them by
+   SHA-256, packages content-addressed copies, and normalizes behavior evidence.
+5. The accepted undo/redo branch selects an exact Kdenlive/MLT state. Melt
+   renders it and FFmpeg/FFprobe compare checkpoints and the final render with
+   independent editor output. This retains serializable effects, transitions,
+   speed changes, keyframes, and titles when their MLT services are installed.
+6. Passing output is atomically published. Any missing service, invalid chain,
+   asset mismatch, or media mismatch produces a specific failure and preserves
+   evidence for quarantine/review. The verbal prompt remains pending until
+   internal staff attach the exact known instruction.
+
+## Historical Version 2 manual acceptance test
 
 1. Start a fresh recording and create/open a project.
 2. Invoke one menu command and one toolbar action.
@@ -716,7 +751,7 @@ python3 video-path-pilot/validate_video_path.py \
 7. Confirm the file contains `ui.command`, `ui.shortcut`, `ui.gesture`, and
    `session.end`; semantic events are additional evidence, not the v2 gate.
 
-## Known Version 2 limitations
+## Historical Version 2 limitations
 
 - A command trigger does not prove that a project mutation succeeded.
 - Global screen coordinates depend on layout, scaling, and monitor geometry.
@@ -729,7 +764,12 @@ python3 video-path-pilot/validate_video_path.py \
 - There are no canonical timeline snapshots, state diffs, or replay engine.
 - Semantic Version 1 hooks still miss grouped and specialized edit paths.
 
-## Future development sequence
+## Historical Version 2 roadmap
+
+This roadmap is retained as design history. Schema 0.3 and the exact-state
+pipeline now implement its identity, snapshot, diff, reconstruction, packaging,
+and automated-gate goals; remaining production work is platform distribution,
+interactive acceptance, privacy policy, and broader real-project coverage.
 
 1. Add canonical UUIDs for assets, tracks, clip instances, effects, and
    sequences.

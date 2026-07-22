@@ -22,6 +22,10 @@ fi
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 source_root=$(cd -- "$script_dir/.." && pwd)
 binary="$source_root/build/bin/kdenlive"
+platform=$(uname -s)
+if [[ $platform == Darwin && -x $source_root/build/bin/kdenlive.app/Contents/MacOS/kdenlive ]]; then
+    binary="$source_root/build/bin/kdenlive.app/Contents/MacOS/kdenlive"
+fi
 craft_root=${KDENLIVE_PILOT_CRAFT_ROOT:-}
 
 if [[ ! -x $binary ]]; then
@@ -35,38 +39,41 @@ if [[ -n $craft_root ]]; then
         exit 1
     fi
     export PATH="$craft_root/dev-utils/bin:$craft_root/bin:$craft_root/libexec:$PATH"
-    export LD_LIBRARY_PATH="$craft_root/lib:$craft_root/usr/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    if [[ $platform == Darwin ]]; then
+        export DYLD_LIBRARY_PATH="$craft_root/lib${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
+    else
+        export LD_LIBRARY_PATH="$craft_root/lib:$craft_root/usr/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    fi
     export PKG_CONFIG_PATH="$craft_root/lib/pkgconfig:$craft_root/share/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
 fi
 
-# Craft installations do not always ship their own fontconfig configuration.
-# Pointing FONTCONFIG_FILE at a missing file makes Qt render every label as a
-# square, so select the first configuration that actually exists.
-fontconfig_file=""
-for candidate in \
-    "${FONTCONFIG_FILE:-}" \
-    "${craft_root:+$craft_root/etc/fonts/fonts.conf}" \
-    /etc/fonts/fonts.conf \
-    /usr/etc/fonts/fonts.conf; do
-    if [[ -n $candidate && -r $candidate ]]; then
-        fontconfig_file=$candidate
-        break
-    fi
-done
-if [[ -z $fontconfig_file ]]; then
-    echo "error: no readable fontconfig configuration was found" >&2
-    exit 1
-fi
-export FONTCONFIG_FILE=$fontconfig_file
-export FONTCONFIG_PATH=$(dirname -- "$fontconfig_file")
-
-# Fail clearly instead of launching an unreadable editor when a minimal
-# container has fontconfig but no installed font files.
-if command -v fc-match >/dev/null 2>&1; then
-    matched_font=$(fc-match --format '%{file}\n' sans-serif 2>/dev/null || true)
-    if [[ -z $matched_font || ! -r $matched_font ]]; then
-        echo "error: no usable UI font was found; install DejaVu or Liberation fonts" >&2
+# macOS uses Core Text rather than fontconfig. Linux Craft installations do not
+# always ship their own font configuration, so validate it only there.
+if [[ $platform != Darwin ]]; then
+    fontconfig_file=""
+    for candidate in \
+        "${FONTCONFIG_FILE:-}" \
+        "${craft_root:+$craft_root/etc/fonts/fonts.conf}" \
+        /etc/fonts/fonts.conf \
+        /usr/etc/fonts/fonts.conf; do
+        if [[ -n $candidate && -r $candidate ]]; then
+            fontconfig_file=$candidate
+            break
+        fi
+    done
+    if [[ -z $fontconfig_file ]]; then
+        echo "error: no readable fontconfig configuration was found" >&2
         exit 1
+    fi
+    export FONTCONFIG_FILE=$fontconfig_file
+    export FONTCONFIG_PATH=$(dirname -- "$fontconfig_file")
+
+    if command -v fc-match >/dev/null 2>&1; then
+        matched_font=$(fc-match --format '%{file}\n' sans-serif 2>/dev/null || true)
+        if [[ -z $matched_font || ! -r $matched_font ]]; then
+            echo "error: no usable UI font was found; install DejaVu or Liberation fonts" >&2
+            exit 1
+        fi
     fi
 fi
 if [[ -n $craft_root ]]; then
@@ -82,7 +89,11 @@ if [[ $state_dir != /* ]]; then
     exit 2
 fi
 log_parent=$(cd -- "$(dirname -- "$log_path")" && pwd)
-state_dir=$(realpath -m -- "$state_dir")
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "error: python3 is required to resolve the state-sidecar path" >&2
+    exit 1
+fi
+state_dir=$(python3 -c 'import pathlib, sys; print(pathlib.Path(sys.argv[1]).resolve())' "$state_dir")
 state_parent=$(dirname -- "$state_dir")
 if [[ $state_parent != "$log_parent" && $state_parent != "$log_parent"/* ]]; then
     echo "error: state sidecars must stay beneath the session log directory: $log_parent" >&2

@@ -35,12 +35,56 @@ video-free and must still pass duration and audio-structure checks.
 
 ## Local workflow
 
+The CLI is platform-neutral. Use `python3` on Linux/macOS or `py -3` in a
+source checkout on Windows. In the Windows portable package, change into
+`bin` and use `.\python\python.exe -m edit_path` so the adjacent packaged
+module is on Python's import path.
+
 ```bash
 python3 -m edit_path doctor
 python3 -m edit_path inspect /samples/session-001
 python3 -m edit_path reconstruct /samples/session-001 --output /tmp/final.mp4
 python3 -m edit_path process /samples/session-001 /dataset
 python3 -m edit_path index /dataset
+```
+
+`doctor` must find Zstandard, Melt (or `mlt-melt`), FFmpeg, and FFprobe. A
+Kdenlive project can also require MLT modules beyond the executables themselves.
+Install the complete Kdenlive/MLT runtime when using effects, titles, Lottie,
+or audio preview: the commonly required services include `avformat`, `xml`,
+`qimage` or `pixbuf`, `kdenlivetitle`, Glaxnimate, Frei0r, AVFilter, and SDL or
+RtAudio. The render gate fails instead of silently accepting a project when a
+used service is unavailable.
+
+### Container workflow on any host OS
+
+Docker Engine on Linux and Docker Desktop on Windows/macOS avoid relying on the
+host's media packages. Build the reviewed renderer once:
+
+```bash
+docker build -t edit-path-reconstruction -f reconstruction/Containerfile .
+```
+
+Then bind an absolute session directory read-only and a writable dataset
+directory. The same command works in Bash; in PowerShell, replace the two
+source values with absolute Windows paths and quote each complete `--mount`
+argument.
+
+```bash
+docker run --rm \
+  --mount type=bind,source=/absolute/path/session-001,target=/session,readonly \
+  --mount type=bind,source=/absolute/path/dataset,target=/dataset \
+  edit-path-reconstruction process /session /dataset
+```
+
+The container performs reconstruction only; the interactive EditPath/Kdenlive
+collector still runs natively on the editor's operating system. The repository
+verification script uses this container automatically when the host lacks
+Melt or FFmpeg, so a missing host runtime cannot turn the real-media test into
+a false success:
+
+```bash
+./scripts/run-verification.sh
 ```
 
 The immutable accepted bundle contains `final.mp4`, a portable
@@ -78,6 +122,25 @@ python3 -m edit_path process /samples/session-001 /dataset \
 
 The lock compares exact Melt/MLT and FFmpeg version strings and, when set, the
 container image digest. Every render report also records the observed runtime.
+
+## Collection-to-publication flow
+
+```text
+EditPath supervisor
+  -> isolated Kdenlive + edit.kdenlive + session.json
+  -> raw-events-NNN.jsonl + exact states + checkpoint references
+  -> crash recovery and validated segment assembly when necessary
+  -> content-addressed assets + independent editor render
+  -> exact accepted-state reconstruction
+  -> checkpoint and final media gates
+  -> accepted/<session_id> or quarantine/<session_id>
+```
+
+The limited semantic cut/trim adapter remains diagnostic. Publication uses the
+exact accepted Kdenlive/MLT state, so serializable effects, transitions, speed
+changes, keyframes, titles, and other project state are retained when their MLT
+services are installed. A missing service or media mismatch fails the render
+gate and preserves evidence for inspection.
 
 ## Human QA and dataset assembly
 

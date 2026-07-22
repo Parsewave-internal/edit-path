@@ -747,11 +747,11 @@ QJsonObject VideoPathRecorder::diffSnapshots(const QJsonObject &before, const QJ
     return diff;
 }
 
-void VideoPathRecorder::captureTimelineCheckpoint(const QString &label)
+bool VideoPathRecorder::captureTimelineCheckpoint(const QString &label)
 {
     const QJsonObject snapshot = currentTimelineSnapshot();
     if (snapshot.isEmpty()) {
-        return;
+        return false;
     }
     const QByteArray canonical = QJsonDocument(snapshot).toJson(QJsonDocument::Compact);
     const QString timelineId = snapshot.value(QStringLiteral("timeline_id")).toString();
@@ -775,6 +775,7 @@ void VideoPathRecorder::captureTimelineCheckpoint(const QString &label)
     addTransactionFields(event);
     flushPendingActions(true);
     writeEvent(event);
+    return true;
 }
 
 void VideoPathRecorder::captureTimelineChange(const QString &label, const QString &boundary)

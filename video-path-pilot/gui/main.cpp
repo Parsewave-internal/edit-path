@@ -231,9 +231,11 @@ private:
                 m_launchProgress->setVisible(false);
                 setStatus(QStringLiteral("Kdenlive is ready. Continue editing in the Kdenlive window."));
                 m_activity->appendPlainText(QStringLiteral("Kdenlive reported that its editor interface is ready."));
-                QTimer::singleShot(750, this, [this] {
-                    if (m_editor.state() != QProcess::NotRunning) hide();
-                });
+                QFile acknowledgement(m_readyFile + QStringLiteral(".ack"));
+                if (acknowledgement.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+                    acknowledgement.write(QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs).toUtf8());
+                }
+                if (m_editor.state() != QProcess::NotRunning) hide();
             }
         });
     }
@@ -404,6 +406,7 @@ private:
     {
         m_finish->setEnabled(false);
         m_workerPurpose = QStringLiteral("finalize");
+        m_workerTranscript.clear();
         setStatus(QStringLiteral("Discovering project assets, generating sample.json, reconstructing the edit, and comparing renders…"));
         m_worker.start(pythonExecutable(), {m_repoRoot + QStringLiteral("/video-path-pilot/job_pipeline.py"), QStringLiteral("finalize-freeform"), m_session});
     }
@@ -414,6 +417,14 @@ private:
         const QString errors = QString::fromUtf8(m_worker.readAllStandardError()).trimmed();
         if (!output.isEmpty()) m_activity->appendPlainText(output);
         if (!errors.isEmpty()) m_activity->appendPlainText(errors);
+        if (!output.isEmpty() || !errors.isEmpty()) {
+            const QString message = output + (output.isEmpty() || errors.isEmpty() ? QString() : QStringLiteral("\n")) + errors;
+            m_workerTranscript += message + QStringLiteral("\n");
+            if (!m_session.isEmpty()) {
+                QFile log(QDir(m_session).filePath(QStringLiteral("supervisor-activity.log")));
+                if (log.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) log.write((message + QStringLiteral("\n")).toUtf8());
+            }
+        }
     }
 
     void workerFinished(int exitCode, QProcess::ExitStatus status)
@@ -464,7 +475,10 @@ private:
                           !mediaPassed);
             } else {
                 m_finish->setEnabled(true);
-                setStatus(QStringLiteral("Sample generation failed. Review Activity and correct the project, render, or media files."), true);
+                const QString detail = m_workerTranscript.trimmed().section(QLatin1Char('\n'), -1);
+                setStatus(detail.isEmpty() ? QStringLiteral("Sample generation failed. Review Activity and correct the project, render, or media files.")
+                                           : QStringLiteral("Sample generation failed: %1").arg(detail),
+                          true);
             }
         }
         m_workerPurpose.clear();
@@ -511,7 +525,7 @@ private:
         }
     }
 
-    QString m_repoRoot, m_session, m_sessionId, m_configName, m_workerPurpose, m_readyFile;
+    QString m_repoRoot, m_session, m_sessionId, m_configName, m_workerPurpose, m_readyFile, m_workerTranscript;
     int m_segment{0};
     int m_lastEditorExitCode{0};
     QProcess m_editor, m_worker;

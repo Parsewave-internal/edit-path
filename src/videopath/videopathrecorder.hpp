@@ -43,7 +43,9 @@ public:
     void setProjectStateProvider(std::function<QByteArray()> provider);
     void recordProjectContext(const QJsonObject &context);
     void recordLifecycle(const QString &eventType, const QString &reason, const QJsonObject &details = {});
-    void captureTimelineCheckpoint(const QString &label);
+    /** Capture and persist a full timeline baseline. Returns false while no
+     * usable timeline exists (notably during asynchronous project loading). */
+    bool captureTimelineCheckpoint(const QString &label);
     void captureTimelineChange(const QString &label, const QString &boundary);
 
 private:

@@ -44,6 +44,8 @@ class MvpTests(unittest.TestCase):
         self.assertIn("The previous editing session ended unexpectedly", source)
         self.assertIn('KDENLIVE_VIDEO_PATH_READY_FILE', source)
         self.assertIn('m_launchProgress->setRange(0, 0)', source)
+        self.assertIn('m_readyFile + QStringLiteral(".ack")', source)
+        self.assertIn('QStringLiteral("supervisor-activity.log")', source)
         self.assertIn('writeManifest(QStringLiteral("recovery_available"))', source)
         self.assertIn('setsid --wait "$binary"', launcher)
         self.assertIn("restart_count > 3", launcher)
@@ -54,6 +56,24 @@ class MvpTests(unittest.TestCase):
         self.assertIn("pCore->projectManager()->saveFile()", editor_main)
         self.assertIn('qEnvironmentVariable("KDENLIVE_VIDEO_PATH_READY_FILE")', editor_main)
         self.assertIn('readyFile.write("ready\\n")', editor_main)
+        self.assertIn('document == nullptr || document->loading', editor_main)
+        self.assertIn('captureTimelineCheckpoint(QStringLiteral("gui.ready"))', editor_main)
+        self.assertNotIn('QTimer::singleShot(1000, &app, [recorderReadyFile]', editor_main)
+
+    def test_timewarp_producer_resolves_to_its_source_asset(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            media = root / "source.mp4"
+            media.write_bytes(b"media")
+            project = root / "edit.kdenlive"
+            project.write_text(
+                f'''<mlt root="{root}"><profile frame_rate_num="25" frame_rate_den="1" width="1920" height="1080"/>
+                <chain><property name="kdenlive:id">5</property><property name="mlt_service">avformat</property><property name="resource">{media}</property></chain>
+                <producer><property name="kdenlive:id">5</property><property name="mlt_service">timewarp</property><property name="resource">2.25:{media}</property></producer></mlt>''',
+                encoding="utf-8",
+            )
+            resources, _ = project_resources(project)
+            self.assertEqual(resources, {"5": media})
 
     def test_windows_build_uses_supported_visual_studio_and_craft_launcher(self):
         root = Path(__file__).parents[2]

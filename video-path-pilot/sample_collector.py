@@ -70,6 +70,8 @@ def bind_project_assets(project: Path, root: Path, assets: list[dict]) -> list[d
                 candidate = urllib.parse.unquote(urllib.parse.urlparse(candidate).path)
             if candidate.startswith("timewarp:"):
                 candidate = candidate.split(":", 2)[-1]
+            elif properties.get("mlt_service") == "timewarp" and ":" in candidate:
+                candidate = candidate.split(":", 1)[1]
             value = Path(candidate)
             if not value.is_absolute():
                 value = project.parent / value

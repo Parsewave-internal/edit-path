@@ -810,10 +810,12 @@ depends solely on a manual Ctrl+S or an opaque stale file.
 Further remote-X11 testing showed that Kdenlive could take long enough to build
 its interface that the hidden supervisor made startup look like a failure.
 EditPath now stays visible with an indeterminate progress bar and a clear
-startup message. Each recording segment receives a unique ready-signal path;
-Kdenlive writes that signal atomically after its GUI event loop starts, and only
-then does the supervisor hide. This is a real readiness handshake rather than a
-fixed delay.
+startup message. Each recording segment receives a unique ready-signal path.
+Kdenlive writes that signal atomically only after the active document has
+finished its asynchronous load and the recorder has persisted a full timeline
+checkpoint; only then does the supervisor hide. This is a real editor-and-data
+readiness handshake rather than a fixed delay. In particular, it prevents the
+first mutation after crash recovery from being consumed as a late baseline.
 
 Crash status is now persisted as `recovery_available` immediately when the
 Kdenlive process exits abnormally, before asynchronous trajectory validation.
@@ -831,6 +833,16 @@ trajectory for training and review. Offline reconstruction explicitly permits
 MLT rendering without a display server. The final-state media gate remains
 authoritative; process replays are derived artifacts and do not replace the
 normalized trajectory or exact state chain.
+
+A subsequent acceptance run exercised a speed-changed clip and exposed an MLT
+identity edge case: timewarp producers store `resource` as
+`speed:/absolute/source` while retaining the original Kdenlive bin ID. Asset
+discovery now resolves that representation to the underlying source instead of
+reporting two resources for one bin item. Supervisor worker output is appended
+to `supervisor-activity.log`, and finalization failures show their concrete last
+error in the GUI. GUI-ready acknowledgment is also written beside each ready
+signal and the supervisor hides synchronously, making a missed hide observable
+and eliminating the delayed-hide race.
 
 ## Historical Version 2 manual acceptance test
 

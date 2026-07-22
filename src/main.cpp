@@ -604,14 +604,32 @@ int main(int argc, char *argv[])
         }
         const QString recorderReadyFile = qEnvironmentVariable("KDENLIVE_VIDEO_PATH_READY_FILE");
         if (!recorderReadyFile.isEmpty()) {
-            QTimer::singleShot(1000, &app, [recorderReadyFile]() {
+            // Project opening is asynchronous. Do not tell the supervisor to
+            // hide until the restored timeline is loaded and its baseline is
+            // durably recorded; otherwise the first user edit after recovery
+            // can be mistaken for a late baseline and disappear from the path.
+            auto *readyTimer = new QTimer(&app);
+            readyTimer->setInterval(250);
+            QObject::connect(readyTimer, &QTimer::timeout, &app, [readyTimer, recorderReadyFile]() {
+                KdenliveDoc *document = pCore->currentDoc();
+                if (document == nullptr || document->loading) {
+                    return;
+                }
+                if (!VideoPathRecorder::instance().captureTimelineCheckpoint(QStringLiteral("gui.ready"))) {
+                    return;
+                }
                 QSaveFile readyFile(recorderReadyFile);
                 if (!readyFile.open(QIODevice::WriteOnly) || readyFile.write("ready\n") != 6 || !readyFile.commit()) {
                     qWarning() << "Could not write recorder GUI-ready signal" << recorderReadyFile;
+                    return;
                 }
+                readyTimer->stop();
+                readyTimer->deleteLater();
             });
+            readyTimer->start();
+        } else {
+            VideoPathRecorder::instance().captureTimelineCheckpoint(QStringLiteral("gui.ready"));
         }
-        VideoPathRecorder::instance().captureTimelineCheckpoint(QStringLiteral("gui.ready"));
         result = app.exec();
     }
     Core::clean();

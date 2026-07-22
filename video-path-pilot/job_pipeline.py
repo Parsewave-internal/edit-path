@@ -126,11 +126,15 @@ def properties(element: ET.Element) -> dict[str, str]:
     return {item.get("name", ""): item.text or "" for item in element.findall("property")}
 
 
-def resource_path(value: str, project_root: Path) -> Path:
+def resource_path(value: str, project_root: Path, service: str = "") -> Path:
     value = value.strip()
     if value.startswith("timewarp:"):
         parts = value.split(":", 2)
         value = parts[2] if len(parts) == 3 else ""
+    elif service == "timewarp" and ":" in value:
+        # MLT serializes timewarp resources as "speed:/absolute/source";
+        # the service name, rather than a timewarp: prefix, carries the type.
+        value = value.split(":", 1)[1]
     if value.startswith("file:"):
         value = urllib.request.url2pathname(urllib.parse.urlparse(value).path)
         if os.name == "nt" and len(value) >= 3 and value[0] in "/\\" and value[2] == ":":
@@ -152,7 +156,7 @@ def project_resources(project: Path) -> tuple[dict[str, Path], dict]:
         props = properties(element)
         native_id, resource = props.get("kdenlive:id"), props.get("kdenlive:originalurl") or props.get("resource")
         if not native_id or not resource or props.get("mlt_service") in {"color", "qtext", "kdenlivetitle"}: continue
-        candidate = resource_path(resource, project_root)
+        candidate = resource_path(resource, project_root, props.get("mlt_service", ""))
         previous = resources.get(native_id)
         if previous and previous != candidate: raise ValueError(f"Kdenlive bin ID {native_id} maps to multiple resources")
         resources[native_id] = candidate

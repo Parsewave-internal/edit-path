@@ -420,10 +420,11 @@ private:
         arguments = {QStringLiteral("--config"), m_configName, QStringLiteral("--no-welcome")};
         if (QFileInfo::exists(project)) arguments.append(project);
 #else
-        program = m_repoRoot + QStringLiteral("/video-path-pilot/run-video-path-pilot.sh");
-        arguments = {raw};
+        program = QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("kdenlive"));
+        arguments = {QStringLiteral("--config"), m_configName, QStringLiteral("--no-welcome")};
         if (QFileInfo::exists(project)) arguments.append(project);
 #endif
+        m_activity->appendPlainText(QStringLiteral("Editor executable: %1").arg(QDir::toNativeSeparators(program)));
         m_editor.start(program, arguments);
     }
 

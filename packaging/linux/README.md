@@ -23,6 +23,8 @@ it from a compiled splash-screen resource that automatic source scanning cannot
 see.
 The package also includes KDE KIO workers for local file browsing and the
 Frei0r runtime effects, with their lookup paths established by `AppRun`.
+The Linux supervisor launches the adjacent packaged `kdenlive` executable
+directly; the source-tree shell launcher is not part of the portable runtime.
 
 ## Test
 

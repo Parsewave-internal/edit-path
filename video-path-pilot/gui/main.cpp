@@ -83,6 +83,33 @@ QString guiRuntimeProblem()
     }
     return {};
 }
+
+QString friendlyFinalizationError(const QString &details)
+{
+    const QString value = details.toLower();
+    if (value.contains(QStringLiteral("rendered video")) && value.contains(QStringLiteral("exactly one"))) {
+        return QStringLiteral("We found more than one possible final video. Keep only your finished render in the session folder, then try again.");
+    }
+    if (value.contains(QStringLiteral("contains no resolvable media")) || value.contains(QStringLiteral("no resolvable media resources"))) {
+        return QStringLiteral("The saved project does not contain usable media yet. Return to Kdenlive, add your clips to the project, save, and try again.");
+    }
+    if (value.contains(QStringLiteral("checkpoint")) || value.contains(QStringLiteral("hash_chain")) || value.contains(QStringLiteral("branch_resolution"))) {
+        return QStringLiteral("We could not verify every recorded editing step. Your project and render are safe, but this session needs technical review "
+                              "before it can become a dataset sample.");
+    }
+    if (value.contains(QStringLiteral("final render validation")) || value.contains(QStringLiteral("media reconstruction"))) {
+        return QStringLiteral(
+            "The recreated video did not match your final render closely enough. Check that you rendered the latest saved timeline, then try again.");
+    }
+    if (value.contains(QStringLiteral("melt")) || value.contains(QStringLiteral("ffmpeg")) || value.contains(QStringLiteral("ffprobe"))) {
+        return QStringLiteral("A required video-processing component is unavailable. Your edit is safe; ask the EditPath team to check this installation.");
+    }
+    if (value.contains(QStringLiteral("completed sample already exists"))) {
+        return QStringLiteral("A dataset sample has already been created for this session. Open it below or start a new edit.");
+    }
+    return QStringLiteral(
+        "We couldn't create the dataset sample. Your project and final video are safe. Open technical details and share them with the EditPath team.");
+}
 } // namespace
 
 class RecorderWindow final : public QMainWindow
@@ -91,16 +118,16 @@ public:
     RecorderWindow()
         : m_repoRoot(repositoryRoot())
     {
-        setWindowTitle(QStringLiteral("Edit Path Recorder MVP"));
-        resize(720, 500);
+        setWindowTitle(QStringLiteral("EditPath"));
+        resize(760, 540);
         buildUi();
         restoreLastSession();
         const QString runtimeProblem = guiRuntimeProblem();
         if (m_repoRoot.isEmpty()) {
-            setStatus(QStringLiteral("Recorder installation was not found."), true);
+            setStatus(QStringLiteral("EditPath is not installed correctly. Your files are unaffected; please contact the EditPath team."), true);
             show();
         } else if (!runtimeProblem.isEmpty()) {
-            setStatus(runtimeProblem, true);
+            setStatus(QStringLiteral("EditPath is missing a required video component. Your files are unaffected; please contact the EditPath team."), true);
             m_activity->appendPlainText(runtimeProblem);
             show();
         } else {
@@ -118,7 +145,8 @@ protected:
     void closeEvent(QCloseEvent *event) override
     {
         if (m_editor.state() != QProcess::NotRunning || m_worker.state() != QProcess::NotRunning) {
-            QMessageBox::warning(this, QStringLiteral("Task active"), QStringLiteral("Wait for the active task or close Kdenlive normally."));
+            QMessageBox::warning(this, QStringLiteral("Please wait"),
+                                 QStringLiteral("EditPath is still working. Wait for it to finish, or close Kdenlive normally first."));
             event->ignore();
             return;
         }
@@ -130,12 +158,14 @@ private:
     {
         auto *central = new QWidget;
         auto *layout = new QVBoxLayout(central);
-        m_title = new QLabel(QStringLiteral("<h1>Editing Session</h1><p>Kdenlive has closed. Review the session status below.</p>"));
+        layout->setContentsMargins(28, 24, 28, 24);
+        layout->setSpacing(12);
+        m_title = new QLabel(QStringLiteral("<h1>EditPath</h1><p>Your editing session is safe. Follow the next step shown below.</p>"));
         m_title->setWordWrap(true);
         layout->addWidget(m_title);
         m_instructions =
-            new QLabel(QStringLiteral("Before finishing, render exactly one .mp4, .mov, .mkv, or .webm directly into the displayed session folder. "
-                                      "H.264 is not required. The project is saved automatically as <b>edit.kdenlive</b>."));
+            new QLabel(QStringLiteral("<b>When your edit is finished:</b> save the project, then render one final video into the session folder shown below. "
+                                      "Supported formats: MP4, MOV, MKV, or WebM."));
         m_instructions->setWordWrap(true);
         layout->addWidget(m_instructions);
         m_status = new QLabel;
@@ -147,20 +177,20 @@ private:
         m_launchProgress->setVisible(false);
         layout->addWidget(m_launchProgress);
         setStatus(QStringLiteral("Checking the editing session…"));
-        layout->addWidget(new QLabel(QStringLiteral("<b>Session folder</b>")));
+        layout->addWidget(new QLabel(QStringLiteral("<b>Where your work is saved</b>")));
         m_sessionLabel = new QLabel(QStringLiteral("No session created"));
         m_sessionLabel->setWordWrap(true);
         m_sessionLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
         layout->addWidget(m_sessionLabel);
 
         auto *primary = new QHBoxLayout;
-        m_start = new QPushButton(QStringLiteral("Start Another Editing Session"));
+        m_start = new QPushButton(QStringLiteral("Start New Edit"));
         m_start->setMinimumHeight(42);
         m_start->setVisible(false);
-        m_recover = new QPushButton(QStringLiteral("Recover and Continue"));
+        m_recover = new QPushButton(QStringLiteral("Resume Editing"));
         m_recover->setMinimumHeight(42);
         m_recover->setVisible(false);
-        m_finish = new QPushButton(QStringLiteral("Finish Session"));
+        m_finish = new QPushButton(QStringLiteral("Create Dataset Sample"));
         m_finish->setMinimumHeight(42);
         m_finish->setEnabled(false);
         primary->addWidget(m_start);
@@ -170,21 +200,30 @@ private:
         auto *secondary = new QHBoxLayout;
         m_openSession = new QPushButton(QStringLiteral("Open Session Folder"));
         m_openSession->setEnabled(false);
-        m_openCompleted = new QPushButton(QStringLiteral("Open Generated Sample"));
+        m_openCompleted = new QPushButton(QStringLiteral("Open Dataset Sample"));
         m_openCompleted->setEnabled(false);
         secondary->addWidget(m_openSession);
         secondary->addWidget(m_openCompleted);
         secondary->addStretch();
         layout->addLayout(secondary);
+        m_toggleDetails = new QPushButton(QStringLiteral("Show technical details"));
+        m_toggleDetails->setFlat(true);
+        layout->addWidget(m_toggleDetails, 0, Qt::AlignLeft);
         m_activity = new QPlainTextEdit;
         m_activity->setReadOnly(true);
         m_activity->setMaximumBlockCount(300);
+        m_activity->setVisible(false);
         layout->addWidget(m_activity, 1);
         setCentralWidget(central);
+        connect(m_toggleDetails, &QPushButton::clicked, this, [this] {
+            const bool show = !m_activity->isVisible();
+            m_activity->setVisible(show);
+            m_toggleDetails->setText(show ? QStringLiteral("Hide technical details") : QStringLiteral("Show technical details"));
+        });
 
         connect(m_start, &QPushButton::clicked, this, [this] {
-            if (m_confirmNewSession && QMessageBox::question(this, QStringLiteral("Discard current session?"),
-                                                             QStringLiteral("The current session has not been finalized. Start a new session anyway?"),
+            if (m_confirmNewSession && QMessageBox::question(this, QStringLiteral("Start a new edit?"),
+                                                             QStringLiteral("This session has not been turned into a dataset sample. Start a new edit anyway?"),
                                                              QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes) {
                 return;
             }
@@ -212,7 +251,7 @@ private:
                 m_readyPoll.stop();
                 m_launchProgress->setVisible(false);
                 writeManifest(QStringLiteral("start_failed"));
-                setStatus(QStringLiteral("Kdenlive could not start. Check X11 and the console log."), true);
+                setStatus(QStringLiteral("Kdenlive could not open. Your session is safe. Show technical details and share them with the EditPath team."), true);
                 m_start->setVisible(true);
                 showCompletionWindow();
             }
@@ -229,7 +268,7 @@ private:
             if (!m_readyFile.isEmpty() && QFileInfo::exists(m_readyFile)) {
                 m_readyPoll.stop();
                 m_launchProgress->setVisible(false);
-                setStatus(QStringLiteral("Kdenlive is ready. Continue editing in the Kdenlive window."));
+                setStatus(QStringLiteral("Kdenlive is ready. You can continue editing."));
                 m_activity->appendPlainText(QStringLiteral("Kdenlive reported that its editor interface is ready."));
                 QFile acknowledgement(m_readyFile + QStringLiteral(".ack"));
                 if (acknowledgement.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
@@ -285,7 +324,7 @@ private:
         if (status == QStringLiteral("ready_to_finish")) {
             m_finish->setEnabled(true);
             offerConfirmedNewSession();
-            setStatus(QStringLiteral("Previous recording is ready to finish."));
+            setStatus(QStringLiteral("Your previous edit is ready. Add the final rendered video to this folder, then create the dataset sample."));
             m_showExistingCompletion = true;
         } else if (status == QStringLiteral("recovery_available") || status == QStringLiteral("recording")) {
             const QString project = QDir(previous).filePath(QStringLiteral("edit.kdenlive"));
@@ -293,18 +332,17 @@ private:
             m_recover->setVisible(canRecover);
             offerConfirmedNewSession();
             writeManifest(QStringLiteral("recovery_available"));
-            setStatus(
-                canRecover
-                    ? QStringLiteral("The previous editing session ended unexpectedly. Choose Recover and Continue to reopen its latest saved project.")
-                    : QStringLiteral("The previous session ended before a recoverable project was saved. Its event evidence remains in the session folder."),
-                true);
+            setStatus(canRecover ? QStringLiteral(
+                                       "Kdenlive closed unexpectedly, but your saved work is available. Click Resume Editing to continue where you left off.")
+                                 : QStringLiteral("Kdenlive closed before the project could be saved. The session folder is available for technical review."),
+                      true);
             m_activity->appendPlainText(canRecover
                                             ? QStringLiteral("Interrupted session detected. Recovery will create recording segment %1.").arg(m_segment + 1)
                                             : QStringLiteral("Interrupted session detected, but edit.kdenlive is missing."));
             m_showExistingCompletion = true;
         } else if (status == QStringLiteral("packaged")) {
             m_openCompleted->setEnabled(true);
-            setStatus(QStringLiteral("Previous sample was generated."));
+            setStatus(QStringLiteral("Your dataset sample is ready."));
             m_start->setVisible(true);
             m_showExistingCompletion = true;
         }
@@ -313,7 +351,7 @@ private:
     void startNewSession()
     {
         m_confirmNewSession = false;
-        m_start->setText(QStringLiteral("Start Another Editing Session"));
+        m_start->setText(QStringLiteral("Start New Edit"));
         const QString stamp = QDateTime::currentDateTimeUtc().toString(QStringLiteral("yyyyMMdd_HHmmss"));
         const QString suffix = QUuid::createUuid().toString(QUuid::WithoutBraces).left(8);
         m_session = QDir(sessionsRoot()).filePath(QStringLiteral("session_%1_%2").arg(stamp, suffix));
@@ -321,7 +359,7 @@ private:
         m_configName = QStringLiteral("edit-path-%1rc").arg(suffix);
         m_segment = 1;
         if (!QDir().mkpath(m_session)) {
-            setStatus(QStringLiteral("Could not create session folder."), true);
+            setStatus(QStringLiteral("EditPath could not create a folder for this edit. Check that your Videos folder is writable, then try again."), true);
             return;
         }
         m_sessionLabel->setText(m_session);
@@ -341,7 +379,8 @@ private:
             return;
         }
         showCompletionWindow();
-        m_title->setText(QStringLiteral("<h1>Starting Kdenlive</h1><p>Your editing session is being prepared. Keep this window open.</p>"));
+        m_instructions->setVisible(false);
+        m_title->setText(QStringLiteral("<h1>Opening your editor…</h1><p>EditPath is preparing Kdenlive and protecting your session.</p>"));
         m_launchProgress->setVisible(true);
         m_recover->setVisible(false);
         m_start->setVisible(false);
@@ -368,7 +407,7 @@ private:
         m_editor.setWorkingDirectory(m_repoRoot);
         m_editor.setProcessChannelMode(QProcess::MergedChannels);
         m_editor.setStandardOutputFile(console, QIODevice::Append);
-        setStatus(QStringLiteral("Starting Kdenlive. Please wait; the recorder will hide itself when the editor reports that it is ready."));
+        setStatus(QStringLiteral("Please wait. This window will hide automatically when Kdenlive is ready."));
         m_activity->appendPlainText(QStringLiteral("Starting recording segment %1…").arg(number));
         QString program;
         QStringList arguments;
@@ -392,7 +431,8 @@ private:
         m_lastEditorExitCode = exitCode;
         m_lastEditorExitCrashed = exitStatus != QProcess::NormalExit || exitCode != 0;
         if (m_lastEditorExitCrashed) writeManifest(QStringLiteral("recovery_available"));
-        m_title->setText(QStringLiteral("<h1>Editing Session</h1><p>Kdenlive has closed. Review the session status below.</p>"));
+        m_title->setText(QStringLiteral("<h1>EditPath</h1><p>Kdenlive has closed. Your work is being checked and saved.</p>"));
+        m_instructions->setVisible(true);
         showCompletionWindow();
         m_activity->appendPlainText(m_lastEditorExitCrashed
                                         ? QStringLiteral("Kdenlive crashed with signal/exit code %1; checking recoverable evidence…").arg(exitCode)
@@ -407,7 +447,10 @@ private:
         m_finish->setEnabled(false);
         m_workerPurpose = QStringLiteral("finalize");
         m_workerTranscript.clear();
-        setStatus(QStringLiteral("Discovering project assets, generating sample.json, reconstructing the edit, and comparing renders…"));
+        m_instructions->setVisible(false);
+        m_title->setText(
+            QStringLiteral("<h1>Creating your dataset sample…</h1><p>You can leave the files where they are. EditPath is doing the packaging and checks.</p>"));
+        setStatus(QStringLiteral("This can take several minutes for a long edit. Keep EditPath open until it finishes."));
         m_worker.start(pythonExecutable(), {m_repoRoot + QStringLiteral("/video-path-pilot/job_pipeline.py"), QStringLiteral("finalize-freeform"), m_session});
     }
 
@@ -436,21 +479,21 @@ private:
                 writeManifest(QStringLiteral("ready_to_finish"));
                 m_finish->setEnabled(true);
                 offerConfirmedNewSession();
-                setStatus(QStringLiteral(
-                    "Recording completed. Put exactly one .kdenlive project and one rendered video in the session folder, then click Finish Session."));
+                setStatus(
+                    QStringLiteral("Your editing steps were saved. Render your finished video into the session folder, then click Create Dataset Sample."));
             } else if (m_lastEditorExitCrashed) {
                 writeManifest(QStringLiteral("recovery_available"));
                 m_recover->setVisible(true);
                 offerConfirmedNewSession();
-                setStatus(QStringLiteral("Kdenlive exited unexpectedly, but flushed evidence was preserved. Use Recover and Continue, or discard the session "
-                                         "if no edit was made."),
+                setStatus(QStringLiteral(
+                              "Kdenlive closed unexpectedly, but your saved project and recorded editing steps are safe. Click Resume Editing to continue."),
                           true);
             } else {
                 writeManifest(QStringLiteral("validation_failed"));
                 offerConfirmedNewSession();
                 setStatus(
                     QStringLiteral(
-                        "Kdenlive closed normally, but the recording failed validation. Review Activity; start a fresh session after the cause is fixed."),
+                        "We could not verify the recorded editing steps. Your project is safe. Show technical details and share them with the EditPath team."),
                     true);
             }
         } else if (m_workerPurpose == QStringLiteral("finalize")) {
@@ -458,9 +501,9 @@ private:
                 writeManifest(QStringLiteral("packaged"));
                 m_openCompleted->setEnabled(true);
                 m_confirmNewSession = false;
-                m_start->setText(QStringLiteral("Start Another Editing Session"));
+                m_start->setText(QStringLiteral("Start New Edit"));
                 m_start->setVisible(true);
-                QFile reportFile(m_session + QStringLiteral("/completed-sample/render-report.json"));
+                QFile reportFile(m_session + QStringLiteral("/completed-sample/verification/report.json"));
                 bool mediaPassed = false;
                 if (reportFile.open(QIODevice::ReadOnly))
                     mediaPassed = QJsonDocument::fromJson(reportFile.readAll())
@@ -469,16 +512,17 @@ private:
                                       .toObject()
                                       .value(QStringLiteral("accepted"))
                                       .toBool();
-                setStatus(mediaPassed
-                              ? QStringLiteral("Sample and reconstructed media passed. The verbal task prompt is pending internal entry before client review.")
-                              : QStringLiteral("Sample generated, but exact-state media reconstruction failed. Review render-report.json."),
+                m_title->setText(
+                    QStringLiteral("<h1>Your dataset sample is ready</h1><p>EditPath saved the complete item and verified the recreated video.</p>"));
+                setStatus(mediaPassed ? QStringLiteral("Done. You can open the dataset sample below or start a new edit.")
+                                      : QStringLiteral("The sample was created, but the recreated video needs technical review. Your original edit is safe."),
                           !mediaPassed);
             } else {
                 m_finish->setEnabled(true);
-                const QString detail = m_workerTranscript.trimmed().section(QLatin1Char('\n'), -1);
-                setStatus(detail.isEmpty() ? QStringLiteral("Sample generation failed. Review Activity and correct the project, render, or media files.")
-                                           : QStringLiteral("Sample generation failed: %1").arg(detail),
-                          true);
+                m_instructions->setVisible(true);
+                m_title->setText(
+                    QStringLiteral("<h1>We couldn't create the sample yet</h1><p>Your project and rendered video have not been deleted or changed.</p>"));
+                setStatus(friendlyFinalizationError(m_workerTranscript), true);
             }
         }
         m_workerPurpose.clear();
@@ -494,7 +538,7 @@ private:
     void offerConfirmedNewSession()
     {
         m_confirmNewSession = true;
-        m_start->setText(QStringLiteral("Discard and Start New Session"));
+        m_start->setText(QStringLiteral("Start New Edit Anyway"));
         m_start->setVisible(true);
     }
 
@@ -532,7 +576,7 @@ private:
     QTimer m_heartbeat, m_readyPoll;
     bool m_showExistingCompletion{false}, m_lastEditorExitCrashed{false}, m_confirmNewSession{false};
     QLabel *m_title{}, *m_instructions{}, *m_status{}, *m_sessionLabel{};
-    QPushButton *m_start{}, *m_recover{}, *m_finish{}, *m_openSession{}, *m_openCompleted{};
+    QPushButton *m_start{}, *m_recover{}, *m_finish{}, *m_openSession{}, *m_openCompleted{}, *m_toggleDetails{};
     QPlainTextEdit *m_activity{};
     QProgressBar *m_launchProgress{};
 };

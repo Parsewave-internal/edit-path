@@ -849,6 +849,23 @@ remains the authoritative software-independent dataset record; verification
 and provenance artifacts are explicitly separated from training inputs and
 target output.
 
+### Editor-facing recorder UI
+
+The recorder window is designed around the editor's next action rather than
+pipeline internals. Its primary actions are **Resume Editing**, **Create Dataset
+Sample**, and **Open Dataset Sample**. Status messages state what happened,
+whether the editor's work is safe, and what the editor should do next. Terms
+such as hash chain, checkpoint, segment, traceback, and exact-state gate are
+kept out of the main status area.
+
+Detailed process output remains available through **Show technical details**
+and in `supervisor-activity.log`, so simplifying the editor experience does not
+remove diagnostic evidence. Known packaging errors are translated into
+specific guidance for extra/missing renders, missing project media,
+reconstruction mismatch, interrupted state capture, and missing runtime
+components. Unknown failures ask the editor to share technical details with
+the EditPath team rather than presenting a raw Python exception as an action.
+
 A subsequent acceptance run exercised a speed-changed clip and exposed an MLT
 identity edge case: timewarp producers store `resource` as
 `speed:/absolute/source` while retaining the original Kdenlive bin ID. Asset

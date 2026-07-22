@@ -1,9 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=EditPath Recorder
-Comment=Record and package Kdenlive editing sessions
-Exec=EditPath
-Icon=org.parsewave.EditPath
-Terminal=false
-Categories=AudioVideo;AudioVideoEditing;
-StartupNotify=true

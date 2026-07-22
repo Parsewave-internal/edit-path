@@ -649,6 +649,24 @@ packaging, or recovery controls. A prior interrupted session is resumed
 automatically only when its session-owned `edit.kdenlive` exists. This removes
 the redundant initialization screen from the normal editor workflow.
 
+### Windows portable build
+
+Windows is the editor deployment target. The supervisor now has a native
+Windows launch path: it starts the adjacent `kdenlive.exe` directly with the
+isolated recorder configuration and JSONL environment instead of invoking a
+Bash script. Validation and finalization use `bin/python/python.exe`, an
+embedded standard-library Python runtime included in the portable package.
+Linux retains its development shell launcher; its recovery argument handling
+was corrected to accept and reopen an existing project.
+
+The manually triggered `.github/workflows/windows-portable.yml` workflow
+bootstraps KDE Craft on a Windows 2022 runner, compiles this checkout through
+the maintained Qt 6 Kdenlive blueprint, creates the dependency-complete Craft
+archive, injects embedded Python, verifies `EditPath.exe` and `kdenlive.exe`,
+and uploads `EditPath-Windows-x64.zip`. The first artifact is intentionally a
+portable, unsigned engineering build. Installer creation, code signing, and
+update delivery follow only after functional testing on the editor's machine.
+
 ### Privacy and security
 
 The collector can reveal editor behavior, project structure, local file paths,

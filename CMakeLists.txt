@@ -24,6 +24,7 @@ option(BUILD_TESTING "Build tests" ON)
 option(CRASH_AUTO_TEST "Auto-generate testcases upon some crashes (uses RTTR library, needed for fuzzing)" OFF)
 option(BUILD_FUZZING "Build fuzzing target" OFF)
 option(BUILD_QCH "Build source code documentation in QCH format (for e.g. Qt Assistant, Qt Creator & KDevelop)" OFF)
+option(BUILD_EDIT_PATH_RECORDER "Build the Edit Path recorder supervisor" ON)
 add_feature_info(QCH ${BUILD_QCH} "Source code documentation in QCH format (for e.g. Qt Assistant, Qt Creator & KDevelop)")
 
 # shall we use DBus?
@@ -232,6 +233,18 @@ add_subdirectory(src)
 add_subdirectory(renderer)
 add_subdirectory(thumbnailer)
 add_subdirectory(data)
+if(BUILD_EDIT_PATH_RECORDER)
+    add_subdirectory(video-path-pilot/gui)
+    install(FILES
+        video-path-pilot/job_pipeline.py
+        video-path-pilot/media_reconstruct.py
+        video-path-pilot/normalize_sample.py
+        video-path-pilot/validate_sample.py
+        video-path-pilot/validate_video_path.py
+        video-path-pilot/sample.schema.json
+        video-path-pilot/video-path.schema.json
+        DESTINATION ${KDE_INSTALL_BINDIR}/video-path-pilot)
+endif()
 
 # Install
 ki18n_install(po)
@@ -271,4 +284,3 @@ feature_summary(WHAT ALL FATAL_ON_MISSING_REQUIRED_PACKAGES)
 # pre-commit hook
 include(KDEGitCommitHooks)
 kde_configure_git_pre_commit_hook(CHECKS CLANG_FORMAT)
-

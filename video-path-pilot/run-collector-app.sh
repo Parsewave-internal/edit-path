@@ -6,7 +6,7 @@ set -euo pipefail
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$script_dir/.." && pwd)
 craft_root=${KDENLIVE_PILOT_CRAFT_ROOT:-/home/tenali/CraftRoot}
-binary="$repo_root/build/collector-gui/edit-path-recorder"
+binary="$repo_root/build/collector-gui/EditPath"
 export PATH="$craft_root/dev-utils/bin:$craft_root/bin:$craft_root/libexec:$PATH"
 
 if [[ ! -f $repo_root/build/collector-gui/build.ninja ]]; then

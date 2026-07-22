@@ -29,6 +29,20 @@ Kdenlive closes, the supervisor shows a completion or recovery screen that
 validates termination and packages the completed sample. There is no assigned
 job, initialization screen, or terminal workflow.
 
+### Windows portable MVP
+
+The editor deliverable is built by the manually triggered **Windows portable
+MVP** GitHub Actions workflow. It uses the maintained KDE Craft Kdenlive
+blueprint to compile this checkout and its dependencies for 64-bit Windows,
+then adds an embedded Python runtime for local validation and sample packaging.
+The uploaded artifact is `EditPath-Windows-x64.zip`.
+
+After extracting the archive, start `bin\\EditPath.exe`. Do not start
+`bin\\kdenlive.exe` directly because that bypasses session supervision and
+recording. The initial MVP artifact is unsigned, so Windows may display a
+SmartScreen warning. Code signing and an installer are later distribution
+steps; the portable package is the first functional test target.
+
 Canonical state replay must reproduce every recorded state hash. A first MLT
 media adapter reconstructs cut/trim/move edits with normal-speed clips and no
 effects/transitions, renders `reconstructed.mp4`, and compares resolution,

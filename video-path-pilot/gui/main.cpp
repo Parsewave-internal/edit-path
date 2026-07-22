@@ -38,6 +38,17 @@ QString repositoryRoot()
     return {};
 }
 
+QString pythonExecutable()
+{
+#ifdef Q_OS_WIN
+    const QString bundled = QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("python/python.exe"));
+    if (QFileInfo::exists(bundled)) return bundled;
+    return QStringLiteral("python.exe");
+#else
+    return QStringLiteral("python3");
+#endif
+}
+
 QString sessionsRoot()
 {
     QString videos = QStandardPaths::writableLocation(QStandardPaths::MoviesLocation);
@@ -243,6 +254,7 @@ private:
         QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
         environment.insert(QStringLiteral("KDENLIVE_VIDEO_PATH_CONFIG"), m_configName);
         environment.insert(QStringLiteral("KDENLIVE_VIDEO_PATH_PROJECT"), project);
+        environment.insert(QStringLiteral("KDENLIVE_VIDEO_PATH_LOG"), raw);
         environment.remove(QStringLiteral("KDENLIVE_VIDEO_PATH_CLIPS"));
         m_editor.setProcessEnvironment(environment);
         m_editor.setWorkingDirectory(m_repoRoot);
@@ -251,9 +263,18 @@ private:
         setStatus(
             QStringLiteral("Kdenlive is starting. Import or create media normally, save the project and render in the session folder, then close normally."));
         m_activity->appendPlainText(QStringLiteral("Starting recording segment %1…").arg(number));
-        QStringList arguments{raw};
+        QString program;
+        QStringList arguments;
+#ifdef Q_OS_WIN
+        program = QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("kdenlive.exe"));
+        arguments = {QStringLiteral("--config"), m_configName, QStringLiteral("--no-welcome")};
         if (QFileInfo::exists(project)) arguments.append(project);
-        m_editor.start(m_repoRoot + QStringLiteral("/video-path-pilot/run-video-path-pilot.sh"), arguments);
+#else
+        program = m_repoRoot + QStringLiteral("/video-path-pilot/run-video-path-pilot.sh");
+        arguments = {raw};
+        if (QFileInfo::exists(project)) arguments.append(project);
+#endif
+        m_editor.start(program, arguments);
     }
 
     void editorFinished(int exitCode, QProcess::ExitStatus)
@@ -262,7 +283,7 @@ private:
         m_activity->appendPlainText(QStringLiteral("Kdenlive exited with code %1; checking the recording…").arg(exitCode));
         m_workerPurpose = QStringLiteral("validate");
         const QString raw = QDir(m_session).filePath(QStringLiteral("raw-events-%1.jsonl").arg(m_segment, 3, 10, QLatin1Char('0')));
-        m_worker.start(QStringLiteral("python3"), {m_repoRoot + QStringLiteral("/video-path-pilot/validate_video_path.py"), raw});
+        m_worker.start(pythonExecutable(), {m_repoRoot + QStringLiteral("/video-path-pilot/validate_video_path.py"), raw});
     }
 
     void finishSession()
@@ -270,8 +291,7 @@ private:
         m_finish->setEnabled(false);
         m_workerPurpose = QStringLiteral("finalize");
         setStatus(QStringLiteral("Discovering project assets, generating sample.json, reconstructing the edit, and comparing renders…"));
-        m_worker.start(QStringLiteral("python3"),
-                       {m_repoRoot + QStringLiteral("/video-path-pilot/job_pipeline.py"), QStringLiteral("finalize-freeform"), m_session});
+        m_worker.start(pythonExecutable(), {m_repoRoot + QStringLiteral("/video-path-pilot/job_pipeline.py"), QStringLiteral("finalize-freeform"), m_session});
     }
 
     void readWorker()

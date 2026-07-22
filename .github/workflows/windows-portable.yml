@@ -2,6 +2,11 @@ name: Windows portable MVP
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - feature/gui-collector-mvp
+    paths:
+      - .github/workflows/windows-portable.yml
 
 permissions:
   contents: read

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include <QApplication>
+#include <QClipboard>
 #include <QCloseEvent>
 #include <QDateTime>
 #include <QDesktopServices>
@@ -134,9 +135,9 @@ private:
         m_title = new QLabel(QStringLiteral("<h1>Editing Session</h1><p>Kdenlive has closed. Review the session status below.</p>"));
         m_title->setWordWrap(true);
         layout->addWidget(m_title);
-        m_instructions = new QLabel(QStringLiteral(
-            "Before finishing, render exactly one .mp4, .mov, .mkv, or .webm directly into the displayed session folder. "
-            "H.264 is not required. The project is saved automatically as <b>edit.kdenlive</b>."));
+        m_instructions =
+            new QLabel(QStringLiteral("Before finishing, render exactly one .mp4, .mov, .mkv, or .webm directly into the displayed session folder. "
+                                      "H.264 is not required. The project is saved automatically as <b>edit.kdenlive</b>."));
         m_instructions->setWordWrap(true);
         layout->addWidget(m_instructions);
         m_status = new QLabel;
@@ -178,15 +179,22 @@ private:
         layout->addWidget(m_activity, 1);
         setCentralWidget(central);
 
-        connect(m_start, &QPushButton::clicked, this, &RecorderWindow::startNewSession);
+        connect(m_start, &QPushButton::clicked, this, [this] {
+            if (m_confirmNewSession && QMessageBox::question(this, QStringLiteral("Discard current session?"),
+                                                             QStringLiteral("The current session has not been finalized. Start a new session anyway?"),
+                                                             QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes) {
+                return;
+            }
+            startNewSession();
+        });
         connect(m_recover, &QPushButton::clicked, this, [this] {
             ++m_segment;
             launchSegment();
         });
         connect(m_finish, &QPushButton::clicked, this, &RecorderWindow::finishSession);
-        connect(m_openSession, &QPushButton::clicked, this, [this] { QDesktopServices::openUrl(QUrl::fromLocalFile(m_session)); });
+        connect(m_openSession, &QPushButton::clicked, this, [this] { openFolder(m_session, QStringLiteral("Session folder")); });
         connect(m_openCompleted, &QPushButton::clicked, this,
-                [this] { QDesktopServices::openUrl(QUrl::fromLocalFile(m_session + QStringLiteral("/completed-sample"))); });
+                [this] { openFolder(m_session + QStringLiteral("/completed-sample"), QStringLiteral("Generated sample")); });
         connect(&m_editor, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this, &RecorderWindow::editorFinished);
         connect(&m_editor, &QProcess::started, this, [this] {
             writeManifest(QStringLiteral("recording"));
@@ -255,6 +263,7 @@ private:
         const QString status = manifest.value(QStringLiteral("status")).toString();
         if (status == QStringLiteral("ready_to_finish")) {
             m_finish->setEnabled(true);
+            offerConfirmedNewSession();
             setStatus(QStringLiteral("Previous recording is ready to finish."));
             m_showExistingCompletion = true;
         } else if (status == QStringLiteral("recovery_available") || status == QStringLiteral("recording")) {
@@ -270,6 +279,8 @@ private:
 
     void startNewSession()
     {
+        m_confirmNewSession = false;
+        m_start->setText(QStringLiteral("Start Another Editing Session"));
         const QString stamp = QDateTime::currentDateTimeUtc().toString(QStringLiteral("yyyyMMdd_HHmmss"));
         const QString suffix = QUuid::createUuid().toString(QUuid::WithoutBraces).left(8);
         m_session = QDir(sessionsRoot()).filePath(QStringLiteral("session_%1_%2").arg(stamp, suffix));
@@ -313,6 +324,8 @@ private:
         environment.insert(QStringLiteral("KDENLIVE_VIDEO_PATH_STATE_DIR"), QDir(m_session).filePath(QStringLiteral("states")));
         environment.insert(QStringLiteral("KDENLIVE_VIDEO_PATH_ENTITY_MAP"), QDir(m_session).filePath(QStringLiteral("entity-map.json")));
         environment.remove(QStringLiteral("KDENLIVE_VIDEO_PATH_CLIPS"));
+        environment.remove(QStringLiteral("QSG_RHI_BACKEND"));
+        environment.remove(QStringLiteral("LIBGL_ALWAYS_SOFTWARE"));
         m_editor.setProcessEnvironment(environment);
         m_editor.setWorkingDirectory(m_repoRoot);
         m_editor.setProcessChannelMode(QProcess::MergedChannels);
@@ -338,7 +351,7 @@ private:
     {
         m_heartbeat.stop();
         m_lastEditorExitCode = exitCode;
-        m_lastEditorExitCrashed = exitStatus == QProcess::CrashExit;
+        m_lastEditorExitCrashed = exitStatus != QProcess::NormalExit || exitCode != 0;
         showCompletionWindow();
         m_activity->appendPlainText(m_lastEditorExitCrashed
                                         ? QStringLiteral("Kdenlive crashed with signal/exit code %1; checking recoverable evidence…").arg(exitCode)
@@ -372,27 +385,40 @@ private:
             if (success && !m_lastEditorExitCrashed && m_lastEditorExitCode == 0) {
                 writeManifest(QStringLiteral("ready_to_finish"));
                 m_finish->setEnabled(true);
-                m_start->setVisible(true);
+                offerConfirmedNewSession();
                 setStatus(QStringLiteral(
                     "Recording completed. Put exactly one .kdenlive project and one rendered video in the session folder, then click Finish Session."));
-            } else {
+            } else if (m_lastEditorExitCrashed) {
                 writeManifest(QStringLiteral("recovery_available"));
                 m_recover->setVisible(true);
-                m_start->setVisible(true);
-                setStatus(m_lastEditorExitCrashed
-                              ? QStringLiteral("Kdenlive crashed, but flushed evidence was preserved. Use Recover and Continue.")
-                              : QStringLiteral("Recording ended unexpectedly. Use Recover and Continue, or start a fresh session if no edit was made."),
+                offerConfirmedNewSession();
+                setStatus(QStringLiteral("Kdenlive exited unexpectedly, but flushed evidence was preserved. Use Recover and Continue, or discard the session "
+                                         "if no edit was made."),
                           true);
+            } else {
+                writeManifest(QStringLiteral("validation_failed"));
+                offerConfirmedNewSession();
+                setStatus(
+                    QStringLiteral(
+                        "Kdenlive closed normally, but the recording failed validation. Review Activity; start a fresh session after the cause is fixed."),
+                    true);
             }
         } else if (m_workerPurpose == QStringLiteral("finalize")) {
             if (success) {
                 writeManifest(QStringLiteral("packaged"));
                 m_openCompleted->setEnabled(true);
+                m_confirmNewSession = false;
+                m_start->setText(QStringLiteral("Start Another Editing Session"));
                 m_start->setVisible(true);
                 QFile reportFile(m_session + QStringLiteral("/completed-sample/render-report.json"));
                 bool mediaPassed = false;
                 if (reportFile.open(QIODevice::ReadOnly))
-                    mediaPassed = QJsonDocument::fromJson(reportFile.readAll()).object().value(QStringLiteral("final")).toObject().value(QStringLiteral("accepted")).toBool();
+                    mediaPassed = QJsonDocument::fromJson(reportFile.readAll())
+                                      .object()
+                                      .value(QStringLiteral("final"))
+                                      .toObject()
+                                      .value(QStringLiteral("accepted"))
+                                      .toBool();
                 setStatus(mediaPassed
                               ? QStringLiteral("Sample and reconstructed media passed. The verbal task prompt is pending internal entry before client review.")
                               : QStringLiteral("Sample generated, but exact-state media reconstruction failed. Review render-report.json."),
@@ -412,12 +438,46 @@ private:
         activateWindow();
     }
 
+    void offerConfirmedNewSession()
+    {
+        m_confirmNewSession = true;
+        m_start->setText(QStringLiteral("Discard and Start New Session"));
+        m_start->setVisible(true);
+    }
+
+    void openFolder(const QString &path, const QString &label)
+    {
+        const QString nativePath = QDir::toNativeSeparators(path);
+        QApplication::clipboard()->setText(nativePath);
+        bool launched = false;
+#ifdef Q_OS_LINUX
+        // Desktop URL dispatch commonly has no usable portal/DBus service in
+        // forwarded-X11 sessions. Prefer an installed file manager there.
+        if (!qEnvironmentVariableIsEmpty("SSH_CONNECTION") && !qEnvironmentVariableIsEmpty("DISPLAY")) {
+            const QString fileManager = QStandardPaths::findExecutable(QStringLiteral("nautilus"));
+            if (!fileManager.isEmpty()) {
+                launched = QProcess::startDetached(fileManager, {QStringLiteral("--no-desktop"), path});
+            }
+        }
+#endif
+        if (!launched) {
+            launched = QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+        }
+        m_activity->appendPlainText(launched ? QStringLiteral("%1 open requested; path copied to clipboard: %2").arg(label, nativePath)
+                                             : QStringLiteral("Could not open %1; path copied to clipboard: %2").arg(label, nativePath));
+        if (!launched) {
+            QMessageBox::information(
+                this, QStringLiteral("Folder path copied"),
+                QStringLiteral("No desktop file manager is available. The %1 path was copied to the clipboard:\n%2").arg(label.toLower(), nativePath));
+        }
+    }
+
     QString m_repoRoot, m_session, m_sessionId, m_configName, m_workerPurpose;
     int m_segment{0};
     int m_lastEditorExitCode{0};
     QProcess m_editor, m_worker;
     QTimer m_heartbeat;
-    bool m_autoRecover{false}, m_showExistingCompletion{false}, m_lastEditorExitCrashed{false};
+    bool m_autoRecover{false}, m_showExistingCompletion{false}, m_lastEditorExitCrashed{false}, m_confirmNewSession{false};
     QLabel *m_title{}, *m_instructions{}, *m_status{}, *m_sessionLabel{};
     QPushButton *m_start{}, *m_recover{}, *m_finish{}, *m_openSession{}, *m_openCompleted{};
     QPlainTextEdit *m_activity{};
@@ -489,8 +549,7 @@ int runSelfTest()
     const bool packagingStarted = packagingTest.waitForStarted(10000);
     const bool packagingFinished = packagingStarted && packagingTest.waitForFinished(30000);
     const bool packagingPassed = packagingFinished && packagingTest.exitStatus() == QProcess::NormalExit && packagingTest.exitCode() == 0;
-    QJsonObject packagingCheck{{QStringLiteral("passed"), packagingPassed},
-                               {QStringLiteral("exit_code"), packagingFinished ? packagingTest.exitCode() : -1}};
+    QJsonObject packagingCheck{{QStringLiteral("passed"), packagingPassed}, {QStringLiteral("exit_code"), packagingFinished ? packagingTest.exitCode() : -1}};
     if (!packagingPassed) {
         packagingCheck.insert(QStringLiteral("error"), packagingTest.errorString());
         packagingCheck.insert(QStringLiteral("output"), QString::fromUtf8(packagingTest.readAllStandardOutput() + packagingTest.readAllStandardError()));

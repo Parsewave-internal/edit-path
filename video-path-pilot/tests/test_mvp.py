@@ -29,6 +29,18 @@ class MvpTests(unittest.TestCase):
             record_action.index("m_pendingActions.append(event)"),
         )
 
+    def test_supervisor_hardening_contract(self):
+        root = Path(__file__).parents[2]
+        source = (root / "video-path-pilot/gui/main.cpp").read_text(encoding="utf-8")
+        launcher = (root / "video-path-pilot/run-collector-app.sh").read_text(encoding="utf-8")
+        self.assertIn('writeManifest(QStringLiteral("validation_failed"))', source)
+        self.assertIn("m_lastEditorExitCrashed = exitStatus != QProcess::NormalExit || exitCode != 0", source)
+        self.assertIn("QApplication::clipboard()->setText(nativePath)", source)
+        self.assertIn('environment.remove(QStringLiteral("QSG_RHI_BACKEND"))', source)
+        self.assertIn("unset QSG_RHI_BACKEND LIBGL_ALWAYS_SOFTWARE", launcher)
+        self.assertIn('m_start->setText(QStringLiteral("Discard and Start New Session"))', source)
+        self.assertIn('QMessageBox::question(this, QStringLiteral("Discard current session?")', source)
+
     def test_project_asset_binding_requires_path_or_content_identity(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

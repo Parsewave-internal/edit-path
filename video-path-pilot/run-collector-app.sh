@@ -3,6 +3,10 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 set -euo pipefail
+# Forced Qt/GL software backends caused severe Kdenlive UI stalls over
+# forwarded X11 during acceptance testing. The editor chooses its normal Mesa
+# fallback without these overrides.
+unset QSG_RHI_BACKEND LIBGL_ALWAYS_SOFTWARE
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$script_dir/.." && pwd)
 binary="$repo_root/build/collector-gui/EditPath"

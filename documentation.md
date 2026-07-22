@@ -759,6 +759,25 @@ overwriting the attribution. Reconstruction also safely repairs recordings
 made before this fix when an otherwise-unassigned preceding diff has matching
 semantics. Source-level and trajectory regression tests protect both paths.
 
+### Supervisor GUI hardening after Linux acceptance
+
+The follow-up GUI run validated the delayed-action transaction fix and produced
+a clean `ready_to_finish` schema-0.3 session. It also exposed supervisor UX
+problems specific to failure handling and forwarded X11. The supervisor now
+distinguishes a nonzero/crash Kdenlive exit from a normal exit whose trajectory
+fails validation, recording the latter as `validation_failed` instead of
+incorrectly offering crash recovery. A ready-to-finish session labels the
+new-session action as a discard and requires explicit confirmation, preventing
+accidental empty sessions without trapping an operator who intentionally wants
+to abandon unfinished work.
+
+Folder buttons now copy their resolved path to the clipboard and report the
+action in Activity; on forwarded-X11 Linux they try an installed file manager
+before desktop URL dispatch, and show a visible fallback when neither is
+available. The Linux launcher and child-editor environment also remove forced
+`QSG_RHI_BACKEND` and `LIBGL_ALWAYS_SOFTWARE` overrides, which caused severe UI
+stalls during the first optimized-build acceptance run.
+
 ## Historical Version 2 manual acceptance test
 
 1. Start a fresh recording and create/open a project.

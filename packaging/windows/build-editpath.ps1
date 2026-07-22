@@ -78,10 +78,18 @@ using System;
 using System.Runtime.InteropServices;
 public static class EditPathPower {
     [DllImport("kernel32.dll")]
-    public static extern uint SetThreadExecutionState(uint flags);
+    private static extern uint SetThreadExecutionState(uint flags);
+
+    public static uint PreventSleep() {
+        return SetThreadExecutionState(0x80000001u);
+    }
+
+    public static uint RestoreDefaults() {
+        return SetThreadExecutionState(0x80000000u);
+    }
 }
 '@
-[EditPathPower]::SetThreadExecutionState(0x80000001) | Out-Null
+[EditPathPower]::PreventSleep() | Out-Null
 
 Write-Host "Source: $sourceRoot"
 Write-Host "Craft:  $CraftRoot"
@@ -275,5 +283,5 @@ Write-Host "BUILD COMPLETE" -ForegroundColor Green
 Write-Host "Portable folder: $portable"
 Write-Host "Shareable ZIP:    $outputZip"
 Write-Host "Start executable: $($editPath.FullName)"
-[EditPathPower]::SetThreadExecutionState(0x80000000) | Out-Null
+[EditPathPower]::RestoreDefaults() | Out-Null
 Stop-Transcript | Out-Null

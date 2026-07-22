@@ -115,6 +115,17 @@ private:
         connect(m_openSession, &QPushButton::clicked, this, [this] { QDesktopServices::openUrl(QUrl::fromLocalFile(m_session)); });
         connect(m_openCompleted, &QPushButton::clicked, this, [this] { QDesktopServices::openUrl(QUrl::fromLocalFile(m_jobRoot + QStringLiteral("/completed-sample"))); });
         connect(&m_editor, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this, &RecorderWindow::editorFinished);
+        connect(&m_editor, &QProcess::started, this, [this] {
+            writeSessionManifest(QStringLiteral("recording"));
+            m_activity->appendPlainText(QStringLiteral("Kdenlive process started. Remote X11 startup can take 15–60 seconds."));
+        });
+        connect(&m_editor, &QProcess::errorOccurred, this, [this](QProcess::ProcessError error) {
+            if (error == QProcess::FailedToStart) {
+                writeSessionManifest(QStringLiteral("start_failed"));
+                setStatus(QStringLiteral("Kdenlive could not be started. Check the SSH X11 connection and segment console log."), true);
+                m_start->setEnabled(true);
+            }
+        });
         connect(&m_worker, &QProcess::readyReadStandardOutput, this, &RecorderWindow::readWorker);
         connect(&m_worker, &QProcess::readyReadStandardError, this, &RecorderWindow::readWorker);
         connect(&m_worker, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this, &RecorderWindow::workerFinished);
@@ -224,8 +235,6 @@ private:
         setStatus(m_segment == 1 ? QStringLiteral("Editing session is recording. Save the project and final render in the session folder.")
                                  : QStringLiteral("Recovery segment is recording. Complete the edit and close Kdenlive normally."));
         m_editor.start(m_repoRoot + QStringLiteral("/video-path-pilot/run-video-path-pilot.sh"), {raw});
-        if (m_editor.waitForStarted(5000)) writeSessionManifest(QStringLiteral("recording"));
-        else { setStatus(QStringLiteral("Kdenlive could not be started. See the segment console log."), true); m_start->setEnabled(true); }
     }
 
     void editorFinished(int exitCode, QProcess::ExitStatus status)

@@ -636,6 +636,18 @@ int runSelfTest()
     QProcessEnvironment doctorEnvironment = QProcessEnvironment::systemEnvironment();
     const QString existingPythonPath = doctorEnvironment.value(QStringLiteral("PYTHONPATH"));
     doctorEnvironment.insert(QStringLiteral("PYTHONPATH"), existingPythonPath.isEmpty() ? root : root + QDir::listSeparator() + existingPythonPath);
+
+    QProcess xmlTest;
+    xmlTest.setProcessEnvironment(doctorEnvironment);
+    xmlTest.start(python, {QStringLiteral("-c"), QStringLiteral("import xml.etree.ElementTree as ET; assert ET.fromstring('<project/>').tag == 'project'")});
+    const bool xmlStarted = xmlTest.waitForStarted(10000);
+    const bool xmlFinished = xmlStarted && xmlTest.waitForFinished(30000);
+    const bool xmlPassed = xmlFinished && xmlTest.exitStatus() == QProcess::NormalExit && xmlTest.exitCode() == 0;
+    QJsonObject xmlCheck{{QStringLiteral("passed"), xmlPassed}, {QStringLiteral("exit_code"), xmlFinished ? xmlTest.exitCode() : -1}};
+    if (!xmlPassed) xmlCheck.insert(QStringLiteral("output"), QString::fromUtf8(xmlTest.readAllStandardOutput() + xmlTest.readAllStandardError()));
+    checks.insert(QStringLiteral("python_xml_runtime"), xmlCheck);
+    passed = xmlPassed && passed;
+
     doctorTest.setProcessEnvironment(doctorEnvironment);
     doctorTest.setWorkingDirectory(root);
     doctorTest.start(python, {QStringLiteral("-m"), QStringLiteral("edit_path"), QStringLiteral("doctor")});

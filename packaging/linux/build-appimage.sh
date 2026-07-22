@@ -41,6 +41,10 @@ mkdir -p "$appdir/usr/lib" "$appdir/usr/share"
 cp -a "$craft_root/lib/mlt-7" "$appdir/usr/lib/"
 cp -a "$craft_root/share/mlt-7" "$appdir/usr/share/"
 cp -a "$craft_root/lib/frei0r-1" "$appdir/usr/lib/"
+# Python's pyexpat extension and Craft were built against this newer Expat.
+# linuxdeploy normally blacklists Expat as a base-system library, which lets an
+# older host copy load and fail with an undefined XML_SetReparseDeferralEnabled.
+cp -a "$craft_root/lib"/libexpat.so* "$appdir/usr/lib/"
 mkdir -p "$appdir/usr/plugins/kf6/kio"
 for kio_worker in "$craft_root/plugins/kf6/kio"/*.so; do
     install -Dm755 "$kio_worker" "$appdir/usr/plugins/kf6/kio/$(basename "$kio_worker")"

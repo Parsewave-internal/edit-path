@@ -22,7 +22,10 @@ state and never attempts to replay mouse timing or shortcuts.
 5. asset path, byte-count, and SHA-256 verification;
 6. reconstruction and SSIM/duration/audio-structure validation at every
    checkpoint that has an independent capture-time proxy;
-7. final exact-state render and comparison to the editor's final reference.
+7. final exact-state render and comparison to the editor's final reference;
+8. event-level reconstruction of raw commands, shortcuts, pointer gestures,
+   and exact before/after states into the full nonlinear-editor training view
+   `final.mp4`.
 
 For 0.3 sessions, missing checkpoint references or exact state sidecars fail
 closed. Legacy 0.1/0.2 samples remain readable, and a finalized legacy sample
@@ -43,7 +46,7 @@ module is on Python's import path.
 ```bash
 python3 -m edit_path doctor
 python3 -m edit_path inspect /samples/session-001
-python3 -m edit_path reconstruct /samples/session-001 --output /tmp/final.mp4
+python3 -m edit_path reconstruct /samples/session-001 --output /tmp/reconstructed-output.mp4
 python3 -m edit_path process /samples/session-001 /dataset
 python3 -m edit_path index /dataset
 ```
@@ -93,7 +96,9 @@ module (`qimage`, `kdenlivetitle`, and Glaxnimate services), Frei0r effects,
 FFmpeg/AVFilter, and the audio backends pulled by MLT. It does not need the
 QtMultimedia QML import because it never starts the interactive editor.
 
-The immutable accepted bundle contains `final.mp4`, a portable
+The immutable accepted bundle contains the command-level editor-training
+`final.mp4`, the
+validated final-state `reconstructed-output.mp4`, a portable
 `reconstructed.kdenlive`, cleaned and raw trajectories, exact state sidecars,
 checkpoint references, hashed assets, the asset manifest, and a render report.
 The entire directory is assembled under a temporary name and installed with
@@ -139,8 +144,8 @@ EditPath supervisor
   -> raw-events-NNN.jsonl + exact states + checkpoint references
   -> crash recovery and validated segment assembly when necessary
   -> content-addressed assets + independent editor render
-  -> exact accepted-state reconstruction
-  -> checkpoint and final media gates
+  -> exact accepted-state reconstruction and checkpoint/final media gates
+  -> full editor replay of commands, shortcuts, gestures, and state changes
   -> accepted/<session_id> or quarantine/<session_id>
 ```
 

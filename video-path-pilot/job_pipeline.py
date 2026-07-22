@@ -362,8 +362,10 @@ def finalize_session(session: Path, project: Path, output: Path, job: dict, *, s
     reference_name = f"reference/editor-final{output.suffix.lower()}"
     sample["output"]["video"] = reference_name
     sample["output"]["sha256"] = sha256(completed / reference_name)
-    sample["output"]["reconstructed_video"] = "final.mp4"
-    sample["output"]["reconstructed_video_sha256"] = sha256(completed / "final.mp4")
+    sample["output"]["edit_process_video"] = "final.mp4"
+    sample["output"]["edit_process_video_sha256"] = sha256(completed / "final.mp4")
+    sample["output"]["reconstructed_video"] = "reconstructed-output.mp4"
+    sample["output"]["reconstructed_video_sha256"] = sha256(completed / "reconstructed-output.mp4")
     sample["quality"]["canonical_reconstruction"] = "passed"
     sample["quality"]["media_reconstruction"] = "passed" if report.get("final", {}).get("accepted") else "failed"
     sample["quality"]["ready_for_client_review"] = sample["quality"]["media_reconstruction"] == "passed" and bool(sample["task"].get("prompt"))

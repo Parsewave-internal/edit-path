@@ -19,8 +19,9 @@ JSONL trajectory + content-addressed assets + exact state sidecars
   -> validate session, semantic hashes, and global project hash chain
   -> resolve the accepted commit/undo/redo branch
   -> reconstruct and validate every captured checkpoint
-  -> render the final accepted state with pinned Melt/MLT and FFmpeg
-  -> gate on FFprobe structure, duration, audio structure, and video SSIM
+  -> render and validate the final accepted state with pinned Melt/MLT and FFmpeg
+  -> reconstruct every raw command, shortcut, gesture, and state change in a full editor training view
+  -> gate final-state media on structure, duration, audio structure, and video SSIM
   -> atomically publish an accepted sample or a detailed quarantine bundle
 ```
 
@@ -144,15 +145,20 @@ for developer testing rather than editor distribution.
    segments, resolves the accepted commit/undo/redo branch, and reconstructs
    from the exact accepted project state—not from mouse/keyboard replay.
 6. Melt first renders a validation file matched to the independent editor
-   render, then creates the delivery MP4 with the first available supported
+   render, then creates `reconstructed-output.mp4` with the first available supported
    encoder (`libx264`, `libopenh264`, then `mpeg4`). FFprobe rejects an
    audio-only encoder "success". FFmpeg compares structure, duration, audio,
-   and video SSIM. Passing samples are atomically published; failures are
-   quarantined with the precise gate and sequence.
+   and video SSIM. The pipeline then joins the raw UI evidence to each exact
+   before/after state and renders a full nonlinear-editor replay as `final.mp4`:
+   project bin, monitor, effects/properties, multitrack timeline, selections,
+   cursor motion, shortcuts, command feedback, and semantic apply events. Passing
+   samples are atomically published; failures are quarantined with the precise
+   gate and sequence.
 
 The finished edit path and reconstruction are under the displayed session's
 `completed-sample/` directory. The main files are `trajectory.jsonl`,
-`reconstructed.kdenlive`, `final.mp4`, `reference/editor-final.*`,
+`reconstructed.kdenlive`, `reconstructed-output.mp4`, `final.mp4`,
+`reference/editor-final.*`,
 `render-report.json`, and `sample.json`.
 
 For long-lived WSL GUI containers, create the container with `docker run
@@ -179,10 +185,11 @@ python3 -m edit_path qa-sample /path/to/dataset --sample-rate 0.10
 python3 -m edit_path index /path/to/dataset
 ```
 
-Accepted samples contain the final MP4, portable reconstructed Kdenlive
-project, cleaned and raw trajectories, assets and manifest, exact states,
-checkpoint references, and a render report. Rejected sessions retain their raw
-evidence and a machine-readable gate failure under `quarantine/`.
+Accepted samples contain the command-level editor-training `final.mp4`, the separately
+validated final-state `reconstructed-output.mp4`, a portable reconstructed
+Kdenlive project, cleaned and raw trajectories, assets and manifest, exact
+states, checkpoint references, and a render report. Rejected sessions retain
+their raw evidence and a machine-readable gate failure under `quarantine/`.
 
 The pinned reconstruction image is defined in
 [`reconstruction/Containerfile`](reconstruction/Containerfile). Detailed gate

@@ -22,7 +22,7 @@ if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1 |
     fi
     reconstruction_image=${EDIT_PATH_RECONSTRUCTION_TEST_IMAGE:-edit-path-reconstruction:verification}
     docker build -q -t "$reconstruction_image" -f reconstruction/Containerfile . >/dev/null
-    docker run --rm --entrypoint python3 \
+    docker run --init --rm --entrypoint python3 \
         -e PYTHONPATH=/src \
         -v "$repo_root:/src:ro" \
         -w /src \

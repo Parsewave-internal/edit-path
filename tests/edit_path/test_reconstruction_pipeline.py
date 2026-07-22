@@ -27,6 +27,7 @@ from edit_path.pipeline import (
     validate_event_envelope,
     validate_state_transitions,
 )
+from edit_path.process_video import build_replay_moments, build_replay_steps
 from edit_path.reconstruct import render_project, select_video_encoder
 from edit_path.runtime import runtime_fingerprint
 from edit_path.state import canonical_hash, load_state_reference, resolve_accepted_branch, validate_action_semantics
@@ -84,6 +85,78 @@ class BranchResolutionTests(unittest.TestCase):
 
 
 class StateTests(unittest.TestCase):
+    def test_edit_process_replays_baseline_then_every_accepted_state(self) -> None:
+        empty = {
+            "timeline_id": "timeline",
+            "duration_frames": 0,
+            "tracks": [],
+            "clips": [],
+            "compositions": [],
+            "mixes": [],
+            "master_effects": [],
+        }
+        changed = {
+            **empty,
+            "duration_frames": 25,
+            "clips": [{"native_id": 1, "timeline_start_frame": 0, "duration_frames": 25}],
+        }
+        baseline_hash, final_hash = "a" * 64, "b" * 64
+        checkpoint = event(
+            1,
+            "state.checkpoint",
+            timeline_id="timeline",
+            snapshot=empty,
+            state_hash=canonical_hash(empty),
+            project_state={"sha256": baseline_hash},
+        )
+        commit = event(
+            2,
+            "state.diff",
+            timeline_id="timeline",
+            label="Insert Clip",
+            boundary="commit",
+            transaction_id="transaction",
+            undo_entry_id="entry",
+            before_hash=canonical_hash(empty),
+            after_hash=canonical_hash(changed),
+            project_before_hash=baseline_hash,
+            project_after_hash=final_hash,
+            project_state={"sha256": final_hash},
+            diff={
+                "duration_before": 0,
+                "duration_after": 25,
+                "changes": [
+                    {
+                        "entity": "clip",
+                        "native_id": 1,
+                        "change": "added",
+                        "after": changed["clips"][0],
+                    }
+                ],
+            },
+        )
+        steps = build_replay_steps([checkpoint, commit], [commit], baseline_hash)
+        self.assertEqual([step["operation"] for step in steps], ["timeline.initial_state", "clip.insert"])
+        self.assertEqual(steps[1]["snapshot"]["duration_frames"], 25)
+        self.assertEqual(steps[1]["project_hash"], final_hash)
+
+        shortcut = event(3, "ui.shortcut", key_sequence="Ctrl+V", focus="TimelineWidget")
+        gesture = event(
+            4,
+            "ui.gesture",
+            gesture="drag",
+            interaction_id="drag-1",
+            start_global={"x": 800, "y": 650},
+            end_global={"x": 700, "y": 650},
+        )
+        commit["sequence"] = 5
+        commit["event_id"] = "event-5"
+        commit["interaction_id"] = "drag-1"
+        moments = build_replay_moments([checkpoint, shortcut, gesture, commit])
+        self.assertEqual([moment["event_type"] for moment in moments], ["state.checkpoint", "ui.shortcut", "ui.gesture", "state.diff"])
+        self.assertEqual(moments[1]["operation"], "edit.paste")
+        self.assertEqual(moments[2]["operation"], "clip.insert")
+
     def test_multiple_timeline_hash_chains_are_validated_independently(self) -> None:
         empty_a = {"timeline_id": "a", "duration_frames": 0, "tracks": [], "clips": [], "compositions": [], "mixes": [], "master_effects": []}
         empty_b = {**empty_a, "timeline_id": "b"}
@@ -193,14 +266,17 @@ class PublicationTests(unittest.TestCase):
             project.write_text(f'<mlt><producer><property name="resource">{asset}</property></producer></mlt>', encoding="utf-8")
             final = work / "final.mp4"
             final.write_bytes(b"video")
+            reconstructed = work / "reconstructed-output.mp4"
+            reconstructed.write_bytes(b"reconstructed")
             report = work / "report.json"
             write_json(report, {"ok": True})
             raw = root / "trajectory.jsonl"
             events = [event(1, "session.start"), event(2, "session.end", state_sidecars_complete=True)]
             write_jsonl(raw, events)
-            bundle = publish_bundle(root, output, "session-test", {"final_video": final, "project": project, "report": report, "raw_trajectory": raw, "manifest_path": root / "asset-manifest.json"}, events, [], manifest)
+            bundle = publish_bundle(root, output, "session-test", {"final_video": final, "reconstructed_video": reconstructed, "project": project, "report": report, "raw_trajectory": raw, "manifest_path": root / "asset-manifest.json"}, events, [], manifest)
             self.assertEqual(stat.S_IMODE(bundle.stat().st_mode), 0o755)
             self.assertTrue((bundle / "assets" / "source.mp4").is_file())
+            self.assertEqual((bundle / "reconstructed-output.mp4").read_bytes(), b"reconstructed")
             self.assertIn("assets/source.mp4", (bundle / "reconstructed.kdenlive").read_text(encoding="utf-8"))
             self.assertTrue((bundle / "bundle-manifest.json").is_file())
             published = json.loads((bundle / "asset-manifest.json").read_text(encoding="utf-8"))
@@ -312,6 +388,7 @@ class MediaIntegrationTests(unittest.TestCase):
             self.assertEqual(result["status"], "accepted", result)
             bundle = Path(result["path"])
             self.assertTrue((bundle / "final.mp4").is_file())
+            self.assertTrue((bundle / "reconstructed-output.mp4").is_file())
             self.assertTrue((bundle / "reconstructed.kdenlive").is_file())
             self.assertTrue((bundle / "trajectory.jsonl").is_file())
             self.assertEqual(len(build_qa_queue(dataset_root, sample_rate=1)["samples"]), 1)
@@ -333,6 +410,7 @@ class MediaIntegrationTests(unittest.TestCase):
                 },
             )
             self.assertTrue((completed / "final.mp4").is_file())
+            self.assertTrue((completed / "reconstructed-output.mp4").is_file())
             self.assertEqual(stat.S_IMODE(completed.stat().st_mode), 0o755)
             self.assertTrue((completed / "reference" / "editor-final.mp4").is_file())
             self.assertTrue((completed / "evidence" / "raw-events-001.jsonl").is_file())
@@ -343,6 +421,8 @@ class MediaIntegrationTests(unittest.TestCase):
             sample = json.loads((completed / "sample.json").read_text(encoding="utf-8"))
             self.assertEqual(sample["task"]["prompt_status"], "pending_internal_entry")
             self.assertEqual(sample["quality"]["media_reconstruction"], "passed")
+            self.assertEqual(sample["output"]["edit_process_video"], "final.mp4")
+            self.assertEqual(sample["output"]["reconstructed_video"], "reconstructed-output.mp4")
             self.assertEqual(json.loads((root / "session.json").read_text(encoding="utf-8"))["status"], "packaged")
             self.assertEqual(json.loads((completed / "session.json").read_text(encoding="utf-8"))["status"], "packaged")
 

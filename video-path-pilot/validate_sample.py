@@ -60,6 +60,8 @@ def validate_sample(path: Path, check_files: bool = False) -> list[str]:
         ]
         if sample.get("output", {}).get("reconstructed_video"):
             references.append((sample["output"]["reconstructed_video"], sample["output"].get("reconstructed_video_sha256")))
+        if sample.get("output", {}).get("edit_process_video"):
+            references.append((sample["output"]["edit_process_video"], sample["output"].get("edit_process_video_sha256")))
         for raw in sample.get("evidence", {}).get("raw_events", []):
             if isinstance(raw, dict): references.append((raw.get("file"), raw.get("sha256")))
         for relative, expected in references:

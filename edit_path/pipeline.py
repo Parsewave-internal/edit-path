@@ -16,6 +16,7 @@ from typing import Any
 from .assets import load_manifest, remap_project_assets, verify_assets
 from .errors import EditPathError, GateError
 from .io import RAW_SCHEMA_VERSIONS, event_sequence, find_trajectory, read_jsonl, safe_relative, sha256_file, write_json, write_jsonl
+from .process_video import render_edit_process
 from .reconstruct import render_event, render_session, state_reference
 from .runtime import runtime_fingerprint, verify_runtime_lock
 from .state import load_state_reference, resolve_accepted_branch, validate_action_semantics, validate_state_transitions
@@ -423,6 +424,9 @@ def publish_bundle(
     temporary.chmod(0o755)
     try:
         shutil.copy2(artifacts["final_video"], temporary / "final.mp4")
+        reconstructed_video = artifacts.get("reconstructed_video")
+        if isinstance(reconstructed_video, Path) and reconstructed_video.is_file():
+            shutil.copy2(reconstructed_video, temporary / "reconstructed-output.mp4")
         reference_video = artifacts.get("reference_video")
         if isinstance(reference_video, Path) and reference_video.is_file():
             _copy_if_present(reference_video, temporary / "reference" / f"editor-final{reference_video.suffix.lower()}")
@@ -603,6 +607,15 @@ def process_session(
                         "MP4 delivery validation failed "
                         f"with SSIM {delivery_report['ssim']} and duration delta {delivery_report['duration_delta_seconds']}",
                     )
+            process_video, process_video_report = render_edit_process(
+                session_dir,
+                events,
+                branch.accepted,
+                branch.baseline_hash,
+                work_dir / "final.mp4",
+                work_dir / "edit-process",
+                melt_binary=melt_binary,
+            )
             report = {
                 "schema": "video-path/render-report@1",
                 "capture": {
@@ -625,6 +638,7 @@ def process_session(
                 "checkpoint_results": checkpoint_results,
                 "final": final_report,
                 "delivery": delivery_report,
+                "edit_process": process_video_report,
             }
             report_path = work_dir / "render-report.json"
             write_json(report_path, report)
@@ -633,7 +647,8 @@ def process_session(
                 output_root / "accepted",
                 session_id,
                 {
-                    "final_video": reconstructed,
+                    "final_video": process_video,
+                    "reconstructed_video": reconstructed,
                     "reference_video": reference,
                     "project": project,
                     "report": report_path,

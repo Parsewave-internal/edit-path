@@ -562,12 +562,16 @@ ripple delete, and keyframes.
 
 Production finalization now uses the schema-0.3 exact committed project-state
 sidecar as its reconstruction source. It remaps content-addressed assets,
-renders a fresh `final.mp4`, and compares that render with the editor's
-independent output using profile, duration, video SSIM, and audio metrics. This
-preserves effects, transitions, speed, keyframes, titles, and other serializable
-Kdenlive/MLT state. The earlier cut/trim/move semantic adapter remains a useful
-diagnostic, but it is no longer the acceptance authority or the source of the
-published reconstructed video.
+renders a fresh `reconstructed-output.mp4`, and compares that render with the
+editor's independent output using profile, duration, video SSIM, and audio
+metrics. It separately joins every raw command, shortcut, and pointer gesture
+to its semantic before/after state and renders a complete nonlinear-editor
+training replay as `final.mp4`. The view includes the project bin, exact-state
+monitor, effects/properties, multitrack timeline, selection and cursor motion,
+keyboard overlays, and applied-operation feedback. This preserves effects,
+transitions, speed, keyframes, titles, and other serializable Kdenlive/MLT
+state. The earlier cut/trim/move semantic adapter remains a useful diagnostic,
+but it is no longer the acceptance authority.
 
 Crash handling now preserves numbered JSONL and console segments. An invalid or
 missing final `session.end` enables Recover and Continue, which reuses the same

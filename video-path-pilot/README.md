@@ -48,8 +48,12 @@ steps; the portable package is the first functional test target.
 
 Canonical state replay must reproduce every recorded state hash. Production
 finalization reconstructs from the exact committed Kdenlive/MLT project-state
-sidecar, renders `final.mp4`, and compares it with the editor's independent
-render using profile, duration, video SSIM, and audio metrics. This retains
+sidecar, renders `reconstructed-output.mp4`, and compares it with the editor's
+independent render using profile, duration, video SSIM, and audio metrics. It
+then reconstructs the raw commands, shortcuts, gestures, and exact state
+changes in a full nonlinear-editor training view as `final.mp4`. The replay
+shows the project bin, real project monitor, effects/properties, multitrack
+timeline, cursor motion, selections, keyboard feedback, and applied operations. This retains
 effects, transitions, speed changes, keyframes, titles, and other project state
 instead of reducing the edit to the GUI branch's limited cut/trim/move model.
 The limited semantic adapter remains available only as a diagnostic report.
@@ -205,7 +209,8 @@ In the freeform GUI flow, save exactly one independent `.mp4`, `.mov`, `.mkv`,
 or `.webm` render directly in the session folder, then click **Finish Session**.
 H.264 is optional. The finished trajectory and reconstruction are in
 `completed-sample/trajectory.jsonl`, `completed-sample/reconstructed.kdenlive`,
-and `completed-sample/final.mp4`; detailed media scores are in
+`completed-sample/reconstructed-output.mp4`, and the editing-process
+`completed-sample/final.mp4`; detailed media scores are in
 `completed-sample/render-report.json`.
 
 ## Manual acceptance scenario

@@ -9,12 +9,12 @@ craft_root=${KDENLIVE_PILOT_CRAFT_ROOT:-/home/tenali/CraftRoot}
 binary="$repo_root/build/collector-gui/edit-path-recorder"
 export PATH="$craft_root/dev-utils/bin:$craft_root/bin:$craft_root/libexec:$PATH"
 
-if [[ ! -x $binary ]]; then
+if [[ ! -f $repo_root/build/collector-gui/build.ninja ]]; then
     mkdir -p "$repo_root/build/collector-gui"
     cmake -S "$script_dir/gui" -B "$repo_root/build/collector-gui" -GNinja \
         -DCMAKE_PREFIX_PATH="$craft_root"
-    cmake --build "$repo_root/build/collector-gui"
 fi
+cmake --build "$repo_root/build/collector-gui"
 
 export EDIT_PATH_REPO_ROOT="$repo_root"
 export LD_LIBRARY_PATH="$craft_root/lib:$craft_root/usr/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"

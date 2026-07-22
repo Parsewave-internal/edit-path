@@ -667,6 +667,15 @@ and uploads `EditPath-Windows-x64.zip`. The first artifact is intentionally a
 portable, unsigned engineering build. Installer creation, code signing, and
 update delivery follow only after functional testing on the editor's machine.
 
+To reduce first-artifact turnaround, the local build script now provides a
+fast `-PreflightOnly` prerequisite check, appends a durable
+`windows-build.log`, and prevents sleep while compiling. Before emitting the
+ZIP it runs `EditPath.exe --self-test`, `kdenlive.exe --version`, invokes the
+embedded Python validator, verifies FFmpeg-generated synthetic media, and
+requires a passing `SELF-TEST.json`. This catches missing executables, packaged
+scripts, Python runtime failures, and basic dependency-layout mistakes before
+the editor receives the artifact.
+
 ### Privacy and security
 
 The collector can reveal editor behavior, project structure, local file paths,

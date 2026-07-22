@@ -14,20 +14,21 @@ Perform the normal-session test before the crash-recovery test.
 ## Test A: normal session
 
 1. Extract `EditPath-Windows-x64.zip` to a normal writable folder.
-2. Double-click `bin\EditPath.exe`. Do not open `kdenlive.exe`.
-3. Confirm Kdenlive opens directly with no terminal or initialization screen.
-4. Import all three files from `test-media`.
-5. Add both videos to the timeline and make at least two cuts.
-6. Move or trim one clip at a visible frame boundary.
-7. Add `test-audio.wav` and move it to a deliberate timeline position.
-8. Press **Ctrl+Z** once and **Ctrl+Shift+Z** once.
-9. Save normally. Confirm no second project filename is requested and the
+2. Confirm `SELF-TEST.json` exists and contains `"passed": true`.
+3. Double-click `bin\EditPath.exe`. Do not open `kdenlive.exe`.
+4. Confirm Kdenlive opens directly with no terminal or initialization screen.
+5. Import all three files from `test-media`.
+6. Add both videos to the timeline and make at least two cuts.
+7. Move or trim one clip at a visible frame boundary.
+8. Add `test-audio.wav` and move it to a deliberate timeline position.
+9. Press **Ctrl+Z** once and **Ctrl+Shift+Z** once.
+10. Save normally. Confirm no second project filename is requested and the
    session contains `edit.kdenlive`.
-10. Render one MP4 directly into the displayed session folder.
-11. Close Kdenlive normally.
-12. Confirm the Edit Path completion screen appears, then click **Finish
+11. Render one MP4 directly into the displayed session folder.
+12. Close Kdenlive normally.
+13. Confirm the Edit Path completion screen appears, then click **Finish
     Session**.
-13. Open the generated sample and confirm `sample.json`, assets, final video,
+14. Open the generated sample and confirm `sample.json`, assets, final video,
     raw events, native project, and validation reports exist.
 
 Record PASS/FAIL and notes for every check:

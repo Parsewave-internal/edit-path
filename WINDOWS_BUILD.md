@@ -20,6 +20,15 @@ portable application does not require administrator access.
 
 ## Build
 
+Run the fast prerequisite check first. It does not download or compile Kdenlive:
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+.\packaging\windows\build-editpath.ps1 -PreflightOnly
+```
+
+Only continue when it prints `PREFLIGHT PASSED`.
+
 Open PowerShell in the repository root and run:
 
 ```powershell
@@ -34,6 +43,9 @@ The script verifies prerequisites before downloading or compiling anything. It
 then bootstraps KDE Craft under `C:\CraftRoot`, builds this exact checkout,
 packages all runtime dependencies, embeds Python, generates synthetic test
 media, and verifies both application executables.
+It also prevents sleep while its process is running, writes the complete output
+to `windows-output\windows-build.log`, and runs the packaged applications'
+non-interactive version/self-tests before creating the ZIP.
 
 The first build may take several hours. Keep PowerShell open and prevent the
 computer from sleeping. A failed build can normally be retried with the same
@@ -56,5 +68,6 @@ may warn because the MVP has not yet been code-signed; use **More info → Run
 anyway** only for an artifact built from the company repository.
 
 If the script fails, save the complete PowerShell output and send the last 100
-lines along with `windows-output\build-manifest.json` if it exists. Do not
+lines of `windows-output\windows-build.log` along with
+`windows-output\build-manifest.json` if it exists. Do not
 delete `C:\CraftRoot`, because it contains reusable dependency builds.

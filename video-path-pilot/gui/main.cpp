@@ -20,6 +20,7 @@
 #include <QPushButton>
 #include <QSettings>
 #include <QStandardPaths>
+#include <QTextStream>
 #include <QTimer>
 #include <QUrl>
 #include <QUuid>
@@ -357,11 +358,65 @@ private:
     QPlainTextEdit *m_activity{};
 };
 
+int runSelfTest()
+{
+    const QString appDirectory = QCoreApplication::applicationDirPath();
+    const QString root = repositoryRoot();
+    QJsonObject checks;
+    auto checkFile = [&checks](const QString &name, const QString &path) {
+        const bool present = QFileInfo::exists(path);
+        checks.insert(name, QJsonObject{{QStringLiteral("passed"), present}, {QStringLiteral("path"), QDir::toNativeSeparators(path)}});
+        return present;
+    };
+
+#ifdef Q_OS_WIN
+    const QString kdenlive = QDir(appDirectory).filePath(QStringLiteral("kdenlive.exe"));
+    const QString ffmpeg = QDir(appDirectory).filePath(QStringLiteral("ffmpeg.exe"));
+#else
+    const QString kdenlive = QDir(appDirectory).filePath(QStringLiteral("kdenlive"));
+    const QString ffmpeg = QStandardPaths::findExecutable(QStringLiteral("ffmpeg"));
+#endif
+    bool passed = !root.isEmpty();
+    checks.insert(QStringLiteral("application_root"),
+                  QJsonObject{{QStringLiteral("passed"), !root.isEmpty()}, {QStringLiteral("path"), QDir::toNativeSeparators(root)}});
+    passed = checkFile(QStringLiteral("kdenlive"), kdenlive) && passed;
+    passed = checkFile(QStringLiteral("ffmpeg"), ffmpeg) && passed;
+    const QString validator = QDir(root).filePath(QStringLiteral("video-path-pilot/validate_video_path.py"));
+    passed = checkFile(QStringLiteral("validator"), validator) && passed;
+    const QString pipeline = QDir(root).filePath(QStringLiteral("video-path-pilot/job_pipeline.py"));
+    passed = checkFile(QStringLiteral("pipeline"), pipeline) && passed;
+    QString python = pythonExecutable();
+    if (!QFileInfo(python).isAbsolute()) python = QStandardPaths::findExecutable(python);
+    passed = checkFile(QStringLiteral("python"), python) && passed;
+
+    QProcess validatorTest;
+    validatorTest.start(python, {validator, QStringLiteral("--help")});
+    const bool validatorStarted = validatorTest.waitForStarted(10000);
+    const bool validatorFinished = validatorStarted && validatorTest.waitForFinished(30000);
+    const bool validatorPassed = validatorFinished && validatorTest.exitStatus() == QProcess::NormalExit && validatorTest.exitCode() == 0;
+    QJsonObject pipelineCheck{{QStringLiteral("passed"), validatorPassed}, {QStringLiteral("exit_code"), validatorFinished ? validatorTest.exitCode() : -1}};
+    if (!validatorPassed) pipelineCheck.insert(QStringLiteral("error"), validatorTest.errorString());
+    checks.insert(QStringLiteral("python_pipeline"), pipelineCheck);
+    passed = validatorPassed && passed;
+
+    const QJsonObject report{
+        {QStringLiteral("schema_version"), QStringLiteral("0.1.0")}, {QStringLiteral("passed"), passed}, {QStringLiteral("checks"), checks}};
+    const QByteArray encoded = QJsonDocument(report).toJson(QJsonDocument::Indented);
+    QTextStream(stdout) << QString::fromUtf8(encoded);
+    const QString reportPath = qEnvironmentVariable("EDIT_PATH_SELF_TEST_REPORT");
+    if (!reportPath.isEmpty()) {
+        QFile reportFile(reportPath);
+        if (!reportFile.open(QIODevice::WriteOnly | QIODevice::Truncate) || reportFile.write(encoded) != encoded.size()) return EXIT_FAILURE;
+    }
+    return passed ? EXIT_SUCCESS : EXIT_FAILURE;
+}
+
 int main(int argc, char **argv)
 {
     QApplication application(argc, argv);
     QCoreApplication::setOrganizationName(QStringLiteral("Parsewave"));
     QCoreApplication::setApplicationName(QStringLiteral("EditPathRecorder"));
+    if (application.arguments().contains(QStringLiteral("--self-test"))) return runSelfTest();
     RecorderWindow window;
     return application.exec();
 }

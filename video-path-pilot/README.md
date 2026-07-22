@@ -36,6 +36,9 @@ MVP** GitHub Actions workflow. It uses the maintained KDE Craft Kdenlive
 blueprint to compile this checkout and its dependencies for 64-bit Windows,
 then adds an embedded Python runtime for local validation and sample packaging.
 The uploaded artifact is `EditPath-Windows-x64.zip`.
+The local/hosted build runs `EditPath.exe --self-test` before creating the ZIP;
+the resulting `SELF-TEST.json` must report `passed: true`. A separate
+`-PreflightOnly` mode checks the Windows machine before the long Craft build.
 
 After extracting the archive, start `bin\\EditPath.exe`. Do not start
 `bin\\kdenlive.exe` directly because that bypasses session supervision and

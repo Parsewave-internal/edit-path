@@ -5,6 +5,7 @@
 param(
     [string]$CraftRoot = "C:\CraftRoot",
     [string]$OutputDirectory = "",
+    [switch]$PreflightOnly,
     [switch]$SkipTestMedia
 )
 
@@ -12,6 +13,7 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 function Stop-Build([string]$Message) {
+    try { Stop-Transcript | Out-Null } catch { }
     throw "EditPath build prerequisite failed: $Message"
 }
 
@@ -27,6 +29,8 @@ if (-not $OutputDirectory) {
     $OutputDirectory = Join-Path $sourceRoot "windows-output"
 }
 New-Item -ItemType Directory -Force $OutputDirectory | Out-Null
+$buildLog = Join-Path $OutputDirectory "windows-build.log"
+Start-Transcript -Path $buildLog -Append | Out-Null
 
 $sourceDriveName = (Split-Path -Qualifier $sourceRoot).TrimEnd('\').TrimEnd(':')
 $sourceDrive = Get-PSDrive -Name $sourceDriveName
@@ -60,6 +64,24 @@ $visualStudio = & $vswhere -latest -products * -requires Microsoft.VisualStudio.
 if (-not $visualStudio) {
     Stop-Build "install the Visual Studio 2022 'Desktop development with C++' workload."
 }
+
+if ($PreflightOnly) {
+    Write-Host "PREFLIGHT PASSED" -ForegroundColor Green
+    Write-Host "Windows, disk space, Git, 64-bit Python, and Visual Studio C++ tools are ready."
+    Write-Host "Next command: .\packaging\windows\build-editpath.ps1"
+    Stop-Transcript | Out-Null
+    return
+}
+
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class EditPathPower {
+    [DllImport("kernel32.dll")]
+    public static extern uint SetThreadExecutionState(uint flags);
+}
+'@
+[EditPathPower]::SetThreadExecutionState(0x80000001) | Out-Null
 
 Write-Host "Source: $sourceRoot"
 Write-Host "Craft:  $CraftRoot"
@@ -158,6 +180,20 @@ New-Item -ItemType Directory -Force $pythonDirectory | Out-Null
 Expand-Archive $pythonZip $pythonDirectory -Force
 Remove-Item (Join-Path $pythonDirectory "python311._pth") -ErrorAction SilentlyContinue
 
+$selfTestReport = Join-Path $portable "SELF-TEST.json"
+$env:EDIT_PATH_SELF_TEST_REPORT = $selfTestReport
+& $editPath.FullName --self-test
+$selfTestExitCode = $LASTEXITCODE
+Remove-Item Env:\EDIT_PATH_SELF_TEST_REPORT -ErrorAction SilentlyContinue
+if ($selfTestExitCode -ne 0 -or -not (Test-Path $selfTestReport)) {
+    Stop-Build "the packaged EditPath runtime self-test failed."
+}
+$selfTest = Get-Content $selfTestReport -Raw | ConvertFrom-Json
+if (-not $selfTest.passed) { Stop-Build "the packaged runtime reported a failed dependency check." }
+
+& $kdenlive.FullName --version
+if ($LASTEXITCODE -ne 0) { Stop-Build "kdenlive.exe could not start for its version check." }
+
 if (-not $SkipTestMedia) {
     $ffmpeg = Get-ChildItem $portable -Recurse -File -Filter ffmpeg.exe | Select-Object -First 1
     if (-not $ffmpeg) { Stop-Build "ffmpeg.exe is missing; synthetic test media cannot be generated." }
@@ -174,6 +210,10 @@ if (-not $SkipTestMedia) {
     & $ffmpeg.FullName -hide_banner -loglevel error -y -f lavfi -i "sine=frequency=220:sample_rate=48000:duration=12" `
         -c:a pcm_s16le (Join-Path $testMedia "test-audio.wav")
     if ($LASTEXITCODE -ne 0) { Stop-Build "failed to generate test-audio.wav." }
+    $generatedMedia = Get-ChildItem $testMedia -File
+    if ($generatedMedia.Count -ne 3 -or ($generatedMedia | Where-Object Length -eq 0)) {
+        Stop-Build "synthetic test-media verification failed."
+    }
 }
 
 @"
@@ -207,3 +247,5 @@ Write-Host "BUILD COMPLETE" -ForegroundColor Green
 Write-Host "Portable folder: $portable"
 Write-Host "Shareable ZIP:    $outputZip"
 Write-Host "Start executable: $($editPath.FullName)"
+[EditPathPower]::SetThreadExecutionState(0x80000000) | Out-Null
+Stop-Transcript | Out-Null

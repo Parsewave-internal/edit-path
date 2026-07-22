@@ -805,6 +805,33 @@ can be overridden for automated testing with
 kill can still lose edits made since the latest checkpoint, but it no longer
 depends solely on a manual Ctrl+S or an opaque stale file.
 
+### GUI-ready feedback, watchdog restart, and reconstruction replay
+
+Further remote-X11 testing showed that Kdenlive could take long enough to build
+its interface that the hidden supervisor made startup look like a failure.
+EditPath now stays visible with an indeterminate progress bar and a clear
+startup message. Each recording segment receives a unique ready-signal path;
+Kdenlive writes that signal atomically after its GUI event loop starts, and only
+then does the supervisor hide. This is a real readiness handshake rather than a
+fixed delay.
+
+Crash status is now persisted as `recovery_available` immediately when the
+Kdenlive process exits abnormally, before asynchronous trajectory validation.
+This closes the window in which a second forced termination could leave the
+manifest incorrectly marked `recording`. On Linux, the normal collector
+launcher also runs the GUI in a separate process session and restarts it after
+an unexpected exit, with a three-restart limit. The persisted recovery screen
+therefore reappears even when the desktop force-quits both visible GUI
+processes. Normal application closure does not restart it.
+
+The `features/video-reconstruction` work was integrated after the crash and
+startup hardening baseline. In addition to exact final-state MLT reconstruction,
+completed samples now render an editing-process replay from the accepted event
+trajectory for training and review. Offline reconstruction explicitly permits
+MLT rendering without a display server. The final-state media gate remains
+authoritative; process replays are derived artifacts and do not replace the
+normalized trajectory or exact state chain.
+
 ## Historical Version 2 manual acceptance test
 
 1. Start a fresh recording and create/open a project.

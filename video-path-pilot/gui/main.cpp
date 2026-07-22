@@ -19,6 +19,7 @@
 #include <QPlainTextEdit>
 #include <QProcess>
 #include <QProcessEnvironment>
+#include <QProgressBar>
 #include <QPushButton>
 #include <QSaveFile>
 #include <QSettings>
@@ -140,6 +141,11 @@ private:
         m_status = new QLabel;
         m_status->setWordWrap(true);
         layout->addWidget(m_status);
+        m_launchProgress = new QProgressBar;
+        m_launchProgress->setRange(0, 0);
+        m_launchProgress->setTextVisible(false);
+        m_launchProgress->setVisible(false);
+        layout->addWidget(m_launchProgress);
         setStatus(QStringLiteral("Checking the editing session…"));
         layout->addWidget(new QLabel(QStringLiteral("<b>Session folder</b>")));
         m_sessionLabel = new QLabel(QStringLiteral("No session created"));
@@ -196,11 +202,15 @@ private:
         connect(&m_editor, &QProcess::started, this, [this] {
             writeManifest(QStringLiteral("recording"));
             m_heartbeat.start();
-            m_activity->appendPlainText(QStringLiteral("Kdenlive process started. Remote X11 startup can take 15–60 seconds."));
+            m_readyPoll.start();
+            setStatus(QStringLiteral("Kdenlive is loading its editor interface. This can take up to 60 seconds over a remote connection."));
+            m_activity->appendPlainText(QStringLiteral("Kdenlive process started; waiting for its GUI-ready signal…"));
         });
         connect(&m_editor, &QProcess::errorOccurred, this, [this](QProcess::ProcessError error) {
             if (error == QProcess::FailedToStart) {
                 m_heartbeat.stop();
+                m_readyPoll.stop();
+                m_launchProgress->setVisible(false);
                 writeManifest(QStringLiteral("start_failed"));
                 setStatus(QStringLiteral("Kdenlive could not start. Check X11 and the console log."), true);
                 m_start->setVisible(true);
@@ -213,6 +223,18 @@ private:
         m_heartbeat.setInterval(60000);
         connect(&m_heartbeat, &QTimer::timeout, this, [this] {
             if (m_editor.state() != QProcess::NotRunning) writeManifest(QStringLiteral("recording"));
+        });
+        m_readyPoll.setInterval(250);
+        connect(&m_readyPoll, &QTimer::timeout, this, [this] {
+            if (!m_readyFile.isEmpty() && QFileInfo::exists(m_readyFile)) {
+                m_readyPoll.stop();
+                m_launchProgress->setVisible(false);
+                setStatus(QStringLiteral("Kdenlive is ready. Continue editing in the Kdenlive window."));
+                m_activity->appendPlainText(QStringLiteral("Kdenlive reported that its editor interface is ready."));
+                QTimer::singleShot(750, this, [this] {
+                    if (m_editor.state() != QProcess::NotRunning) hide();
+                });
+            }
         });
     }
 
@@ -316,7 +338,9 @@ private:
             showCompletionWindow();
             return;
         }
-        hide();
+        showCompletionWindow();
+        m_title->setText(QStringLiteral("<h1>Starting Kdenlive</h1><p>Your editing session is being prepared. Keep this window open.</p>"));
+        m_launchProgress->setVisible(true);
         m_recover->setVisible(false);
         m_start->setVisible(false);
         m_finish->setEnabled(false);
@@ -324,6 +348,8 @@ private:
         const QString raw = QDir(m_session).filePath(QStringLiteral("raw-events-%1.jsonl").arg(number));
         const QString console = QDir(m_session).filePath(QStringLiteral("kdenlive-console-%1.log").arg(number));
         const QString project = QDir(m_session).filePath(QStringLiteral("edit.kdenlive"));
+        m_readyFile = QDir(m_session).filePath(QStringLiteral("kdenlive-ready-%1").arg(number));
+        QFile::remove(m_readyFile);
         QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
         environment.insert(QStringLiteral("KDENLIVE_VIDEO_PATH_CONFIG"), m_configName);
         environment.insert(QStringLiteral("KDENLIVE_VIDEO_PATH_PROJECT"), project);
@@ -332,6 +358,7 @@ private:
         environment.insert(QStringLiteral("KDENLIVE_VIDEO_PATH_SEGMENT"), QString::number(m_segment));
         environment.insert(QStringLiteral("KDENLIVE_VIDEO_PATH_STATE_DIR"), QDir(m_session).filePath(QStringLiteral("states")));
         environment.insert(QStringLiteral("KDENLIVE_VIDEO_PATH_ENTITY_MAP"), QDir(m_session).filePath(QStringLiteral("entity-map.json")));
+        environment.insert(QStringLiteral("KDENLIVE_VIDEO_PATH_READY_FILE"), m_readyFile);
         environment.remove(QStringLiteral("KDENLIVE_VIDEO_PATH_CLIPS"));
         environment.remove(QStringLiteral("QSG_RHI_BACKEND"));
         environment.remove(QStringLiteral("LIBGL_ALWAYS_SOFTWARE"));
@@ -339,8 +366,7 @@ private:
         m_editor.setWorkingDirectory(m_repoRoot);
         m_editor.setProcessChannelMode(QProcess::MergedChannels);
         m_editor.setStandardOutputFile(console, QIODevice::Append);
-        setStatus(
-            QStringLiteral("Kdenlive is starting. Import or create media normally, save the project and render in the session folder, then close normally."));
+        setStatus(QStringLiteral("Starting Kdenlive. Please wait; the recorder will hide itself when the editor reports that it is ready."));
         m_activity->appendPlainText(QStringLiteral("Starting recording segment %1…").arg(number));
         QString program;
         QStringList arguments;
@@ -359,8 +385,12 @@ private:
     void editorFinished(int exitCode, QProcess::ExitStatus exitStatus)
     {
         m_heartbeat.stop();
+        m_readyPoll.stop();
+        m_launchProgress->setVisible(false);
         m_lastEditorExitCode = exitCode;
         m_lastEditorExitCrashed = exitStatus != QProcess::NormalExit || exitCode != 0;
+        if (m_lastEditorExitCrashed) writeManifest(QStringLiteral("recovery_available"));
+        m_title->setText(QStringLiteral("<h1>Editing Session</h1><p>Kdenlive has closed. Review the session status below.</p>"));
         showCompletionWindow();
         m_activity->appendPlainText(m_lastEditorExitCrashed
                                         ? QStringLiteral("Kdenlive crashed with signal/exit code %1; checking recoverable evidence…").arg(exitCode)
@@ -481,15 +511,16 @@ private:
         }
     }
 
-    QString m_repoRoot, m_session, m_sessionId, m_configName, m_workerPurpose;
+    QString m_repoRoot, m_session, m_sessionId, m_configName, m_workerPurpose, m_readyFile;
     int m_segment{0};
     int m_lastEditorExitCode{0};
     QProcess m_editor, m_worker;
-    QTimer m_heartbeat;
+    QTimer m_heartbeat, m_readyPoll;
     bool m_showExistingCompletion{false}, m_lastEditorExitCrashed{false}, m_confirmNewSession{false};
     QLabel *m_title{}, *m_instructions{}, *m_status{}, *m_sessionLabel{};
     QPushButton *m_start{}, *m_recover{}, *m_finish{}, *m_openSession{}, *m_openCompleted{};
     QPlainTextEdit *m_activity{};
+    QProgressBar *m_launchProgress{};
 };
 
 int runSelfTest()

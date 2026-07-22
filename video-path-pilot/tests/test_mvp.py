@@ -42,11 +42,18 @@ class MvpTests(unittest.TestCase):
         self.assertIn('QMessageBox::question(this, QStringLiteral("Discard current session?")', source)
         self.assertNotIn("else if (m_autoRecover)", source)
         self.assertIn("The previous editing session ended unexpectedly", source)
+        self.assertIn('KDENLIVE_VIDEO_PATH_READY_FILE', source)
+        self.assertIn('m_launchProgress->setRange(0, 0)', source)
+        self.assertIn('writeManifest(QStringLiteral("recovery_available"))', source)
+        self.assertIn('setsid --wait "$binary"', launcher)
+        self.assertIn("restart_count > 3", launcher)
 
         editor_main = (root / "src/main.cpp").read_text(encoding="utf-8")
         self.assertIn('qEnvironmentVariableIntValue("KDENLIVE_VIDEO_PATH_AUTOSAVE_MS"', editor_main)
         self.assertIn("document->isModified()", editor_main)
         self.assertIn("pCore->projectManager()->saveFile()", editor_main)
+        self.assertIn('qEnvironmentVariable("KDENLIVE_VIDEO_PATH_READY_FILE")', editor_main)
+        self.assertIn('readyFile.write("ready\\n")', editor_main)
 
     def test_windows_build_uses_supported_visual_studio_and_craft_launcher(self):
         root = Path(__file__).parents[2]

@@ -27,7 +27,7 @@ from edit_path.pipeline import (
     validate_event_envelope,
     validate_state_transitions,
 )
-from edit_path.process_video import build_replay_moments, build_replay_steps
+from edit_path.process_video import _compatible_filters, build_replay_moments, build_replay_steps
 from edit_path.reconstruct import render_project, select_video_encoder
 from edit_path.runtime import runtime_fingerprint
 from edit_path.state import canonical_hash, load_state_reference, resolve_accepted_branch, validate_action_semantics
@@ -85,6 +85,13 @@ class BranchResolutionTests(unittest.TestCase):
 
 
 class StateTests(unittest.TestCase):
+    def test_replay_can_render_without_drawtext(self) -> None:
+        filters = ["drawbox=x=0:y=0:w=10:h=10:t=fill", "drawtext=text='Edit':x=0:y=0"]
+        self.assertEqual(
+            _compatible_filters(filters, text_enabled=False),
+            ["drawbox=x=0:y=0:w=10:h=10:t=fill"],
+        )
+
     def test_edit_process_replays_baseline_then_every_accepted_state(self) -> None:
         empty = {
             "timeline_id": "timeline",

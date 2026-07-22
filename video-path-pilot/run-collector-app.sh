@@ -41,4 +41,28 @@ if [[ -n $craft_root ]]; then
     [[ -d $craft_root/lib/mlt-7 ]] && export MLT_REPOSITORY="$craft_root/lib/mlt-7"
     export MLT_PREFIX="$craft_root"
 fi
-exec "$binary"
+restart_count=0
+while true; do
+    # Keep the launcher outside the GUI process session on Linux. If the
+    # desktop force-quits the editor/recorder application group, this small
+    # watchdog survives long enough to reopen the persisted recovery screen.
+    if [[ $platform == Linux ]] && command -v setsid >/dev/null 2>&1; then
+        if setsid --wait "$binary"; then
+            exit 0
+        else
+            exit_code=$?
+        fi
+    elif "$binary"; then
+        exit 0
+    else
+        exit_code=$?
+    fi
+
+    restart_count=$((restart_count + 1))
+    if (( restart_count > 3 )); then
+        echo "error: EditPath exited unexpectedly too many times (last exit: $exit_code)" >&2
+        exit "$exit_code"
+    fi
+    echo "EditPath exited unexpectedly (code $exit_code); reopening recovery in 2 seconds…" >&2
+    sleep 2
+done

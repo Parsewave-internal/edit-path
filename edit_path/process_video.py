@@ -254,6 +254,24 @@ def _run(command: list[str], description: str) -> None:
         raise EditPathError(f"{description} failed ({completed.returncode}):\n{detail}")
 
 
+def _supports_filter(ffmpeg: str, name: str) -> bool:
+    completed = subprocess.run(
+        [ffmpeg, "-hide_banner", "-filters"],
+        text=True,
+        capture_output=True,
+    )
+    if completed.returncode != 0:
+        return False
+    listing = f"{completed.stdout}\n{completed.stderr}"
+    return re.search(rf"^\s*[TSC\.]+\s+{re.escape(name)}\s", listing, re.MULTILINE) is not None
+
+
+def _compatible_filters(filters: list[str], *, text_enabled: bool) -> list[str]:
+    if text_enabled:
+        return filters
+    return [value for value in filters if not value.startswith("drawtext=")]
+
+
 def _scene_duration(moment: dict[str, Any]) -> float:
     event_type = moment["event_type"]
     if event_type in {"session.start", "session.end"}:
@@ -623,6 +641,7 @@ def _render_scene(
     maximum_frames: int,
     fps: float,
     moment_count: int,
+    text_enabled: bool,
 ) -> None:
     duration = _scene_duration(moment)
     command = [
@@ -646,7 +665,10 @@ def _render_scene(
         command.extend(["-stream_loop", "-1", "-i", str(asset)])
         asset_index = next_index
 
-    base_filters = _base_ui_filters(moment, moment_count=moment_count, fps=fps)
+    base_filters = _compatible_filters(
+        _base_ui_filters(moment, moment_count=moment_count, fps=fps),
+        text_enabled=text_enabled,
+    )
     graph = [f"[0:v]{','.join(base_filters)}[ui0]"]
     current = "ui0"
     label_index = 1
@@ -681,6 +703,7 @@ def _render_scene(
             *_action_filters(moment, scene_duration=duration, maximum_frames=maximum_frames),
         ]
     )
+    filters = _compatible_filters(filters, text_enabled=text_enabled)
     graph.append(f"[{current}]{','.join(filters)}[video]")
     command.extend(
         [
@@ -723,6 +746,7 @@ def render_edit_process(
     if not ffmpeg:
         raise EditPathError("ffmpeg is required to render the editing-process video")
     encoder = select_video_encoder(ffmpeg)
+    text_enabled = _supports_filter(ffmpeg, "drawtext")
     build_replay_steps(events, accepted, baseline_hash)
     moments = build_replay_moments(events)
     context = next((event.get("context") for event in events if event.get("event_type") == "project.context"), {})
@@ -802,6 +826,7 @@ def render_edit_process(
             maximum_frames=maximum_frames,
             fps=fps,
             moment_count=len(moments),
+            text_enabled=text_enabled,
         )
         scene_paths.append(scene)
         moment_reports.append(
@@ -874,6 +899,7 @@ def render_edit_process(
         "event_counts": counts,
         "duration_seconds": duration,
         "audio": "omitted_training_visualization",
+        "text_overlays": "drawtext" if text_enabled else "unavailable_in_ffmpeg_build",
         "output": {"sha256": sha256_file(output), "probe": output_probe},
         "events": moment_reports,
     }

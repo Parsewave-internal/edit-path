@@ -57,6 +57,7 @@ SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-KDE-Accepted-GPL
 #include <QQuickStyle>
 #include <QQuickWindow>
 #include <QResource>
+#include <QSaveFile>
 #include <QTimer>
 
 #include <QUndoGroup>
@@ -600,6 +601,15 @@ int main(int argc, char *argv[])
                 }
             });
             checkpointTimer->start();
+        }
+        const QString recorderReadyFile = qEnvironmentVariable("KDENLIVE_VIDEO_PATH_READY_FILE");
+        if (!recorderReadyFile.isEmpty()) {
+            QTimer::singleShot(1000, &app, [recorderReadyFile]() {
+                QSaveFile readyFile(recorderReadyFile);
+                if (!readyFile.open(QIODevice::WriteOnly) || readyFile.write("ready\n") != 6 || !readyFile.commit()) {
+                    qWarning() << "Could not write recorder GUI-ready signal" << recorderReadyFile;
+                }
+            });
         }
         VideoPathRecorder::instance().captureTimelineCheckpoint(QStringLiteral("gui.ready"));
         result = app.exec();

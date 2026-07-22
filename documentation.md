@@ -614,6 +614,23 @@ valid `session.end`, Kdenlive logged requested close events, session manifests
 reached `ready_to_finish`, and no core dump existed. The recording did not
 crash, although remote X11 responsiveness made the shutdown appear abrupt.
 
+The first freeform interruption audit found a different failure mode in
+`session_20260722_113348_7e8d3a1e`. Kdenlive stopped without `session.end`, the
+manifest remained `recording`, no core dump was registered, and the console
+ended while painting the imported clip. The JSONL lines that had already been
+flushed survived, but the editor had never saved the initially untitled
+project, so there was no project state for **Recover and Continue** to reopen.
+
+Crash recovery was consequently hardened around a session-owned project. A
+new session now creates and opens `edit.kdenlive` automatically. On recovery,
+the launcher passes that same file back to Kdenlive and starts the next
+numbered JSONL/log segment. This stable project path also enables Kdenlive's
+existing autosave/backup recovery to offer recent unsaved changes after a
+force-kill. The editor should save normally and must not create a second
+project file in the session folder. A GUI force-kill acceptance test is still
+required because the autosave prompt and restored timeline cannot be verified
+headlessly.
+
 ### Privacy and security
 
 The collector can reveal editor behavior, project structure, local file paths,

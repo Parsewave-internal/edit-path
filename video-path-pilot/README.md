@@ -23,7 +23,8 @@ video-path-pilot/run-collector-app.sh
 
 Choose **Run** if the file manager asks whether to display or execute the file.
 The one-screen app creates a session folder, launches blank Kdenlive with an
-isolated configuration, records numbered segments, offers crash recovery,
+isolated configuration, creates a session-owned `edit.kdenlive`, records
+numbered segments, offers crash recovery,
 validates termination, and packages the completed sample. There is no assigned
 job or initialization screen. No terminal commands are required.
 

@@ -28,8 +28,7 @@ namespace {
 QString repositoryRoot()
 {
     const QString configured = qEnvironmentVariable("EDIT_PATH_REPO_ROOT");
-    if (!configured.isEmpty() && QFileInfo::exists(configured + QStringLiteral("/video-path-pilot/job_pipeline.py")))
-        return QDir(configured).absolutePath();
+    if (!configured.isEmpty() && QFileInfo::exists(configured + QStringLiteral("/video-path-pilot/job_pipeline.py"))) return QDir(configured).absolutePath();
     QDir current(QCoreApplication::applicationDirPath());
     for (int depth = 0; depth < 6; ++depth) {
         if (QFileInfo::exists(current.filePath(QStringLiteral("video-path-pilot/job_pipeline.py")))) return current.absolutePath();
@@ -44,15 +43,22 @@ QString sessionsRoot()
     if (videos.isEmpty()) videos = QDir::homePath() + QStringLiteral("/Videos");
     return QDir(videos).filePath(QStringLiteral("EditPathSessions"));
 }
-}
+} // namespace
 
 class RecorderWindow final : public QMainWindow
 {
 public:
-    RecorderWindow() : m_repoRoot(repositoryRoot())
+    RecorderWindow()
+        : m_repoRoot(repositoryRoot())
     {
-        setWindowTitle(QStringLiteral("Edit Path Recorder MVP")); resize(720, 500); buildUi(); restoreLastSession();
-        if (m_repoRoot.isEmpty()) { m_start->setEnabled(false); setStatus(QStringLiteral("Recorder installation was not found."), true); }
+        setWindowTitle(QStringLiteral("Edit Path Recorder MVP"));
+        resize(720, 500);
+        buildUi();
+        restoreLastSession();
+        if (m_repoRoot.isEmpty()) {
+            m_start->setEnabled(false);
+            setStatus(QStringLiteral("Recorder installation was not found."), true);
+        }
     }
 
 protected:
@@ -60,7 +66,8 @@ protected:
     {
         if (m_editor.state() != QProcess::NotRunning || m_worker.state() != QProcess::NotRunning) {
             QMessageBox::warning(this, QStringLiteral("Task active"), QStringLiteral("Wait for the active task or close Kdenlive normally."));
-            event->ignore(); return;
+            event->ignore();
+            return;
         }
         event->accept();
     }
@@ -68,35 +75,63 @@ protected:
 private:
     void buildUi()
     {
-        auto *central = new QWidget; auto *layout = new QVBoxLayout(central);
+        auto *central = new QWidget;
+        auto *layout = new QVBoxLayout(central);
         auto *title = new QLabel(QStringLiteral("<h1>Edit Path Recorder</h1><p>Start a session, make the video in Kdenlive, and finish the session.</p>"));
-        title->setWordWrap(true); layout->addWidget(title);
-        auto *instructions = new QLabel(QStringLiteral(
-            "You may import, download, or create media at any time while editing. When finished, save exactly one "
-            "<b>.kdenlive</b> project and one rendered video directly in the session folder, then close Kdenlive normally."));
-        instructions->setWordWrap(true); layout->addWidget(instructions);
-        m_status = new QLabel; m_status->setWordWrap(true); layout->addWidget(m_status); setStatus(QStringLiteral("Ready to start."));
+        title->setWordWrap(true);
+        layout->addWidget(title);
+        auto *instructions =
+            new QLabel(QStringLiteral("You may import, download, or create media at any time while editing. When finished, save exactly one "
+                                      "<b>.kdenlive</b> project and one rendered video directly in the session folder, then close Kdenlive normally."));
+        instructions->setWordWrap(true);
+        layout->addWidget(instructions);
+        m_status = new QLabel;
+        m_status->setWordWrap(true);
+        layout->addWidget(m_status);
+        setStatus(QStringLiteral("Ready to start."));
         layout->addWidget(new QLabel(QStringLiteral("<b>Session folder</b>")));
-        m_sessionLabel = new QLabel(QStringLiteral("No session created")); m_sessionLabel->setWordWrap(true);
-        m_sessionLabel->setTextInteractionFlags(Qt::TextSelectableByMouse); layout->addWidget(m_sessionLabel);
+        m_sessionLabel = new QLabel(QStringLiteral("No session created"));
+        m_sessionLabel->setWordWrap(true);
+        m_sessionLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        layout->addWidget(m_sessionLabel);
 
         auto *primary = new QHBoxLayout;
-        m_start = new QPushButton(QStringLiteral("Start Editing Session")); m_start->setMinimumHeight(42);
-        m_recover = new QPushButton(QStringLiteral("Recover and Continue")); m_recover->setMinimumHeight(42); m_recover->setVisible(false);
-        m_finish = new QPushButton(QStringLiteral("Finish Session")); m_finish->setMinimumHeight(42); m_finish->setEnabled(false);
-        primary->addWidget(m_start); primary->addWidget(m_recover); primary->addWidget(m_finish); layout->addLayout(primary);
+        m_start = new QPushButton(QStringLiteral("Start Editing Session"));
+        m_start->setMinimumHeight(42);
+        m_recover = new QPushButton(QStringLiteral("Recover and Continue"));
+        m_recover->setMinimumHeight(42);
+        m_recover->setVisible(false);
+        m_finish = new QPushButton(QStringLiteral("Finish Session"));
+        m_finish->setMinimumHeight(42);
+        m_finish->setEnabled(false);
+        primary->addWidget(m_start);
+        primary->addWidget(m_recover);
+        primary->addWidget(m_finish);
+        layout->addLayout(primary);
         auto *secondary = new QHBoxLayout;
-        m_openSession = new QPushButton(QStringLiteral("Open Session Folder")); m_openSession->setEnabled(false);
-        m_openCompleted = new QPushButton(QStringLiteral("Open Generated Sample")); m_openCompleted->setEnabled(false);
-        secondary->addWidget(m_openSession); secondary->addWidget(m_openCompleted); secondary->addStretch(); layout->addLayout(secondary);
-        m_activity = new QPlainTextEdit; m_activity->setReadOnly(true); m_activity->setMaximumBlockCount(300); layout->addWidget(m_activity, 1);
+        m_openSession = new QPushButton(QStringLiteral("Open Session Folder"));
+        m_openSession->setEnabled(false);
+        m_openCompleted = new QPushButton(QStringLiteral("Open Generated Sample"));
+        m_openCompleted->setEnabled(false);
+        secondary->addWidget(m_openSession);
+        secondary->addWidget(m_openCompleted);
+        secondary->addStretch();
+        layout->addLayout(secondary);
+        m_activity = new QPlainTextEdit;
+        m_activity->setReadOnly(true);
+        m_activity->setMaximumBlockCount(300);
+        layout->addWidget(m_activity, 1);
         setCentralWidget(central);
 
         connect(m_start, &QPushButton::clicked, this, &RecorderWindow::startNewSession);
-        connect(m_recover, &QPushButton::clicked, this, [this] { ++m_segment; launchSegment(); });
+        connect(m_recover, &QPushButton::clicked, this, [this] {
+            ++m_segment;
+            launchSegment();
+        });
         connect(m_finish, &QPushButton::clicked, this, &RecorderWindow::finishSession);
         connect(m_openSession, &QPushButton::clicked, this, [this] { QDesktopServices::openUrl(QUrl::fromLocalFile(m_session)); });
-        connect(m_openCompleted, &QPushButton::clicked, this, [this] { QDesktopServices::openUrl(QUrl::fromLocalFile(m_session + QStringLiteral("/completed-sample"))); });
+        connect(m_openCompleted, &QPushButton::clicked, this,
+                [this] { QDesktopServices::openUrl(QUrl::fromLocalFile(m_session + QStringLiteral("/completed-sample"))); });
         connect(&m_editor, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this, &RecorderWindow::editorFinished);
         connect(&m_editor, &QProcess::started, this, [this] {
             writeManifest(QStringLiteral("recording"));
@@ -104,7 +139,8 @@ private:
         });
         connect(&m_editor, &QProcess::errorOccurred, this, [this](QProcess::ProcessError error) {
             if (error == QProcess::FailedToStart) {
-                writeManifest(QStringLiteral("start_failed")); setStatus(QStringLiteral("Kdenlive could not start. Check X11 and the console log."), true);
+                writeManifest(QStringLiteral("start_failed"));
+                setStatus(QStringLiteral("Kdenlive could not start. Check X11 and the console log."), true);
                 m_start->setEnabled(true);
             }
         });
@@ -115,19 +151,21 @@ private:
 
     void setStatus(const QString &text, bool error = false)
     {
-        m_status->setText(text); m_status->setStyleSheet(error
-            ? QStringLiteral("padding:10px;background:#f7dddd;color:#7d1010;border-radius:4px;")
-            : QStringLiteral("padding:10px;background:#e2f2e5;color:#164d24;border-radius:4px;"));
+        m_status->setText(text);
+        m_status->setStyleSheet(error ? QStringLiteral("padding:10px;background:#f7dddd;color:#7d1010;border-radius:4px;")
+                                      : QStringLiteral("padding:10px;background:#e2f2e5;color:#164d24;border-radius:4px;"));
     }
 
     void writeManifest(const QString &status)
     {
         if (m_session.isEmpty()) return;
         QJsonObject manifest{{QStringLiteral("schema_version"), QStringLiteral("0.2.0")},
-            {QStringLiteral("session_dir"), m_session}, {QStringLiteral("config_name"), m_configName},
-            {QStringLiteral("segment"), m_segment}, {QStringLiteral("status"), status},
-            {QStringLiteral("kdenlive_pid"), qint64(m_editor.processId())},
-            {QStringLiteral("updated_at_utc"), QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)}};
+                             {QStringLiteral("session_dir"), m_session},
+                             {QStringLiteral("config_name"), m_configName},
+                             {QStringLiteral("segment"), m_segment},
+                             {QStringLiteral("status"), status},
+                             {QStringLiteral("kdenlive_pid"), qint64(m_editor.processId())},
+                             {QStringLiteral("updated_at_utc"), QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)}};
         QFile file(QDir(m_session).filePath(QStringLiteral("session.json")));
         if (file.open(QIODevice::WriteOnly | QIODevice::Truncate)) file.write(QJsonDocument(manifest).toJson(QJsonDocument::Indented));
         QSettings().setValue(QStringLiteral("lastSession"), m_session);
@@ -140,14 +178,21 @@ private:
         if (previous.isEmpty() || !file.open(QIODevice::ReadOnly)) return;
         const auto manifest = QJsonDocument::fromJson(file.readAll()).object();
         if (manifest.value(QStringLiteral("schema_version")).toString() != QStringLiteral("0.2.0")) return;
-        m_session = previous; m_configName = manifest.value(QStringLiteral("config_name")).toString();
-        m_segment = manifest.value(QStringLiteral("segment")).toInt(); m_sessionLabel->setText(m_session); m_openSession->setEnabled(true);
+        m_session = previous;
+        m_configName = manifest.value(QStringLiteral("config_name")).toString();
+        m_segment = manifest.value(QStringLiteral("segment")).toInt();
+        m_sessionLabel->setText(m_session);
+        m_openSession->setEnabled(true);
         const QString status = manifest.value(QStringLiteral("status")).toString();
-        if (status == QStringLiteral("ready_to_finish")) { m_finish->setEnabled(true); setStatus(QStringLiteral("Previous recording is ready to finish.")); }
-        else if (status == QStringLiteral("recovery_available") || status == QStringLiteral("recording")) {
-            m_recover->setVisible(true); setStatus(QStringLiteral("Previous session was interrupted. Verify Kdenlive is closed, then recover or start a fresh session."), true);
+        if (status == QStringLiteral("ready_to_finish")) {
+            m_finish->setEnabled(true);
+            setStatus(QStringLiteral("Previous recording is ready to finish."));
+        } else if (status == QStringLiteral("recovery_available") || status == QStringLiteral("recording")) {
+            m_recover->setVisible(true);
+            setStatus(QStringLiteral("Previous session was interrupted. Verify Kdenlive is closed, then recover or start a fresh session."), true);
         } else if (status == QStringLiteral("packaged")) {
-            m_openCompleted->setEnabled(true); setStatus(QStringLiteral("Previous sample was generated."));
+            m_openCompleted->setEnabled(true);
+            setStatus(QStringLiteral("Previous sample was generated."));
         }
     }
 
@@ -156,26 +201,42 @@ private:
         const QString stamp = QDateTime::currentDateTimeUtc().toString(QStringLiteral("yyyyMMdd_HHmmss"));
         const QString suffix = QUuid::createUuid().toString(QUuid::WithoutBraces).left(8);
         m_session = QDir(sessionsRoot()).filePath(QStringLiteral("session_%1_%2").arg(stamp, suffix));
-        m_configName = QStringLiteral("edit-path-%1rc").arg(suffix); m_segment = 1;
-        if (!QDir().mkpath(m_session)) { setStatus(QStringLiteral("Could not create session folder."), true); return; }
-        m_sessionLabel->setText(m_session); m_openSession->setEnabled(true); m_openCompleted->setEnabled(false);
-        writeManifest(QStringLiteral("created")); launchSegment();
+        m_configName = QStringLiteral("edit-path-%1rc").arg(suffix);
+        m_segment = 1;
+        if (!QDir().mkpath(m_session)) {
+            setStatus(QStringLiteral("Could not create session folder."), true);
+            return;
+        }
+        m_sessionLabel->setText(m_session);
+        m_openSession->setEnabled(true);
+        m_openCompleted->setEnabled(false);
+        writeManifest(QStringLiteral("created"));
+        launchSegment();
     }
 
     void launchSegment()
     {
-        m_recover->setVisible(false); m_start->setEnabled(false); m_finish->setEnabled(false);
+        m_recover->setVisible(false);
+        m_start->setEnabled(false);
+        m_finish->setEnabled(false);
         const QString number = QStringLiteral("%1").arg(m_segment, 3, 10, QLatin1Char('0'));
         const QString raw = QDir(m_session).filePath(QStringLiteral("raw-events-%1.jsonl").arg(number));
         const QString console = QDir(m_session).filePath(QStringLiteral("kdenlive-console-%1.log").arg(number));
+        const QString project = QDir(m_session).filePath(QStringLiteral("edit.kdenlive"));
         QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
         environment.insert(QStringLiteral("KDENLIVE_VIDEO_PATH_CONFIG"), m_configName);
+        environment.insert(QStringLiteral("KDENLIVE_VIDEO_PATH_PROJECT"), project);
         environment.remove(QStringLiteral("KDENLIVE_VIDEO_PATH_CLIPS"));
-        m_editor.setProcessEnvironment(environment); m_editor.setWorkingDirectory(m_repoRoot);
-        m_editor.setProcessChannelMode(QProcess::MergedChannels); m_editor.setStandardOutputFile(console, QIODevice::Append);
-        setStatus(QStringLiteral("Kdenlive is starting. Import or create media normally, save the project and render in the session folder, then close normally."));
+        m_editor.setProcessEnvironment(environment);
+        m_editor.setWorkingDirectory(m_repoRoot);
+        m_editor.setProcessChannelMode(QProcess::MergedChannels);
+        m_editor.setStandardOutputFile(console, QIODevice::Append);
+        setStatus(
+            QStringLiteral("Kdenlive is starting. Import or create media normally, save the project and render in the session folder, then close normally."));
         m_activity->appendPlainText(QStringLiteral("Starting recording segment %1…").arg(number));
-        m_editor.start(m_repoRoot + QStringLiteral("/video-path-pilot/run-video-path-pilot.sh"), {raw});
+        QStringList arguments{raw};
+        if (QFileInfo::exists(project)) arguments.append(project);
+        m_editor.start(m_repoRoot + QStringLiteral("/video-path-pilot/run-video-path-pilot.sh"), arguments);
     }
 
     void editorFinished(int exitCode, QProcess::ExitStatus)
@@ -188,53 +249,73 @@ private:
 
     void finishSession()
     {
-        m_finish->setEnabled(false); m_workerPurpose = QStringLiteral("finalize");
+        m_finish->setEnabled(false);
+        m_workerPurpose = QStringLiteral("finalize");
         setStatus(QStringLiteral("Discovering project assets, generating sample.json, reconstructing the edit, and comparing renders…"));
-        m_worker.start(QStringLiteral("python3"), {m_repoRoot + QStringLiteral("/video-path-pilot/job_pipeline.py"),
-            QStringLiteral("finalize-freeform"), m_session});
+        m_worker.start(QStringLiteral("python3"),
+                       {m_repoRoot + QStringLiteral("/video-path-pilot/job_pipeline.py"), QStringLiteral("finalize-freeform"), m_session});
     }
 
     void readWorker()
     {
         const QString output = QString::fromUtf8(m_worker.readAllStandardOutput()).trimmed();
         const QString errors = QString::fromUtf8(m_worker.readAllStandardError()).trimmed();
-        if (!output.isEmpty()) m_activity->appendPlainText(output); if (!errors.isEmpty()) m_activity->appendPlainText(errors);
+        if (!output.isEmpty()) m_activity->appendPlainText(output);
+        if (!errors.isEmpty()) m_activity->appendPlainText(errors);
     }
 
     void workerFinished(int exitCode, QProcess::ExitStatus status)
     {
-        readWorker(); const bool success = status == QProcess::NormalExit && exitCode == 0;
+        readWorker();
+        const bool success = status == QProcess::NormalExit && exitCode == 0;
         if (m_workerPurpose == QStringLiteral("validate")) {
             if (success) {
-                writeManifest(QStringLiteral("ready_to_finish")); m_finish->setEnabled(true); m_start->setEnabled(true);
-                setStatus(QStringLiteral("Recording completed. Put exactly one .kdenlive project and one rendered video in the session folder, then click Finish Session."));
+                writeManifest(QStringLiteral("ready_to_finish"));
+                m_finish->setEnabled(true);
+                m_start->setEnabled(true);
+                setStatus(QStringLiteral(
+                    "Recording completed. Put exactly one .kdenlive project and one rendered video in the session folder, then click Finish Session."));
             } else {
-                writeManifest(QStringLiteral("recovery_available")); m_recover->setVisible(true);
+                writeManifest(QStringLiteral("recovery_available"));
+                m_recover->setVisible(true);
                 setStatus(QStringLiteral("Recording ended unexpectedly. Use Recover and Continue, or start a fresh session if no edit was made."), true);
             }
         } else if (m_workerPurpose == QStringLiteral("finalize")) {
             if (success) {
-                writeManifest(QStringLiteral("packaged")); m_openCompleted->setEnabled(true); m_start->setEnabled(true);
-                QFile reportFile(m_session + QStringLiteral("/completed-sample/validation/reconstruction-report.json")); bool mediaPassed = false;
-                if (reportFile.open(QIODevice::ReadOnly)) mediaPassed = QJsonDocument::fromJson(reportFile.readAll()).object()
-                    .value(QStringLiteral("media_project_reconstruction")).toString() == QStringLiteral("passed");
+                writeManifest(QStringLiteral("packaged"));
+                m_openCompleted->setEnabled(true);
+                m_start->setEnabled(true);
+                QFile reportFile(m_session + QStringLiteral("/completed-sample/validation/reconstruction-report.json"));
+                bool mediaPassed = false;
+                if (reportFile.open(QIODevice::ReadOnly))
+                    mediaPassed = QJsonDocument::fromJson(reportFile.readAll()).object().value(QStringLiteral("media_project_reconstruction")).toString() ==
+                                  QStringLiteral("passed");
                 setStatus(mediaPassed
-                    ? QStringLiteral("Sample and reconstructed media passed. The verbal task prompt is pending internal entry before client review.")
-                    : QStringLiteral("Sample generated, but media reconstruction is unsupported or failed. Review reconstruction-report.json."), !mediaPassed);
+                              ? QStringLiteral("Sample and reconstructed media passed. The verbal task prompt is pending internal entry before client review.")
+                              : QStringLiteral("Sample generated, but media reconstruction is unsupported or failed. Review reconstruction-report.json."),
+                          !mediaPassed);
             } else {
-                m_finish->setEnabled(true); setStatus(QStringLiteral("Sample generation failed. Review Activity and correct the project, render, or media files."), true);
+                m_finish->setEnabled(true);
+                setStatus(QStringLiteral("Sample generation failed. Review Activity and correct the project, render, or media files."), true);
             }
         }
         m_workerPurpose.clear();
     }
 
-    QString m_repoRoot, m_session, m_configName, m_workerPurpose; int m_segment{0};
-    QProcess m_editor, m_worker; QLabel *m_status{}, *m_sessionLabel{};
-    QPushButton *m_start{}, *m_recover{}, *m_finish{}, *m_openSession{}, *m_openCompleted{}; QPlainTextEdit *m_activity{};
+    QString m_repoRoot, m_session, m_configName, m_workerPurpose;
+    int m_segment{0};
+    QProcess m_editor, m_worker;
+    QLabel *m_status{}, *m_sessionLabel{};
+    QPushButton *m_start{}, *m_recover{}, *m_finish{}, *m_openSession{}, *m_openCompleted{};
+    QPlainTextEdit *m_activity{};
 };
 
 int main(int argc, char **argv)
 {
-    QApplication application(argc, argv); QCoreApplication::setOrganizationName(QStringLiteral("Parsewave"));
-    QCoreApplication::setApplicationName(QStringLiteral("EditPathRecorder")); RecorderWindow window; window.show(); return application.exec();
+    QApplication application(argc, argv);
+    QCoreApplication::setOrganizationName(QStringLiteral("Parsewave"));
+    QCoreApplication::setApplicationName(QStringLiteral("EditPathRecorder"));
+    RecorderWindow window;
+    window.show();
+    return application.exec();
 }

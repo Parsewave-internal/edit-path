@@ -10,13 +10,15 @@ must be prepared in the app before editing.
 2. Click **Start Editing Session** and wait for the blank Kdenlive window.
    Remote X11 startup can take 15–60 seconds.
 3. Make the requested video normally. Import or create assets whenever needed.
-4. Save exactly one `.kdenlive` project directly in the session folder shown by
-   the recorder.
+4. The recorder creates `edit.kdenlive` in the session folder automatically.
+   Save normally while editing; do not create a second project file.
 5. Render exactly one final video (`.mp4`, `.mov`, `.mkv`, or `.webm`) into that
    same folder.
 6. Close Kdenlive normally and wait for recording validation.
-7. If Kdenlive ended unexpectedly, use **Recover and Continue**. A new numbered
-   event segment is created without overwriting prior evidence.
+7. If Kdenlive ended unexpectedly, restart the recorder and use **Recover and
+   Continue**. It reopens `edit.kdenlive` (and Kdenlive may offer its latest
+   autosave) while creating a new numbered event segment without overwriting
+   prior evidence.
 8. Click **Finish Session**. The app discovers resources from the saved project,
    hashes and copies them, resolves Kdenlive IDs, generates `sample.json`,
    reconstructs supported edits, renders, and compares media.

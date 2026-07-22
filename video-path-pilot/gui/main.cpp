@@ -255,6 +255,7 @@ private:
                 m_launchProgress->setVisible(false);
                 writeManifest(QStringLiteral("start_failed"));
                 setStatus(QStringLiteral("Kdenlive could not open. Your session is safe. Show technical details and share them with the EditPath team."), true);
+                m_activity->appendPlainText(QStringLiteral("Kdenlive failed to start: %1").arg(m_editor.errorString()));
                 m_start->setVisible(true);
                 showCompletionWindow();
             }
@@ -617,6 +618,9 @@ int runSelfTest()
     passed = checkFile(QStringLiteral("qt_multimedia_qml"), qtMultimediaQmlPath()) && passed;
     const QString kdeDesktopQml = QDir(QLibraryInfo::path(QLibraryInfo::QmlImportsPath)).filePath(QStringLiteral("org/kde/desktop/qmldir"));
     passed = checkFile(QStringLiteral("kde_desktop_qml"), kdeDesktopQml) && passed;
+    const QDir packagedPrefix(appDirectory + QStringLiteral("/.."));
+    passed = checkFile(QStringLiteral("kio_file_worker"), packagedPrefix.filePath(QStringLiteral("plugins/kf6/kio/kio_file.so"))) && passed;
+    passed = checkFile(QStringLiteral("frei0r_runtime"), packagedPrefix.filePath(QStringLiteral("lib/frei0r-1/alphaover.so"))) && passed;
     const QString validator = QDir(root).filePath(QStringLiteral("video-path-pilot/validate_video_path.py"));
     passed = checkFile(QStringLiteral("validator"), validator) && passed;
     const QString pipeline = QDir(root).filePath(QStringLiteral("video-path-pilot/job_pipeline.py"));

@@ -21,6 +21,8 @@ offscreen backend is included so the self-test also works on a headless builder.
 KDE's `org.kde.desktop` QML style is seeded explicitly because Kdenlive imports
 it from a compiled splash-screen resource that automatic source scanning cannot
 see.
+The package also includes KDE KIO workers for local file browsing and the
+Frei0r runtime effects, with their lookup paths established by `AppRun`.
 
 ## Test
 

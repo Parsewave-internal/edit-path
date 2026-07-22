@@ -40,6 +40,11 @@ ln -s python3.11 "$appdir/usr/bin/python3"
 mkdir -p "$appdir/usr/lib" "$appdir/usr/share"
 cp -a "$craft_root/lib/mlt-7" "$appdir/usr/lib/"
 cp -a "$craft_root/share/mlt-7" "$appdir/usr/share/"
+cp -a "$craft_root/lib/frei0r-1" "$appdir/usr/lib/"
+mkdir -p "$appdir/usr/plugins/kf6/kio"
+for kio_worker in "$craft_root/plugins/kf6/kio"/*.so; do
+    install -Dm755 "$kio_worker" "$appdir/usr/plugins/kf6/kio/$(basename "$kio_worker")"
+done
 install -Dm755 "$craft_root/plugins/platforms/libqoffscreen.so" \
     "$appdir/usr/plugins/platforms/libqoffscreen.so"
 # Kdenlive's splash screen imports this KDE style from its compiled QML

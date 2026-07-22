@@ -117,7 +117,11 @@ def validate_project_state_sidecars(
 ) -> dict[str, Any]:
     current_hash: str | None = None
     checked = 0
+    recovery_pending = False
+    recovery_rebases = 0
     for event in events:
+        if event.get("event_type") == "session.recovered":
+            recovery_pending = True
         if event.get("event_type") not in {"state.checkpoint", "state.diff"}:
             continue
         reference = state_reference(event)
@@ -131,7 +135,14 @@ def validate_project_state_sidecars(
         digest = reference.get("sha256")
         if event.get("event_type") == "state.checkpoint":
             if current_hash is not None and digest != current_hash:
-                raise GateError("project_hash_chain", "checkpoint exact state does not match the preceding project state", sequence)
+                # Kdenlive reserializes its project and regenerates internal
+                # object IDs while reopening. The state validator has already
+                # proved semantic equality across this explicit recovery
+                # boundary, so begin a new exact byte chain at its checkpoint.
+                if not recovery_pending:
+                    raise GateError("project_hash_chain", "checkpoint exact state does not match the preceding project state", sequence)
+                recovery_rebases += 1
+            recovery_pending = False
         else:
             before_hash = event.get("project_before_hash")
             after_hash = event.get("project_after_hash")
@@ -143,7 +154,7 @@ def validate_project_state_sidecars(
         checked += 1
     if require_exact and checked == 0:
         raise GateError("state_sidecars", "v0.3 session contains no exact project states")
-    return {"states_checked": checked, "final_project_hash": current_hash}
+    return {"states_checked": checked, "final_project_hash": current_hash, "recovery_rebases": recovery_rebases}
 
 
 def validate_stable_entities(events: list[dict[str, Any]], *, required: bool) -> int:

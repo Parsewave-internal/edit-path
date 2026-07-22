@@ -816,6 +816,11 @@ finished its asynchronous load and the recorder has persisted a full timeline
 checkpoint; only then does the supervisor hide. This is a real editor-and-data
 readiness handshake rather than a fixed delay. In particular, it prevents the
 first mutation after crash recovery from being consumed as a late baseline.
+Kdenlive regenerates native object IDs and may reserialize equivalent project
+XML during that reload. Segment assembly therefore permits an identity and
+exact-byte-chain rebase only at an explicit recovery boundary, and only after
+the normalized timeline snapshots prove that all editing semantics match.
+Within each segment, state hashes and exact project-state chains remain strict.
 
 Crash status is now persisted as `recovery_available` immediately when the
 Kdenlive process exits abnormally, before asynchronous trajectory validation.
@@ -829,7 +834,10 @@ processes. Normal application closure does not restart it.
 The `features/video-reconstruction` work was integrated after the crash and
 startup hardening baseline. In addition to exact final-state MLT reconstruction,
 completed samples now render an editing-process replay from the accepted event
-trajectory for training and review. Offline reconstruction explicitly permits
+trajectory for training and review. Replay thumbnails are selected only from
+assets that `ffprobe` confirms contain a video stream; audio-only inputs remain
+in the manifest and timeline but are never connected to an FFmpeg video-filter
+input. Offline reconstruction explicitly permits
 MLT rendering without a display server. The final-state media gate remains
 authoritative; process replays are derived artifacts and do not replace the
 normalized trajectory or exact state chain.

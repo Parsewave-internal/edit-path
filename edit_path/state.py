@@ -43,6 +43,44 @@ def canonical_hash(value: dict[str, Any]) -> str:
     return hashlib.sha256(canonical_bytes(value)).hexdigest()
 
 
+def _recovery_semantic_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
+    """Remove Kdenlive object identities that are regenerated on project load."""
+    value = copy.deepcopy(snapshot)
+    track_identities = {
+        track.get("native_id"): {
+            "position": track.get("position"),
+            "tag": track.get("tag"),
+            "kind": track.get("kind"),
+        }
+        for track in value.get("tracks", [])
+    }
+
+    def normalize(item: Any) -> Any:
+        if isinstance(item, dict):
+            result = {}
+            for key, child in item.items():
+                if key in {"native_id", "entity_id"}:
+                    continue
+                if key == "track_native_id":
+                    result["track_identity"] = track_identities.get(child, {"unresolved_track": child})
+                else:
+                    result[key] = normalize(child)
+            return result
+        if isinstance(item, list):
+            normalized = [normalize(child) for child in item]
+            if all(isinstance(child, dict) for child in normalized):
+                normalized.sort(key=canonical_bytes)
+            return normalized
+        return item
+
+    return normalize(value)
+
+
+def recovery_snapshots_equal(before: dict[str, Any], after: dict[str, Any]) -> bool:
+    """Compare reload-boundary states while retaining all editing semantics."""
+    return canonical_bytes(_recovery_semantic_snapshot(before)) == canonical_bytes(_recovery_semantic_snapshot(after))
+
+
 def _sort_snapshot(snapshot: dict[str, Any]) -> None:
     snapshot.setdefault("tracks", []).sort(key=lambda item: (item.get("position", 0), item.get("native_id", 0)))
     snapshot.setdefault("clips", []).sort(
@@ -93,11 +131,16 @@ def apply_diff(snapshot: dict[str, Any], event: dict[str, Any]) -> dict[str, Any
     return result
 
 
-def validate_state_transitions(events: list[dict[str, Any]]) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
+def validate_state_transitions(
+    events: list[dict[str, Any]], *, allow_recovery_identity_rebase: bool = True
+) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
     snapshots: dict[str, dict[str, Any]] = {}
     states: list[dict[str, Any]] = []
+    recovery_pending = False
     for event in events:
         event_type = event.get("event_type")
+        if event_type == "session.recovered":
+            recovery_pending = True
         if event_type not in {"state.checkpoint", "state.diff"}:
             continue
         sequence = event_sequence(event)
@@ -112,8 +155,15 @@ def validate_state_transitions(events: list[dict[str, Any]]) -> tuple[dict[str, 
             if checkpoint_hash != event.get("state_hash"):
                 raise GateError("state_transition", "checkpoint state hash mismatch", sequence)
             if timeline_id in snapshots and canonical_hash(snapshots[timeline_id]) != checkpoint_hash:
-                raise GateError("hash_chain", "checkpoint does not match the reconstructed timeline state", sequence)
+                identity_rebase = (
+                    allow_recovery_identity_rebase
+                    and recovery_pending
+                    and recovery_snapshots_equal(snapshots[timeline_id], checkpoint)
+                )
+                if not identity_rebase:
+                    raise GateError("hash_chain", "checkpoint does not match the reconstructed timeline state", sequence)
             snapshots[timeline_id] = checkpoint
+            recovery_pending = False
         else:
             if timeline_id not in snapshots:
                 raise GateError("state_transition", "state.diff precedes its timeline checkpoint", sequence)
@@ -147,7 +197,24 @@ def resolve_accepted_branch(events: list[dict[str, Any]], *, require_targets: bo
     accepted: list[dict[str, Any]] = []
     redo: list[list[dict[str, Any]]] = []
     state_events: list[dict[str, Any]] = []
+    recovery_pending = False
+    epoch_baseline_hash = baseline_hash
+    epoch_floor = 0
     for event in events[events.index(checkpoint) + 1 :]:
+        if event.get("event_type") == "session.recovered":
+            recovery_pending = True
+            continue
+        if event.get("event_type") == "state.checkpoint" and recovery_pending:
+            recovery_state = event.get("project_state")
+            recovery_hash = recovery_state.get("sha256") if isinstance(recovery_state, dict) else event.get("state_hash")
+            if not isinstance(recovery_hash, str):
+                raise GateError("branch_resolution", "recovery checkpoint has no state hash", event_sequence(event))
+            current_hash = recovery_hash
+            epoch_baseline_hash = recovery_hash
+            epoch_floor = len(accepted)
+            redo.clear()
+            recovery_pending = False
+            continue
         if event.get("event_type") != "state.diff":
             continue
         state_events.append(event)
@@ -166,7 +233,7 @@ def resolve_accepted_branch(events: list[dict[str, Any]], *, require_targets: bo
             accepted.append(event)
             redo.clear()
         elif boundary == "undo":
-            if not accepted:
+            if len(accepted) <= epoch_floor:
                 raise GateError("branch_resolution", "undo has no accepted transaction to remove", sequence)
             original = accepted[-1]
             target = event.get("target_transaction_id")
@@ -181,7 +248,7 @@ def resolve_accepted_branch(events: list[dict[str, Any]], *, require_targets: bo
                 if original_id is None:
                     break
             group.reverse()
-            expected_after = _branch_hash(accepted[-1], "after") if accepted else baseline_hash
+            expected_after = _branch_hash(accepted[-1], "after") if len(accepted) > epoch_floor else epoch_baseline_hash
             if after_hash != expected_after:
                 raise GateError("branch_resolution", f"undo should restore {expected_after}", sequence)
             redo.append(group)

@@ -98,7 +98,7 @@ def assemble_segments(
         event["sequence"] = sequence
 
     validate_event_envelope(assembled)
-    validate_state_transitions(assembled)
+    validate_state_transitions(assembled, allow_recovery_identity_rebase=True)
     destination = (output or session_dir / "trajectory.jsonl").expanduser().resolve()
     write_jsonl(destination, assembled)
     return {

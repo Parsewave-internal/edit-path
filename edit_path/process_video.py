@@ -301,7 +301,12 @@ def _asset_lookup(session_dir: Path) -> tuple[dict[str, str], list[Path]]:
         if isinstance(relative, str):
             path = session_dir / relative
             if path.is_file():
-                paths.append(path)
+                try:
+                    media = probe(path)
+                except EditPathError:
+                    continue
+                if any(stream.get("codec_type") == "video" for stream in media.get("streams", [])):
+                    paths.append(path)
     return names, paths
 
 

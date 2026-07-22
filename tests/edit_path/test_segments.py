@@ -107,6 +107,30 @@ class SegmentAssemblyTests(unittest.TestCase):
             with self.assertRaisesRegex(GateError, "checkpoint"):
                 assemble_segments(root)
 
+    def test_recovery_accepts_only_volatile_identity_renumbering(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.make_segments(root)
+            path = root / "raw-events-002.jsonl"
+            events = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+            checkpoint = next(event for event in events if event["event_type"] == "state.checkpoint")
+            checkpoint["snapshot"]["clips"][0]["native_id"] = 47
+            checkpoint["snapshot"]["clips"][0]["entity_id"] = "reloaded-clip"
+            checkpoint["state_hash"] = canonical_hash(checkpoint["snapshot"])
+            change = next(event for event in events if event["event_type"] == "state.diff")
+            change["diff"]["changes"][0]["native_id"] = 47
+            change["diff"]["changes"][0]["before"]["native_id"] = 47
+            change["diff"]["changes"][0]["before"]["entity_id"] = "reloaded-clip"
+            change["diff"]["changes"][0]["after"]["native_id"] = 47
+            change["diff"]["changes"][0]["after"]["entity_id"] = "reloaded-clip"
+            recovered = checkpoint["snapshot"]
+            moved = {**recovered, "clips": [{**recovered["clips"][0], "timeline_start_frame": 10}]}
+            change["before_hash"] = canonical_hash(recovered)
+            change["after_hash"] = canonical_hash(moved)
+            write_events(path, events)
+            report = assemble_segments(root)
+            self.assertEqual(report["segments"], 2)
+
     def test_pre_checkpoint_crash_segment_is_retained_as_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

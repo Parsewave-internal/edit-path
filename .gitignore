@@ -20,6 +20,7 @@ compile_commands.json
 __pycache__/
 *.pyc
 /pilot-session-*.jsonl
+/linux-output/
 
 # VSCode
 .vscode/

@@ -1,0 +1,15 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-only
+APPDIR="${APPDIR:-$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)}"
+export EDIT_PATH_REPO_ROOT="$APPDIR/usr"
+export PATH="$APPDIR/usr/bin:$PATH"
+export LD_LIBRARY_PATH="$APPDIR/usr/lib:$APPDIR/usr/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export XDG_DATA_DIRS="$APPDIR/usr/share${XDG_DATA_DIRS:+:$XDG_DATA_DIRS}"
+export QT_PLUGIN_PATH="$APPDIR/usr/plugins${QT_PLUGIN_PATH:+:$QT_PLUGIN_PATH}"
+export QML2_IMPORT_PATH="$APPDIR/usr/qml${QML2_IMPORT_PATH:+:$QML2_IMPORT_PATH}"
+export MLT_PREFIX="$APPDIR/usr"
+export MLT_DATA="$APPDIR/usr/share/mlt-7"
+export MLT_REPOSITORY="$APPDIR/usr/lib/mlt-7"
+export PYTHONHOME="$APPDIR/usr"
+export PYTHONPATH="$APPDIR/usr${PYTHONPATH:+:$PYTHONPATH}"
+exec "$APPDIR/usr/bin/EditPath" "$@"

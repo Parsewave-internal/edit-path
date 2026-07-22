@@ -686,6 +686,23 @@ requires a passing `SELF-TEST.json`. This catches missing executables, packaged
 scripts, Python runtime failures, and basic dependency-layout mistakes before
 the editor receives the artifact.
 
+### Linux portable build
+
+`packaging/linux/build-appimage.sh` creates the portable x86_64 Linux MVP. The
+AppImage contains EditPath, the modified Kdenlive, its installed application
+data and QML modules, MLT plugins and profiles, FFmpeg/FFprobe, and a minimal
+Python 3.11 runtime with Zstandard. Its `AppRun` establishes the internal MLT,
+Qt, Python, and pipeline paths before opening EditPath. The package also carries
+the XCB cursor library needed by Qt 6 and an offscreen Qt backend for headless
+preflight testing. The optional CUPS print plugin is deliberately omitted
+because editing and reconstruction do not use it and its Craft build requires
+an unavailable `libcrypt.so.2` ABI.
+
+The first locally built artifact passed `EditPath --self-test` from inside the
+AppImage, including the bundled editor, media tools, QML module, validator,
+sample pipeline, and reconstruction runtime. The build writes the AppImage and
+its SHA-256 checksum to `linux-output/`; the folder is ignored by Git.
+
 ### Privacy and security
 
 The collector can reveal editor behavior, project structure, local file paths,
@@ -702,8 +719,9 @@ the primary portable editor deployment: build with
 `EditPath-Windows-x64.zip`, verify `SELF-TEST.json`, and start
 `bin\EditPath.exe` rather than `kdenlive.exe`.
 
-Linux is the validated source-build path. macOS uses the same source path but
-does not yet have a signed/notarized bundle. After installing the upstream
+Linux supports both the validated source-build path and the engineering
+AppImage described in `packaging/linux/README.md`. macOS uses the source path
+but does not yet have a signed/notarized bundle. After installing the upstream
 Kdenlive dependencies, the complete MLT plugins, FFmpeg/FFprobe, Python 3.10+
 and Zstandard:
 

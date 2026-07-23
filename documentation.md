@@ -933,3 +933,67 @@ interactive acceptance, privacy policy, and broader real-project coverage.
 Update this file whenever the recorder architecture, event schema, acceptance
 results, known limitations, build/run procedure, or roadmap changes. Do not
 erase failed experiments; document what was attempted and why it changed.
+
+## Windows reliability and recovery hardening
+
+The July 2026 Windows editor sessions exposed three independent failure
+classes. Several launches failed before Kdenlive reached GUI-ready without
+retaining the process error; one session emitted thousands of invalid H.264 NAL
+unit errors; and several otherwise normal exit-code-zero sessions were rejected
+because their recorder stream lacked `session.end`. The optional
+`mltopenfx.dll` also failed MLT registration because it did not match the
+packaged MLT ABI. The Windows package excludes that optional module until an
+ABI-matched build can be verified.
+
+The supervisor now records its editor executable, arguments, QProcess error
+text, exit code, and exit-status classification in `session.json`. A missing
+`session.end` is treated as a recorder-lifecycle failure rather than proof of a
+native crash. On Windows, EditPath configures per-user Windows Error Reporting
+LocalDumps for both `EditPath.exe` and `kdenlive.exe`; dump files are written
+under the active session's `crash-dumps/` directory. This does not require
+administrator access, although a managed Windows policy may disable it.
+
+Kdenlive already saves a modified recorder project every 30 seconds when no
+modal dialog is active. EditPath adds an independent recovery layer through
+`video-path-pilot/reliability.py`. Once per supervisor heartbeat it validates
+`edit.kdenlive`, creates an atomic content-addressed recovery copy when the
+project changed, and retains the latest ten periodic copies plus milestone
+copies. Synchronous milestone snapshots are attempted when Kdenlive exits and
+before dataset finalization. Invalid or truncated XML never replaces a
+known-good recovery copy.
+
+Recovery files have this layout:
+
+```text
+session_.../
+  edit.kdenlive
+  recovery/
+    manifest.json
+    project-000001.kdenlive
+    project-000002.kdenlive
+```
+
+`select-recovery` validates the main project, Kdenlive backups, and EditPath
+snapshots and reports the newest valid candidate. Recovery evidence is never
+removed because rendering, validation, reconstruction, or packaging failed.
+Unsaved in-memory changes made less than the Kdenlive save interval before a
+hard process kill remain a limitation.
+
+The recorder's **Export Diagnostics** action creates
+`EditPath-Diagnostics-<session>.zip` beside the session directory. It contains
+sanitized console and supervisor logs, manifests, raw event streams, recovery
+inventory, crash dumps when present, system/build metadata, and a
+machine-readable `diagnosis.json`. User home paths are redacted and original
+media is not copied. Referenced media is probed and decode-checked when the
+packaged FFmpeg tools are available; only its identity, metadata, hashes, and
+errors enter the report.
+
+Useful developer commands are:
+
+```bash
+python3 video-path-pilot/reliability.py snapshot SESSION --reason periodic
+python3 video-path-pilot/reliability.py select-recovery SESSION
+python3 video-path-pilot/reliability.py restore-recovery SESSION
+python3 video-path-pilot/reliability.py diagnostics SESSION
+python3 -m unittest video-path-pilot/tests/test_reliability.py
+```

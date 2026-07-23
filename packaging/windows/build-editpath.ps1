@@ -302,6 +302,12 @@ New-Item -ItemType Directory -Force $sitePackages | Out-Null
 & $python.Source -m pip install --disable-pip-version-check --no-deps --target $sitePackages "zstandard==0.23.0"
 if ($LASTEXITCODE -ne 0) { Stop-Build "could not install the pinned zstandard runtime into embedded Python." }
 
+# OpenFX is optional and Craft occasionally contributes an mltopenfx.dll built
+# against a different MLT ABI. Loading that binary prints a registration error
+# on every launch and has caused misleading crash reports. Do not ship it until
+# the package can prove that its mlt_register export matches this MLT runtime.
+Get-ChildItem $portable -Recurse -File -Filter "mltopenfx.dll" | Remove-Item -Force
+
 $packagedEditPath = Join-Path $bin "edit_path"
 if (-not (Test-Path (Join-Path $packagedEditPath "__main__.py"))) {
     Stop-Build "the edit_path reconstruction package is missing from the portable build."

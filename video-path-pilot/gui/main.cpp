@@ -64,6 +64,24 @@ QString sessionsRoot()
     return QDir(videos).filePath(QStringLiteral("EditPathSessions"));
 }
 
+void configureWindowsCrashDumps(const QString &session)
+{
+#ifdef Q_OS_WIN
+    const QString dumpFolder = QDir(session).filePath(QStringLiteral("crash-dumps"));
+    QDir().mkpath(dumpFolder);
+    for (const QString &executable : {QStringLiteral("kdenlive.exe"), QStringLiteral("EditPath.exe")}) {
+        QSettings dumps(QStringLiteral("HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\Windows Error Reporting\\LocalDumps\\%1").arg(executable),
+                        QSettings::NativeFormat);
+        dumps.setValue(QStringLiteral("DumpFolder"), QDir::toNativeSeparators(dumpFolder));
+        dumps.setValue(QStringLiteral("DumpType"), 2);
+        dumps.setValue(QStringLiteral("DumpCount"), 5);
+        dumps.sync();
+    }
+#else
+    Q_UNUSED(session)
+#endif
+}
+
 bool prepareRenderSafetyConfig(const QString &configName, const QString &session, QString *problem)
 {
     const QString configRoot = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation);
@@ -237,8 +255,11 @@ private:
         m_openSession->setEnabled(false);
         m_openCompleted = new QPushButton(QStringLiteral("Open Dataset Sample"));
         m_openCompleted->setEnabled(false);
+        m_exportDiagnostics = new QPushButton(QStringLiteral("Export Diagnostics"));
+        m_exportDiagnostics->setEnabled(false);
         secondary->addWidget(m_openSession);
         secondary->addWidget(m_openCompleted);
+        secondary->addWidget(m_exportDiagnostics);
         secondary->addStretch();
         layout->addLayout(secondary);
         m_toggleDetails = new QPushButton(QStringLiteral("Show technical details"));
@@ -272,6 +293,7 @@ private:
         connect(m_openSession, &QPushButton::clicked, this, [this] { openFolder(m_session, QStringLiteral("Session folder")); });
         connect(m_openCompleted, &QPushButton::clicked, this,
                 [this] { openFolder(m_session + QStringLiteral("/completed-sample"), QStringLiteral("Generated sample")); });
+        connect(m_exportDiagnostics, &QPushButton::clicked, this, &RecorderWindow::exportDiagnostics);
         connect(&m_editor, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this, &RecorderWindow::editorFinished);
         connect(&m_editor, &QProcess::started, this, [this] {
             writeManifest(QStringLiteral("recording"));
@@ -281,6 +303,8 @@ private:
             m_activity->appendPlainText(QStringLiteral("Kdenlive process started; waiting for its GUI-ready signal…"));
         });
         connect(&m_editor, &QProcess::errorOccurred, this, [this](QProcess::ProcessError error) {
+            m_lastProcessError = QStringLiteral("%1: %2").arg(int(error)).arg(m_editor.errorString());
+            m_activity->appendPlainText(QStringLiteral("Editor process error: %1").arg(m_lastProcessError));
             if (error == QProcess::FailedToStart) {
                 m_heartbeat.stop();
                 m_readyPoll.stop();
@@ -296,7 +320,10 @@ private:
         connect(&m_worker, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this, &RecorderWindow::workerFinished);
         m_heartbeat.setInterval(60000);
         connect(&m_heartbeat, &QTimer::timeout, this, [this] {
-            if (m_editor.state() != QProcess::NotRunning) writeManifest(QStringLiteral("recording"));
+            if (m_editor.state() != QProcess::NotRunning) {
+                writeManifest(QStringLiteral("recording"));
+                createRecoverySnapshot(QStringLiteral("periodic"), false);
+            }
         });
         m_readyPoll.setInterval(250);
         connect(&m_readyPoll, &QTimer::timeout, this, [this] {
@@ -334,6 +361,10 @@ private:
                              {QStringLiteral("kdenlive_pid"), qint64(m_editor.processId())},
                              {QStringLiteral("last_exit_code"), m_lastEditorExitCode},
                              {QStringLiteral("last_exit_crashed"), m_lastEditorExitCrashed},
+                             {QStringLiteral("last_exit_status"), m_lastExitStatus},
+                             {QStringLiteral("last_process_error"), m_lastProcessError},
+                             {QStringLiteral("editor_program"), m_editorProgram},
+                             {QStringLiteral("editor_arguments"), m_editorArguments.join(QLatin1Char(' '))},
                              {QStringLiteral("updated_at_utc"), QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)}};
         QSaveFile file(QDir(m_session).filePath(QStringLiteral("session.json")));
         const QByteArray encoded = QJsonDocument(manifest).toJson(QJsonDocument::Indented);
@@ -356,6 +387,7 @@ private:
         m_segment = manifest.value(QStringLiteral("segment")).toInt();
         m_sessionLabel->setText(m_session);
         m_openSession->setEnabled(true);
+        m_exportDiagnostics->setEnabled(true);
         const QString status = manifest.value(QStringLiteral("status")).toString();
         if (status == QStringLiteral("ready_to_finish")) {
             m_finish->setEnabled(true);
@@ -364,7 +396,11 @@ private:
             m_showExistingCompletion = true;
         } else if (status == QStringLiteral("recovery_available") || status == QStringLiteral("recording")) {
             const QString project = QDir(previous).filePath(QStringLiteral("edit.kdenlive"));
-            const bool canRecover = QFileInfo::exists(project);
+            QProcess recovery;
+            recovery.setProcessChannelMode(QProcess::MergedChannels);
+            recovery.start(pythonExecutable(), {m_repoRoot + QStringLiteral("/video-path-pilot/reliability.py"), QStringLiteral("restore-recovery"), previous});
+            const bool recoveryChecked = recovery.waitForFinished(15000) && recovery.exitCode() == 0;
+            const bool canRecover = recoveryChecked && QFileInfo::exists(project);
             m_recover->setVisible(canRecover);
             offerConfirmedNewSession();
             writeManifest(QStringLiteral("recovery_available"));
@@ -372,9 +408,11 @@ private:
                                        "Kdenlive closed unexpectedly, but your saved work is available. Click Resume Editing to continue where you left off.")
                                  : QStringLiteral("Kdenlive closed before the project could be saved. The session folder is available for technical review."),
                       true);
-            m_activity->appendPlainText(canRecover
-                                            ? QStringLiteral("Interrupted session detected. Recovery will create recording segment %1.").arg(m_segment + 1)
-                                            : QStringLiteral("Interrupted session detected, but edit.kdenlive is missing."));
+            m_activity->appendPlainText(
+                canRecover ? QStringLiteral("Interrupted session detected. The newest valid recovery was selected; segment %1 will record resumed work.")
+                                 .arg(m_segment + 1)
+                           : QStringLiteral("Interrupted session detected, but no valid recovery project was found: %1")
+                                 .arg(QString::fromUtf8(recovery.readAll()).trimmed()));
             m_showExistingCompletion = true;
         } else if (status == QStringLiteral("packaged")) {
             m_openCompleted->setEnabled(true);
@@ -398,8 +436,10 @@ private:
             setStatus(QStringLiteral("EditPath could not create a folder for this edit. Check that your Videos folder is writable, then try again."), true);
             return;
         }
+        configureWindowsCrashDumps(m_session);
         m_sessionLabel->setText(m_session);
         m_openSession->setEnabled(true);
+        m_exportDiagnostics->setEnabled(true);
         m_openCompleted->setEnabled(false);
         writeManifest(QStringLiteral("created"));
         launchSegment();
@@ -407,6 +447,7 @@ private:
 
     void launchSegment()
     {
+        configureWindowsCrashDumps(m_session);
         const QString runtimeProblem = guiRuntimeProblem();
         if (!runtimeProblem.isEmpty()) {
             setStatus(runtimeProblem, true);
@@ -468,6 +509,9 @@ private:
         arguments = {raw};
         if (QFileInfo::exists(project)) arguments.append(project);
 #endif
+        m_editorProgram = program;
+        m_editorArguments = arguments;
+        m_lastProcessError.clear();
         m_editor.start(program, arguments);
     }
 
@@ -478,6 +522,8 @@ private:
         m_launchProgress->setVisible(false);
         m_lastEditorExitCode = exitCode;
         m_lastEditorExitCrashed = exitStatus != QProcess::NormalExit || exitCode != 0;
+        m_lastExitStatus = exitStatus == QProcess::NormalExit ? QStringLiteral("normal_exit") : QStringLiteral("crash_exit");
+        createRecoverySnapshot(m_lastEditorExitCrashed ? QStringLiteral("crash_recovery") : QStringLiteral("editor_exit"), true);
         if (m_lastEditorExitCrashed) writeManifest(QStringLiteral("recovery_available"));
         m_title->setText(QStringLiteral("<h1>EditPath</h1><p>Kdenlive has closed. Your work is being checked and saved.</p>"));
         m_instructions->setVisible(true);
@@ -492,6 +538,7 @@ private:
 
     void finishSession()
     {
+        createRecoverySnapshot(QStringLiteral("pre_finish"), true);
         m_finish->setEnabled(false);
         m_workerPurpose = QStringLiteral("finalize");
         m_workerTranscript.clear();
@@ -500,6 +547,35 @@ private:
             QStringLiteral("<h1>Creating your dataset sample…</h1><p>You can leave the files where they are. EditPath is doing the packaging and checks.</p>"));
         setStatus(QStringLiteral("This can take several minutes for a long edit. Keep EditPath open until it finishes."));
         m_worker.start(pythonExecutable(), {m_repoRoot + QStringLiteral("/video-path-pilot/job_pipeline.py"), QStringLiteral("finalize-freeform"), m_session});
+    }
+
+    void createRecoverySnapshot(const QString &reason, bool wait)
+    {
+        if (m_session.isEmpty() || !QFileInfo::exists(QDir(m_session).filePath(QStringLiteral("edit.kdenlive")))) return;
+        const QString script = m_repoRoot + QStringLiteral("/video-path-pilot/reliability.py");
+        const QStringList arguments{script, QStringLiteral("snapshot"), m_session, QStringLiteral("--reason"), reason};
+        if (wait) {
+            QProcess snapshot;
+            snapshot.setProcessChannelMode(QProcess::MergedChannels);
+            snapshot.start(pythonExecutable(), arguments);
+            if (!snapshot.waitForFinished(15000) || snapshot.exitCode() != 0) {
+                m_activity->appendPlainText(QStringLiteral("Recovery snapshot warning: %1").arg(QString::fromUtf8(snapshot.readAll()).trimmed()));
+            } else {
+                m_activity->appendPlainText(QStringLiteral("Recovery copy saved: %1").arg(QDateTime::currentDateTime().toString(QStringLiteral("HH:mm:ss"))));
+            }
+        } else {
+            QProcess::startDetached(pythonExecutable(), arguments, m_repoRoot);
+        }
+    }
+
+    void exportDiagnostics()
+    {
+        if (m_session.isEmpty() || m_worker.state() != QProcess::NotRunning) return;
+        m_workerPurpose = QStringLiteral("diagnostics");
+        m_workerTranscript.clear();
+        m_exportDiagnostics->setEnabled(false);
+        setStatus(QStringLiteral("Creating a privacy-safe diagnostics ZIP…"));
+        m_worker.start(pythonExecutable(), {m_repoRoot + QStringLiteral("/video-path-pilot/reliability.py"), QStringLiteral("diagnostics"), m_session});
     }
 
     void readWorker()
@@ -572,6 +648,14 @@ private:
                     QStringLiteral("<h1>We couldn't create the sample yet</h1><p>Your project and rendered video have not been deleted or changed.</p>"));
                 setStatus(friendlyFinalizationError(m_workerTranscript), true);
             }
+        } else if (m_workerPurpose == QStringLiteral("diagnostics")) {
+            m_exportDiagnostics->setEnabled(true);
+            if (success) {
+                setStatus(QStringLiteral("Diagnostics ZIP created. Its location is shown in technical details."));
+                QApplication::clipboard()->setText(m_workerTranscript.trimmed());
+            } else {
+                setStatus(QStringLiteral("Diagnostics could not be exported. Your project and recovery copies are unaffected."), true);
+            }
         }
         m_workerPurpose.clear();
     }
@@ -618,13 +702,15 @@ private:
     }
 
     QString m_repoRoot, m_session, m_sessionId, m_configName, m_workerPurpose, m_readyFile, m_workerTranscript;
+    QString m_lastProcessError, m_lastExitStatus{QStringLiteral("not_started")}, m_editorProgram;
+    QStringList m_editorArguments;
     int m_segment{0};
     int m_lastEditorExitCode{0};
     QProcess m_editor, m_worker;
     QTimer m_heartbeat, m_readyPoll;
     bool m_showExistingCompletion{false}, m_lastEditorExitCrashed{false}, m_confirmNewSession{false};
     QLabel *m_title{}, *m_instructions{}, *m_status{}, *m_sessionLabel{};
-    QPushButton *m_start{}, *m_recover{}, *m_finish{}, *m_openSession{}, *m_openCompleted{}, *m_toggleDetails{};
+    QPushButton *m_start{}, *m_recover{}, *m_finish{}, *m_openSession{}, *m_openCompleted{}, *m_exportDiagnostics{}, *m_toggleDetails{};
     QPlainTextEdit *m_activity{};
     QProgressBar *m_launchProgress{};
 };

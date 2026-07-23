@@ -22,7 +22,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from edit_path.pipeline import process_session
-from edit_path.io import write_jsonl
+from edit_path.io import replace_with_retry, write_jsonl
 from edit_path.segments import assemble_segments, discover_segments
 from normalize_sample import accepted_commits, build_sample, read_jsonl
 from validate_sample import validate_sample
@@ -30,6 +30,7 @@ from validate_video_path import validate as validate_raw
 
 VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv", ".webm"}
 COLLECTION = {"clip": "clips", "track": "tracks", "composition": "compositions", "mix": "mixes", "master_effect": "master_effects"}
+EMBEDDED_MLT_SERVICES = {"color", "colour", "qtext"}
 
 
 def sha256(path: Path) -> str:
@@ -57,7 +58,7 @@ def dump(path: Path, value: object) -> None:
             stream.flush()
             os.fsync(stream.fileno())
         temporary.chmod(path.stat().st_mode & 0o777 if path.exists() else 0o644)
-        os.replace(temporary, path)
+        replace_with_retry(temporary, path)
     except Exception:
         if temporary is not None:
             temporary.unlink(missing_ok=True)
@@ -146,6 +147,42 @@ def resource_path(value: str, project_root: Path, service: str = "") -> Path:
     return candidate.resolve()
 
 
+def is_embedded_project_asset(element: ET.Element, props: dict[str, str]) -> bool:
+    """Return whether a Kdenlive bin item is fully represented by project XML."""
+    service = props.get("mlt_service", "").strip().lower()
+    if element.tag == "tractor" or service in {"tractor", "xml-string"}:
+        return True
+    if service in EMBEDDED_MLT_SERVICES:
+        return True
+    if service == "kdenlivetitle":
+        # Imported .kdenlivetitle templates can retain a file dependency. A
+        # title created in Kdenlive has its complete xmldata embedded instead.
+        original = props.get("kdenlive:originalurl", "").strip()
+        resource = props.get("resource", "").strip()
+        return not original and (not resource or not resource.lower().endswith(".kdenlivetitle"))
+    return False
+
+
+def embedded_project_assets(project: Path) -> dict[str, dict[str, str]]:
+    """Describe self-contained bin items that require no external asset file."""
+    root = ET.parse(project).getroot()
+    embedded: dict[str, dict[str, str]] = {}
+    for element in list(root.findall("chain")) + list(root.findall("producer")) + list(root.findall("tractor")):
+        props = properties(element)
+        native_id = props.get("kdenlive:id")
+        if not native_id or not is_embedded_project_asset(element, props):
+            continue
+        service = props.get("mlt_service", "").strip().lower()
+        kind = "sequence" if element.tag == "tractor" or service in {"tractor", "xml-string"} else "generator"
+        embedded.setdefault(native_id, {
+            "native_reference": native_id,
+            "kind": kind,
+            "service": service or element.tag,
+            "project_content_sha256": hashlib.sha256(ET.tostring(element, encoding="utf-8")).hexdigest(),
+        })
+    return embedded
+
+
 def project_resources(project: Path) -> tuple[dict[str, Path], dict]:
     root = ET.parse(project).getroot()
     project_root = Path(root.get("root") or project.parent)
@@ -156,7 +193,7 @@ def project_resources(project: Path) -> tuple[dict[str, Path], dict]:
     for element in list(root.findall("chain")) + list(root.findall("producer")):
         props = properties(element)
         native_id, resource = props.get("kdenlive:id"), props.get("kdenlive:originalurl") or props.get("resource")
-        if not native_id or not resource or props.get("mlt_service") in {"color", "qtext", "kdenlivetitle"}: continue
+        if not native_id or not resource or is_embedded_project_asset(element, props): continue
         candidate = resource_path(resource, project_root, props.get("mlt_service", ""))
         previous = resources.get(native_id)
         if previous and previous != candidate: raise ValueError(f"Kdenlive bin ID {native_id} maps to multiple resources")
@@ -245,6 +282,42 @@ def discover_one(session: Path, suffixes: set[str], label: str) -> Path:
     return matches[0]
 
 
+def project_render_output(project: Path) -> Path | None:
+    root = ET.parse(project).getroot()
+    project_root = Path(root.get("root") or project.parent)
+    if not project_root.is_absolute():
+        project_root = project.parent / project_root
+    render_urls = {
+        (item.text or "").strip()
+        for item in root.iter("property")
+        if item.get("name") == "kdenlive:docproperties.renderurl" and (item.text or "").strip()
+    }
+    if len(render_urls) > 1:
+        raise ValueError(f"saved Kdenlive project has multiple render destinations: {sorted(render_urls)}")
+    if not render_urls:
+        return None
+    return resource_path(render_urls.pop(), project_root.resolve())
+
+
+def discover_rendered_video(session: Path, project: Path) -> Path:
+    matches = sorted(path for path in session.iterdir() if path.is_file() and path.suffix.lower() in VIDEO_SUFFIXES)
+    if len(matches) > 1:
+        raise ValueError(f"expected one rendered video for {session}, found {len(matches)} in the session folder")
+    if matches:
+        return matches[0]
+
+    saved_output = project_render_output(project)
+    if saved_output is None:
+        raise ValueError(
+            "no rendered video was found; render once in Kdenlive and Finish Session will discover the saved destination automatically"
+        )
+    if saved_output.suffix.lower() not in VIDEO_SUFFIXES:
+        raise ValueError(f"saved Kdenlive render destination has an unsupported extension: {saved_output}")
+    if not saved_output.is_file():
+        raise ValueError(f"saved Kdenlive render did not complete or no longer exists: {saved_output}")
+    return saved_output
+
+
 def prepare_assets(session: Path, project: Path, source_assets: list[dict] | None = None, source_root: Path | None = None) -> tuple[list[dict], dict[str, str], list[dict]]:
     resources, _ = project_resources(project)
     by_digest: dict[str, tuple[dict, Path]] = {}
@@ -296,6 +369,18 @@ def prepare_assets(session: Path, project: Path, source_assets: list[dict] | Non
     return records, bindings, problems
 
 
+def used_asset_references(raw_paths: list[Path]) -> set[str]:
+    return {
+        str(value["asset_reference"])
+        for path in raw_paths
+        for event in read_jsonl(path)
+        if event.get("event_type") == "state.diff"
+        for change in event.get("diff", {}).get("changes", [])
+        for side in ("before", "after")
+        if isinstance((value := change.get(side)), dict) and value.get("asset_reference") is not None
+    }
+
+
 def refresh_bundle_manifest(bundle: Path) -> None:
     path = bundle / "bundle-manifest.json"
     value = json.loads(path.read_text(encoding="utf-8"))
@@ -332,7 +417,7 @@ def organize_dataset_item(bundle: Path, output_suffix: str) -> None:
             continue
         destination = bundle / destination_name
         destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(source), str(destination))
+        replace_with_retry(source, destination)
     internal = bundle / "internal"
     if internal.is_dir() and not any(internal.iterdir()):
         internal.rmdir()
@@ -380,10 +465,8 @@ def finalize_session(session: Path, project: Path, output: Path, job: dict, *, s
     if project_settings != job["project"]:
         raise ValueError(f"saved project profile {project_settings} does not match assigned profile {job['project']}")
     assets, bindings, problems = prepare_assets(session, project, job.get("assets"), source_root)
-    used_refs = {str(change.get(side, {}).get("asset_reference")) for path in raw_paths for event in read_jsonl(path)
-                 if event.get("event_type") == "state.diff" for change in event.get("diff", {}).get("changes", [])
-                 for side in ("before", "after") if change.get(side, {}).get("asset_reference") is not None}
-    unresolved_used = sorted(ref for ref in used_refs if ref not in bindings)
+    embedded_assets = embedded_project_assets(project)
+    unresolved_used = sorted(ref for ref in used_asset_references(raw_paths) if ref not in bindings and ref not in embedded_assets)
     if unresolved_used: raise ValueError(f"project could not resolve used Kdenlive asset IDs: {', '.join(unresolved_used)}")
 
     for directory in ("output", "internal", "evidence"):
@@ -400,6 +483,7 @@ def finalize_session(session: Path, project: Path, output: Path, job: dict, *, s
                               "termination": "normal" if index == len(raw_paths) else "crash"})
     metadata = {"sample_id": job["job_id"], "job_id": job["job_id"], "prompt": job["task"]["prompt"],
                 "project": project_settings, "assets": assets, "native_asset_bindings": bindings,
+                "embedded_project_assets": embedded_assets,
                 "asset_binding_method": "project_resource_sha256", "output_completion_confirmed": True,
                 "artifacts": {"final_video": target_output.relative_to(session).as_posix(),
                     "final_video_sha256": sha256(target_output), "native_project": "internal/final.kdenlive",
@@ -422,7 +506,7 @@ def finalize_session(session: Path, project: Path, output: Path, job: dict, *, s
     source_bundle = Path(result["path"])
     completed = session / "completed-sample"
     if completed.exists(): raise ValueError(f"completed sample already exists: {completed}")
-    shutil.move(str(source_bundle), str(completed))
+    replace_with_retry(source_bundle, completed)
     organize_dataset_item(completed, output.suffix.lower())
 
     sample_path = completed / "sample.json"
@@ -444,8 +528,19 @@ def finalize_session(session: Path, project: Path, output: Path, job: dict, *, s
         raw["file"] = raw["file"].replace("evidence/", "provenance/segments/", 1)
     sample["quality"]["segment_assembly"]["path"] = "edit-path/events.jsonl"
     sample["quality"]["canonical_reconstruction"] = "passed"
-    sample["quality"]["media_reconstruction"] = "passed" if report.get("final", {}).get("accepted") else "failed"
-    sample["quality"]["ready_for_client_review"] = sample["quality"]["media_reconstruction"] == "passed" and bool(sample["task"].get("prompt"))
+    media_accepted = report.get("final", {}).get("accepted") and report.get("delivery", {}).get("accepted")
+    sample["quality"]["media_reconstruction"] = "passed" if media_accepted else "degraded"
+    sample["quality"]["media_reconstruction_warnings"] = report.get("quality_warnings", [])
+    sample["quality"]["edit_process_replay"] = (
+        report.get("edit_process", {}).get("training_ui_quality", "degraded")
+        if report.get("edit_process", {}).get("accepted")
+        else "failed"
+    )
+    sample["quality"]["ready_for_client_review"] = (
+        sample["quality"]["canonical_reconstruction"] == "passed"
+        and sample["quality"]["edit_process_replay"] in {"passed", "degraded"}
+        and bool(sample["task"].get("prompt"))
+    )
     dump(sample_path, sample)
     errors = validate_sample(sample_path, check_files=True)
     if errors: raise ValueError("generated sample failed validation: " + "; ".join(errors))
@@ -461,7 +556,8 @@ def finalize_job(args: argparse.Namespace) -> int:
     job_root, session = args.job_dir.resolve(), args.session_dir.resolve()
     job = load_job(job_root)
     project = args.project.resolve() if args.project else discover_one(session, {".kdenlive"}, "Kdenlive project")
-    output = args.output.resolve() if args.output else discover_one(session, VIDEO_SUFFIXES, "rendered video")
+    output = args.output.resolve() if args.output else discover_rendered_video(session, project)
+    print(f"using Kdenlive render: {output}")
     finalize_session(session, project, output, job, source_root=job_root)
     return 0
 
@@ -470,9 +566,11 @@ def finalize_freeform(args: argparse.Namespace) -> int:
     session = args.session_dir.resolve()
     if (session / "completed-sample").exists(): raise ValueError("this session already has a completed sample")
     project = args.project.resolve() if args.project else discover_one(session, {".kdenlive"}, "Kdenlive project")
-    output = args.output.resolve() if args.output else discover_one(session, VIDEO_SUFFIXES, "rendered video")
+    output = args.output.resolve() if args.output else discover_rendered_video(session, project)
+    print(f"using Kdenlive render: {output}")
     resources, settings = project_resources(project)
-    if not any(resource.is_file() for resource in resources.values()): raise ValueError("saved project contains no resolvable media resources")
+    if not any(resource.is_file() for resource in resources.values()) and not embedded_project_assets(project):
+        raise ValueError("saved project contains no resolvable file-backed or embedded media resources")
     job = {"schema_version": "0.1.0", "job_id": session.name,
            "task": {"prompt": None}, "project": settings}
     target_sample = finalize_session(session, project, output, job)
@@ -488,8 +586,10 @@ def attach_prompt(args: argparse.Namespace) -> int:
     if not prompt: raise ValueError("prompt must not be empty")
     sample["task"] = {"prompt": prompt, "prompt_status": "provided"}
     sample["quality"]["missing_requirements"] = []
-    sample["quality"]["ready_for_client_review"] = (sample["quality"].get("canonical_reconstruction") == "passed"
-                                                      and sample["quality"].get("media_reconstruction") == "passed")
+    sample["quality"]["ready_for_client_review"] = (
+        sample["quality"].get("canonical_reconstruction") == "passed"
+        and sample["quality"].get("edit_process_replay") in {"passed", "degraded"}
+    )
     dump(sample_path, sample)
     errors = validate_sample(sample_path, check_files=True)
     if errors: raise ValueError("sample failed after prompt attachment: " + "; ".join(errors))

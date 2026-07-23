@@ -41,9 +41,15 @@ def validate_sample(path: Path, check_files: bool = False) -> list[str]:
     if not isinstance(rate.get("numerator"), int) or rate.get("numerator", 0) <= 0: errors.append("invalid frame-rate numerator")
     if not isinstance(rate.get("denominator"), int) or rate.get("denominator", 0) <= 0: errors.append("invalid frame-rate denominator")
     assets = sample.get("inputs", {}).get("assets", [])
-    if not assets: errors.append("sample requires at least one input asset")
-    ids = [a.get("asset_id") for a in assets if isinstance(a, dict)]
+    embedded_assets = sample.get("inputs", {}).get("embedded_assets", [])
+    if not isinstance(assets, list): errors.append("inputs.assets must be a list"); assets = []
+    if not isinstance(embedded_assets, list): errors.append("inputs.embedded_assets must be a list"); embedded_assets = []
+    if not assets and not embedded_assets: errors.append("sample requires at least one file-backed or embedded input asset")
+    ids = [a.get("asset_id") for a in assets + embedded_assets if isinstance(a, dict)]
     if len(ids) != len(set(ids)): errors.append("asset IDs must be unique")
+    for index, asset in enumerate(embedded_assets):
+        if not isinstance(asset, dict) or not asset.get("asset_id") or not asset.get("native_reference") or not asset.get("service"):
+            errors.append(f"embedded asset {index + 1} is incomplete")
     operations = sample.get("edit_path", {}).get("operations", [])
     if not operations: errors.append("edit_path requires at least one accepted operation")
     for index, operation in enumerate(operations):

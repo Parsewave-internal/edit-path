@@ -606,7 +606,9 @@ launches blank isolated Kdenlive and does not preload media.
 On **Create Dataset Sample**, `finalize-freeform` parses every file-backed `chain` and `producer`
 from the saved project, deduplicates resources by SHA-256, assigns canonical
 asset IDs, copies the discovered media, and resolves native IDs before sample
-normalization. A freeform end-to-end test discovered the project asset,
+normalization. Self-contained Kdenlive titles, color/text generators, and nested
+sequences are resolved from the saved project state without inventing a missing
+file dependency. A freeform end-to-end test discovered the project asset,
 generated the package, passed canonical and media reconstruction, and validated
 all hashes.
 

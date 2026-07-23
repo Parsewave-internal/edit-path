@@ -78,6 +78,7 @@ def command_process(args: argparse.Namespace) -> int:
         session_path(args.session),
         session_path(args.output_root),
         minimum_ssim=args.minimum_ssim,
+        minimum_final_ssim=args.minimum_final_ssim,
         minimum_commits=args.minimum_commits,
         minimum_changed_entities=args.minimum_changed_entities,
         require_license=args.require_license,
@@ -106,6 +107,7 @@ def command_work_one(args: argparse.Namespace) -> int:
         session_path(args.queue_root),
         session_path(args.output_root),
         minimum_ssim=args.minimum_ssim,
+        minimum_final_ssim=args.minimum_final_ssim,
         minimum_commits=args.minimum_commits,
         minimum_changed_entities=args.minimum_changed_entities,
         require_license=args.require_license,
@@ -188,6 +190,7 @@ def build_parser() -> argparse.ArgumentParser:
     process.add_argument("session")
     process.add_argument("output_root")
     process.add_argument("--minimum-ssim", type=float, default=0.995)
+    process.add_argument("--minimum-final-ssim", type=float, default=0.99)
     process.add_argument("--minimum-commits", type=int, default=1)
     process.add_argument("--minimum-changed-entities", type=int, default=1)
     process.add_argument("--require-license", action="store_true", help="optional future publication gate")
@@ -209,6 +212,7 @@ def build_parser() -> argparse.ArgumentParser:
     worker.add_argument("queue_root")
     worker.add_argument("output_root")
     worker.add_argument("--minimum-ssim", type=float, default=0.995)
+    worker.add_argument("--minimum-final-ssim", type=float, default=0.99)
     worker.add_argument("--minimum-commits", type=int, default=1)
     worker.add_argument("--minimum-changed-entities", type=int, default=1)
     worker.add_argument("--require-license", action="store_true")

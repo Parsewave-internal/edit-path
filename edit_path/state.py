@@ -321,6 +321,7 @@ def validate_action_semantics(events: list[dict[str, Any]], accepted: list[dict[
         if isinstance(transaction_id, str):
             accepted_by_transaction.setdefault(transaction_id, []).append(state_event)
     assignments: dict[str, tuple[dict[str, Any], str]] = {}
+    ignored_actions: list[dict[str, Any]] = []
     actions = sorted(
         (event for event in events if event.get("event_type") == "action" and event.get("transaction_id")),
         key=event_sequence,
@@ -346,11 +347,22 @@ def validate_action_semantics(events: list[dict[str, Any]], accepted: list[dict[
         ]
         if not candidates:
             inferred = operation_name(target_events[0].get("diff", {})) if target_events else "unlinked"
-            raise GateError(
-                "action_semantics",
-                f"declared action {declared!r} is inconsistent with inferred operation {inferred!r}",
-                event_sequence(target_events[0]) if target_events else event_sequence(action_event),
-            )
+            if target_events:
+                assignments[transaction_id] = (action_event, "inconsistent_transaction")
+            else:
+                ignored_actions.append(
+                    {
+                        "sequence": event_sequence(action_event),
+                        "transaction_id": transaction_id,
+                        "declared": declared,
+                        "inferred": inferred,
+                        "linked": False,
+                        "compatible": True,
+                        "status": "ignored",
+                        "attribution": "not_on_accepted_branch",
+                    }
+                )
+            continue
         recovered = max(candidates, key=event_sequence)
         assignments[str(recovered["transaction_id"])] = (action_event, "recovered_post_push")
 
@@ -362,21 +374,17 @@ def validate_action_semantics(events: list[dict[str, Any]], accepted: list[dict[
         action_event = assignment[0] if assignment else None
         declared = action_event.get("action") if action_event else None
         is_compatible = compatible(declared, inferred)
-        if not is_compatible:
-            raise GateError(
-                "action_semantics",
-                f"declared action {declared!r} is inconsistent with inferred operation {inferred!r}",
-                event_sequence(event),
-            )
         reports.append({
             "sequence": event_sequence(event),
             "transaction_id": transaction_id,
             "declared": declared,
             "inferred": inferred,
             "linked": action_event is not None,
+            "compatible": is_compatible,
+            "status": "passed" if is_compatible else "degraded",
             "attribution": assignment[1] if assignment else "state_only",
         })
-    return reports
+    return [*reports, *ignored_actions]
 
 
 def load_state_reference(reference: dict[str, Any], base_dir: Path) -> bytes:

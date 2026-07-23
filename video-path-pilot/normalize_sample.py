@@ -141,6 +141,31 @@ def normalized_state(snapshot: dict, ids: dict[tuple[str, str], str], assets: di
     return state
 
 
+def observed_asset_ids(event_groups: list[list[dict]]) -> dict[str, str]:
+    """Map native bin references to the recorder's stable asset UUIDs."""
+    observed: dict[str, str] = {}
+
+    def observe(value: Any) -> None:
+        if not isinstance(value, dict) or value.get("asset_reference") is None or not value.get("asset_id"):
+            return
+        reference, asset_id = str(value["asset_reference"]), str(value["asset_id"])
+        previous = observed.get(reference)
+        if previous is not None and previous != asset_id:
+            raise ValueError(f"native asset reference {reference} has inconsistent stable asset IDs")
+        observed[reference] = asset_id
+
+    for events in event_groups:
+        for event in events:
+            if event.get("event_type") == "state.checkpoint":
+                for clip in event.get("snapshot", {}).get("clips", []):
+                    observe(clip)
+            elif event.get("event_type") == "state.diff":
+                for change in event.get("diff", {}).get("changes", []):
+                    observe(change.get("before"))
+                    observe(change.get("after"))
+    return observed
+
+
 def build_sample(root: Path, metadata: dict) -> dict:
     raw_artifacts = metadata["artifacts"]["raw_events"]
     if isinstance(raw_artifacts, str):
@@ -153,6 +178,15 @@ def build_sample(root: Path, metadata: dict) -> dict:
         if asset.get("bin_reference") is not None
     }
     asset_refs.update({str(key): str(value) for key, value in metadata.get("native_asset_bindings", {}).items()})
+    recorded_asset_ids = observed_asset_ids(event_groups)
+    embedded_inputs = []
+    for reference, descriptor in sorted(metadata.get("embedded_project_assets", {}).items()):
+        reference = str(reference)
+        if reference not in recorded_asset_ids:
+            continue
+        asset_id = recorded_asset_ids[reference]
+        asset_refs[reference] = asset_id
+        embedded_inputs.append({"asset_id": asset_id, **dict(descriptor)})
     timeline_events = [event for events in event_groups for event in events if event.get("event_type") == "state.diff"]
     first_checkpoint = next(
         (event for events in event_groups for event in events if event.get("event_type") == "state.checkpoint"),
@@ -185,14 +219,17 @@ def build_sample(root: Path, metadata: dict) -> dict:
         edit_path["final_state"] = normalized_state(final_native, ids, asset_refs)
     input_assets = [{"asset_id": a["asset_id"], "original_filename": a.get("original_filename", Path(a["file"]).name),
                      "file": a["file"], "sha256": a["sha256"], "bytes": a["bytes"]} for a in metadata["assets"]]
-    valid_asset_ids = {a["asset_id"] for a in input_assets}
+    valid_asset_ids = {a["asset_id"] for a in input_assets} | {a["asset_id"] for a in embedded_inputs}
     unresolved = sorted(value for value in set(asset_refs.values()) if value not in valid_asset_ids)
+    inputs = {"assets": input_assets}
+    if embedded_inputs:
+        inputs["embedded_assets"] = embedded_inputs
     return {
         "schema_version": "0.1.0",
         "sample_id": metadata["sample_id"],
         "task": {"prompt": metadata["prompt"]},
         "project": metadata["project"],
-        "inputs": {"assets": input_assets},
+        "inputs": inputs,
         "edit_path": edit_path,
         "output": {"video": metadata["artifacts"]["final_video"], "sha256": metadata["artifacts"]["final_video_sha256"]},
         "quality": {

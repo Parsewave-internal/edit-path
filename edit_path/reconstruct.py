@@ -13,7 +13,7 @@ from typing import Any
 
 from .assets import load_manifest, remap_project_assets, verify_assets
 from .errors import EditPathError
-from .io import find_trajectory, read_jsonl
+from .io import find_trajectory, read_jsonl, replace_with_retry
 from .state import load_state_reference
 
 
@@ -113,7 +113,7 @@ def materialize_event_project(
     project_xml = remap_project_assets(raw, output, manifest, session_dir)
     temporary = output.with_name(f".{output.name}.tmp-{os.getpid()}")
     temporary.write_bytes(project_xml)
-    os.replace(temporary, output)
+    replace_with_retry(temporary, output)
     return output
 
 
@@ -134,7 +134,7 @@ def materialize_project(session_dir: Path, output: Path | None = None) -> Path:
         remapped = remap_project_assets(legacy_project.read_bytes(), destination, manifest, session_dir)
         temporary = destination.with_name(f".{destination.name}.tmp-{os.getpid()}")
         temporary.write_bytes(remapped)
-        os.replace(temporary, destination)
+        replace_with_retry(temporary, destination)
         return destination
     return materialize_event_project(
         session_dir,
@@ -212,7 +212,7 @@ def render_project(
         if require_video and not any(stream.get("codec_type") == "video" for stream in streams):
             failures.append(f"{encoder}: rendered output contains no video stream: {detail}")
             continue
-        os.replace(temporary, output)
+        replace_with_retry(temporary, output)
         return output
 
     temporary.unlink(missing_ok=True)

@@ -13,7 +13,7 @@ from typing import Any
 
 from .assets import load_manifest
 from .errors import EditPathError, GateError
-from .io import event_sequence, sha256_file
+from .io import event_sequence, replace_with_retry, sha256_file
 from .reconstruct import render_event, select_video_encoder, state_reference
 from .state import operation_name, validate_state_transitions
 from .validate import probe
@@ -247,8 +247,8 @@ def _encoder_arguments(encoder: str) -> list[str]:
     return ["-c:v", encoder]
 
 
-def _run(command: list[str], description: str) -> None:
-    completed = subprocess.run(command, text=True, capture_output=True)
+def _run(command: list[str], description: str, *, cwd: Path | None = None) -> None:
+    completed = subprocess.run(command, text=True, capture_output=True, cwd=cwd)
     if completed.returncode != 0:
         detail = (completed.stderr or completed.stdout)[-5000:]
         raise EditPathError(f"{description} failed ({completed.returncode}):\n{detail}")
@@ -270,6 +270,130 @@ def _compatible_filters(filters: list[str], *, text_enabled: bool) -> list[str]:
     if text_enabled:
         return filters
     return [value for value in filters if not value.startswith("drawtext=")]
+
+
+_DRAWTEXT_PATTERN = re.compile(
+    r"^drawtext=(?:fontfile=[^:]+|font=[^:]+):text='(?P<text>[^']*)':"
+    r"x=(?P<x>.*?):y=(?P<y>.*?):fontsize=(?P<size>\d+):fontcolor=(?P<color>[^:]+)(?P<options>.*)$"
+)
+
+
+def _parse_drawtext_filter(value: str) -> dict[str, Any]:
+    match = _DRAWTEXT_PATTERN.match(value)
+    if match is None:
+        raise EditPathError(f"could not convert training label to the bundled text renderer: {value}")
+    options = match.group("options")
+    boxcolor = re.search(r":boxcolor=([^:]+)", options)
+    borderw = re.search(r":borderw=(\d+)", options)
+    return {
+        "text": match.group("text"),
+        "x": match.group("x"),
+        "y": match.group("y"),
+        "size": int(match.group("size")),
+        "color": match.group("color"),
+        "box": ":box=1" in options,
+        "boxcolor": boxcolor.group(1) if boxcolor else "black@0.70",
+        "borderw": int(borderw.group(1)) if borderw else 0,
+    }
+
+
+def _partition_text_filters(filters: list[str]) -> tuple[list[str], list[dict[str, Any]]]:
+    video_filters: list[str] = []
+    labels: list[dict[str, Any]] = []
+    for value in filters:
+        if value.startswith("drawtext="):
+            labels.append(_parse_drawtext_filter(value))
+        else:
+            video_filters.append(value)
+    return video_filters, labels
+
+
+def _ass_color(value: str) -> str:
+    named = {
+        "black": "000000",
+        "white": "FFFFFF",
+        "red": "FF0000",
+        "green": "00FF00",
+        "blue": "0000FF",
+    }
+    color_value, _, opacity_value = value.partition("@")
+    rgb = named.get(color_value.lower(), color_value.removeprefix("0x").removeprefix("#"))
+    if not re.fullmatch(r"[0-9A-Fa-f]{6}", rgb):
+        rgb = "FFFFFF"
+    opacity = max(0.0, min(1.0, float(opacity_value))) if opacity_value else 1.0
+    alpha = round((1.0 - opacity) * 255)
+    red, green, blue = rgb[0:2], rgb[2:4], rgb[4:6]
+    return f"&H{alpha:02X}{blue}{green}{red}&".upper()
+
+
+_MOTION_EXPRESSION = re.compile(r"^(-?\d+)\+\((-?\d+)\)\*min\(t/[0-9.]+\\,1\)$")
+
+
+def _ass_position(label: dict[str, Any], duration: float) -> str:
+    x_value, y_value = str(label["x"]), str(label["y"])
+    x_motion = _MOTION_EXPRESSION.match(x_value)
+    y_motion = _MOTION_EXPRESSION.match(y_value)
+    if x_motion and y_motion:
+        start_x, delta_x = int(x_motion.group(1)), int(x_motion.group(2))
+        start_y, delta_y = int(y_motion.group(1)), int(y_motion.group(2))
+        end_ms = max(1, round(max(duration - 0.15, 0.1) * 1000))
+        return f"\\move({start_x},{start_y},{start_x + delta_x},{start_y + delta_y},0,{end_ms})"
+    try:
+        x, y = round(float(x_value)), round(float(y_value))
+    except ValueError as error:
+        raise EditPathError(f"unsupported training label position: x={x_value}, y={y_value}") from error
+    return f"\\pos({x},{y})"
+
+
+def _ass_timestamp(seconds: float) -> str:
+    centiseconds = max(0, round(seconds * 100))
+    hours, remainder = divmod(centiseconds, 360000)
+    minutes, remainder = divmod(remainder, 6000)
+    whole_seconds, fraction = divmod(remainder, 100)
+    return f"{hours}:{minutes:02d}:{whole_seconds:02d}.{fraction:02d}"
+
+
+def _write_ass_labels(path: Path, labels: list[dict[str, Any]], duration: float) -> None:
+    styles = []
+    dialogues = []
+    for index, label in enumerate(labels, 1):
+        style = f"Label{index:03d}"
+        primary = _ass_color(str(label["color"]))
+        outline = _ass_color(str(label["boxcolor"])) if label["box"] else "&H00000000"
+        border_style = 3 if label["box"] else 1
+        outline_width = 8 if label["box"] else int(label["borderw"])
+        styles.append(
+            f"Style: {style},Arial,{label['size']},{primary},{primary},{outline},{outline},"
+            f"0,0,0,0,100,100,0,0,{border_style},{outline_width},0,7,0,0,0,1"
+        )
+        position = _ass_position(label, duration)
+        text = str(label["text"]).replace("\\", r"\\").replace("{", "(").replace("}", ")")
+        dialogues.append(
+            f"Dialogue: 0,{_ass_timestamp(0)},{_ass_timestamp(duration)},{style},,0,0,0,,"
+            f"{{\\an7{position}}}{text}"
+        )
+    content = "\n".join(
+        [
+            "[Script Info]",
+            "ScriptType: v4.00+",
+            f"PlayResX: {PROCESS_WIDTH}",
+            f"PlayResY: {PROCESS_HEIGHT}",
+            "ScaledBorderAndShadow: yes",
+            "WrapStyle: 2",
+            "",
+            "[V4+ Styles]",
+            "Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,"
+            "Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,"
+            "Alignment,MarginL,MarginR,MarginV,Encoding",
+            *styles,
+            "",
+            "[Events]",
+            "Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text",
+            *dialogues,
+            "",
+        ]
+    )
+    path.write_text(content, encoding="utf-8")
 
 
 def _scene_duration(moment: dict[str, Any]) -> float:
@@ -646,8 +770,8 @@ def _render_scene(
     maximum_frames: int,
     fps: float,
     moment_count: int,
-    text_enabled: bool,
-) -> None:
+    text_renderer: str,
+) -> int:
     duration = _scene_duration(moment)
     command = [
         ffmpeg,
@@ -670,10 +794,10 @@ def _render_scene(
         command.extend(["-stream_loop", "-1", "-i", str(asset)])
         asset_index = next_index
 
-    base_filters = _compatible_filters(
-        _base_ui_filters(moment, moment_count=moment_count, fps=fps),
-        text_enabled=text_enabled,
-    )
+    base_filters = _base_ui_filters(moment, moment_count=moment_count, fps=fps)
+    ass_labels: list[dict[str, Any]] = []
+    if text_renderer in {"ass", "none"}:
+        base_filters, ass_labels = _partition_text_filters(base_filters)
     graph = [f"[0:v]{','.join(base_filters)}[ui0]"]
     current = "ui0"
     label_index = 1
@@ -708,8 +832,16 @@ def _render_scene(
             *_action_filters(moment, scene_duration=duration, maximum_frames=maximum_frames),
         ]
     )
-    filters = _compatible_filters(filters, text_enabled=text_enabled)
-    graph.append(f"[{current}]{','.join(filters)}[video]")
+    if text_renderer in {"ass", "none"}:
+        filters, action_labels = _partition_text_filters(filters)
+        ass_labels.extend(action_labels)
+    if text_renderer == "ass":
+        graph.append(f"[{current}]{','.join(filters)}[prelabels]")
+        ass_path = destination.with_suffix(".ass")
+        _write_ass_labels(ass_path, ass_labels, duration)
+        graph.append(f"[prelabels]ass=filename='{ass_path.name}'[video]")
+    else:
+        graph.append(f"[{current}]{','.join(filters)}[video]")
     command.extend(
         [
             "-filter_complex",
@@ -729,7 +861,15 @@ def _render_scene(
             str(destination),
         ]
     )
-    _run(command, f"editor replay event {moment.get('sequence')}")
+    _run(command, f"editor replay event {moment.get('sequence')}", cwd=destination.parent)
+    if text_renderer == "ass":
+        return len(ass_labels)
+    if text_renderer == "none":
+        return 0
+    return sum(
+        value.startswith("drawtext=")
+        for value in [*_base_ui_filters(moment, moment_count=moment_count, fps=fps), *filters]
+    )
 
 
 def render_edit_process(
@@ -751,7 +891,7 @@ def render_edit_process(
     if not ffmpeg:
         raise EditPathError("ffmpeg is required to render the editing-process video")
     encoder = select_video_encoder(ffmpeg)
-    text_enabled = _supports_filter(ffmpeg, "drawtext")
+    text_renderer = "drawtext" if _supports_filter(ffmpeg, "drawtext") else "ass" if _supports_filter(ffmpeg, "ass") else "none"
     build_replay_steps(events, accepted, baseline_hash)
     moments = build_replay_moments(events)
     context = next((event.get("context") for event in events if event.get("event_type") == "project.context"), {})
@@ -773,6 +913,10 @@ def render_edit_process(
     preview_cache: dict[str, tuple[Path, float]] = {}
     scene_paths: list[Path] = []
     moment_reports: list[dict[str, Any]] = []
+    text_overlay_count = 0
+    text_warnings: list[str] = []
+    preview_warnings: list[str] = []
+    active_text_renderer = text_renderer
 
     for moment in moments:
         snapshot = moment["snapshot"]
@@ -790,49 +934,77 @@ def render_edit_process(
             cached = preview_cache.get(digest)
             if cached is None:
                 preview_path = preview_dir / f"{digest}.mp4"
-                render_event(
-                    session_dir,
-                    state_event,
-                    preview_path,
-                    melt_binary=melt_binary,
-                    preset={"crf": "23", "preset": "veryfast", "ab": "96k"},
+                try:
+                    render_event(
+                        session_dir,
+                        state_event,
+                        preview_path,
+                        melt_binary=melt_binary,
+                        preset={"crf": "23", "preset": "veryfast", "ab": "96k"},
+                    )
+                    media = probe(preview_path)
+                    preview_duration = float(media.get("format", {}).get("duration", 0.0))
+                    if preview_duration <= 0 or not any(stream.get("codec_type") == "video" for stream in media.get("streams", [])):
+                        raise EditPathError("exact state preview contains no usable video")
+                    cached = preview_path, preview_duration
+                    preview_cache[digest] = cached
+                except (EditPathError, OSError, ValueError) as error:
+                    preview_warnings.append(
+                        f"exact state preview failed at sequence {moment['sequence']}; semantic editor state used instead: {error}"
+                    )
+            if cached is not None:
+                preview, preview_duration = cached
+                selected = _selected_ids(moment)
+                selected_clip = next(
+                    (clip for clip in snapshot.get("clips", []) if str(clip.get("native_id")) in selected),
+                    None,
                 )
-                media = probe(preview_path)
-                preview_duration = float(media.get("format", {}).get("duration", 0.0))
-                if preview_duration <= 0 or not any(stream.get("codec_type") == "video" for stream in media.get("streams", [])):
-                    raise GateError("edit_process", "exact state preview contains no usable video", moment["sequence"])
-                cached = preview_path, preview_duration
-                preview_cache[digest] = cached
-            preview, preview_duration = cached
-            selected = _selected_ids(moment)
-            selected_clip = next(
-                (clip for clip in snapshot.get("clips", []) if str(clip.get("native_id")) in selected),
-                None,
-            )
-            if selected_clip is None and snapshot.get("clips"):
-                selected_clip = snapshot["clips"][0]
-            if selected_clip is not None:
-                preview_seek = min(
-                    max(0.0, float(selected_clip.get("timeline_start_frame", 0)) / max(fps, 0.001) + 0.08),
-                    max(0.0, preview_duration - 0.1),
-                )
-            preview_mode = "exact_project_monitor"
+                if selected_clip is None and snapshot.get("clips"):
+                    selected_clip = snapshot["clips"][0]
+                if selected_clip is not None:
+                    preview_seek = min(
+                        max(0.0, float(selected_clip.get("timeline_start_frame", 0)) / max(fps, 0.001) + 0.08),
+                        max(0.0, preview_duration - 0.1),
+                    )
+                preview_mode = "exact_project_monitor"
 
         scene = scene_dir / f"event-{moment['index'] + 1:03d}.mp4"
-        _render_scene(
-            ffmpeg,
-            encoder,
-            moment,
-            scene,
-            preview=preview,
-            preview_seek=preview_seek,
-            asset=asset,
-            asset_names=asset_names,
-            maximum_frames=maximum_frames,
-            fps=fps,
-            moment_count=len(moments),
-            text_enabled=text_enabled,
-        )
+        try:
+            text_overlay_count += _render_scene(
+                ffmpeg,
+                encoder,
+                moment,
+                scene,
+                preview=preview,
+                preview_seek=preview_seek,
+                asset=asset,
+                asset_names=asset_names,
+                maximum_frames=maximum_frames,
+                fps=fps,
+                moment_count=len(moments),
+                text_renderer=active_text_renderer,
+            )
+        except EditPathError as error:
+            if active_text_renderer == "none":
+                raise
+            text_warnings.append(
+                f"{active_text_renderer} labels failed at sequence {moment['sequence']}; replay continued without labels: {error}"
+            )
+            active_text_renderer = "none"
+            _render_scene(
+                ffmpeg,
+                encoder,
+                moment,
+                scene,
+                preview=preview,
+                preview_seek=preview_seek,
+                asset=asset,
+                asset_names=asset_names,
+                maximum_frames=maximum_frames,
+                fps=fps,
+                moment_count=len(moments),
+                text_renderer=active_text_renderer,
+            )
         scene_paths.append(scene)
         moment_reports.append(
             {
@@ -875,7 +1047,7 @@ def render_edit_process(
         ],
         "editor replay assembly",
     )
-    os.replace(temporary, output)
+    replace_with_retry(temporary, output)
     output_probe = probe(output)
     video_streams = [stream for stream in output_probe.get("streams", []) if stream.get("codec_type") == "video"]
     duration = float(output_probe.get("format", {}).get("duration", 0.0))
@@ -904,7 +1076,12 @@ def render_edit_process(
         "event_counts": counts,
         "duration_seconds": duration,
         "audio": "omitted_training_visualization",
-        "text_overlays": "drawtext" if text_enabled else "unavailable_in_ffmpeg_build",
+        "text_overlays": active_text_renderer,
+        "text_overlay_count": text_overlay_count,
+        "training_ui_quality": "passed" if text_overlay_count >= len(moments) and not text_warnings and not preview_warnings else "degraded",
+        "training_ui_warnings": text_warnings,
+        "state_preview_quality": "passed" if not preview_warnings else "degraded",
+        "state_preview_warnings": preview_warnings,
         "output": {"sha256": sha256_file(output), "probe": output_probe},
         "events": moment_reports,
     }

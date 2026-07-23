@@ -130,8 +130,8 @@ def load_manifest(session_dir: Path) -> tuple[Path, dict]:
 
 def verify_assets(session_dir: Path, manifest: dict, *, require_approved_license: bool = False) -> list[dict]:
     assets = manifest.get("assets")
-    if not isinstance(assets, list) or not assets:
-        raise GateError("assets", "asset manifest contains no assets")
+    if not isinstance(assets, list):
+        raise GateError("assets", "asset manifest assets field must be a list")
     verified = []
     for index, entry in enumerate(assets):
         relative_value = entry.get("file", entry.get("path", ""))

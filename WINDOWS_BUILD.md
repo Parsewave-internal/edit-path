@@ -1,8 +1,7 @@
 # Building the Windows portable MVP
 
-This produces an unsigned, portable 64-bit Windows engineering build. It does
-not modify the official Kdenlive installation and does not require the editor
-to install Python.
+This produces a portable 64-bit Windows build. It does not modify the official
+Kdenlive installation and does not require the editor to install Python.
 
 ## Requirements
 
@@ -53,6 +52,25 @@ Set-ExecutionPolicy -Scope Process Bypass
 .\packaging\windows\build-editpath.ps1
 ```
 
+That command creates an **unsigned engineering build**. For a client release,
+first install an organization-owned code-signing certificate with its private
+key in the current user's or local machine's Personal certificate store. Then
+run the strict signing build with its thumbprint:
+
+```powershell
+.\packaging\windows\build-editpath.ps1 `
+  -RequireCodeSigning `
+  -SigningCertificateThumbprint "YOUR_CERTIFICATE_THUMBPRINT"
+```
+
+The thumbprint can instead be supplied through
+`EDIT_PATH_SIGNING_CERT_THUMBPRINT`. The strict build stops during preflight if
+the certificate, private key, Windows SDK signing tool, or trust chain is not
+usable. It SHA-256 signs and RFC 3161 timestamps both `EditPath.exe` and the
+packaged editor executable, then verifies both with the Windows Authenticode
+policy before creating the archive. A self-signed certificate is suitable only
+for internal testing and must not be presented as a trusted client release.
+
 Prefer a short checkout path such as `C:\src\edit-path`; long or space-heavy
 paths can cause problems in Windows C++ dependency builds.
 
@@ -78,13 +96,15 @@ Successful output is written to:
 windows-output\
 ├── EditPath-Windows-x64\
 ├── EditPath-Windows-x64.zip
+├── EditPath-Windows-x64.zip.sha256
 └── build-manifest.json
 ```
 
 Run `windows-output\EditPath-Windows-x64\bin\EditPath.exe`. Do not run
 `kdenlive.exe` directly because that bypasses recording. Windows SmartScreen
-may warn because the MVP has not yet been code-signed; use **More info → Run
-anyway** only for an artifact built from the company repository.
+may warn for an unsigned engineering build. A signed client build records the
+signer, signed files, certificate expiry, timestamp service, and archive hash in
+`build-manifest.json`.
 
 If the script fails, save the complete PowerShell output and send the last 100
 lines of `windows-output\windows-build.log` along with

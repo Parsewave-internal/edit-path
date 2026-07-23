@@ -25,6 +25,7 @@ from edit_path.reconstruct import materialize_project, render_session
 from edit_path.state import resolve_accepted_branch, validate_state_transitions
 
 from normalize_sample import build_sample
+from job_pipeline import embedded_project_assets
 from validate_sample import validate_sample
 from validate_video_path import validate as validate_raw
 
@@ -210,6 +211,7 @@ def command_finalize(args: argparse.Namespace) -> int:
 
     if metadata.get("collector_version") == "0.3.0":
         metadata["assets"] = bind_project_assets(args.project.resolve(), root, metadata["assets"])
+        metadata["embedded_project_assets"] = embedded_project_assets(args.project.resolve())
     copy_artifact(args.project, root / "internal" / "final.kdenlive")
     events = read_jsonl(raw)
     contexts = [event.get("context") for event in events if event.get("event_type") == "project.context"]
@@ -279,6 +281,7 @@ def command_process(args: argparse.Namespace) -> int:
         args.sample_dir.resolve(),
         args.output_root.resolve(),
         minimum_ssim=args.minimum_ssim,
+        minimum_final_ssim=args.minimum_final_ssim,
         minimum_commits=args.minimum_commits,
         minimum_changed_entities=args.minimum_changed_entities,
         require_license=args.require_license,
@@ -347,6 +350,7 @@ def parser() -> argparse.ArgumentParser:
     process.add_argument("sample_dir", type=Path)
     process.add_argument("output_root", type=Path)
     process.add_argument("--minimum-ssim", type=float, default=0.995)
+    process.add_argument("--minimum-final-ssim", type=float, default=0.99)
     process.add_argument("--minimum-commits", type=int, default=1)
     process.add_argument("--minimum-changed-entities", type=int, default=1)
     process.add_argument("--allow-partial", action="store_true")

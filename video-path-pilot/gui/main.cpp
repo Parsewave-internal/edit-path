@@ -24,6 +24,7 @@
 #include <QSaveFile>
 #include <QSettings>
 #include <QStandardPaths>
+#include <QTemporaryDir>
 #include <QTextStream>
 #include <QTimer>
 #include <QUrl>
@@ -63,9 +64,38 @@ QString sessionsRoot()
     return QDir(videos).filePath(QStringLiteral("EditPathSessions"));
 }
 
+bool prepareRenderSafetyConfig(const QString &configName, const QString &session, QString *problem)
+{
+    const QString configRoot = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation);
+    const QString renderTemp = QDir(session).filePath(QStringLiteral("render-temp"));
+    if (configRoot.isEmpty() || !QDir().mkpath(configRoot) || !QDir().mkpath(renderTemp)) {
+        if (problem) *problem = QStringLiteral("Could not prepare the memory-safe render folders.");
+        return false;
+    }
+    QSettings config(QDir(configRoot).filePath(configName), QSettings::IniFormat);
+    config.beginGroup(QStringLiteral("project"));
+    config.setValue(QStringLiteral("parallelrender"), false);
+    config.endGroup();
+    config.beginGroup(QStringLiteral("tools"));
+    config.setValue(QStringLiteral("processingthreads"), 1);
+    config.setValue(QStringLiteral("encodethreads"), 2);
+    config.setValue(QStringLiteral("currenttmpfolder"), QDir::toNativeSeparators(renderTemp));
+    config.endGroup();
+    config.sync();
+    if (config.status() != QSettings::NoError) {
+        if (problem) *problem = QStringLiteral("Could not save the memory-safe render settings.");
+        return false;
+    }
+    return true;
+}
+
 QString qtMultimediaQmlPath()
 {
-    QStringList roots = qEnvironmentVariable("QML2_IMPORT_PATH").split(QDir::listSeparator(), Qt::SkipEmptyParts);
+    QStringList roots;
+    // Craft's Windows portable layout places the QML import tree beside the
+    // executables (for example bin/QtMultimedia/qmldir), not only in ../qml.
+    roots.append(QCoreApplication::applicationDirPath());
+    roots.append(qEnvironmentVariable("QML2_IMPORT_PATH").split(QDir::listSeparator(), Qt::SkipEmptyParts));
     roots.append(QLibraryInfo::path(QLibraryInfo::QmlImportsPath));
     roots.append(QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("../qml")));
     for (const QString &root : std::as_const(roots)) {
@@ -166,9 +196,11 @@ private:
         m_title = new QLabel(QStringLiteral("<h1>EditPath</h1><p>Your editing session is safe. Follow the next step shown below.</p>"));
         m_title->setWordWrap(true);
         layout->addWidget(m_title);
-        m_instructions =
-            new QLabel(QStringLiteral("<b>When your edit is finished:</b> save the project, then render one final video into the session folder shown below. "
-                                      "Supported formats: MP4, MOV, MKV, or WebM."));
+        m_instructions = new QLabel(QStringLiteral(
+            "<b>When your edit is finished:</b> save and render normally in Kdenlive, then close the editor and click <b>Create Dataset Sample</b>. "
+            "EditPath presets the output inside this session and "
+            "also discovers a different destination selected in Kdenlive automatically. No file copying or dragging is required. The project is saved "
+            "automatically as <b>edit.kdenlive</b>."));
         m_instructions->setWordWrap(true);
         layout->addWidget(m_instructions);
         m_status = new QLabel;
@@ -296,6 +328,7 @@ private:
                              {QStringLiteral("session_dir"), m_session},
                              {QStringLiteral("session_id"), m_sessionId},
                              {QStringLiteral("config_name"), m_configName},
+                             {QStringLiteral("render_output"), QDir(m_session).filePath(QStringLiteral("editor-final.mp4"))},
                              {QStringLiteral("segment"), m_segment},
                              {QStringLiteral("status"), status},
                              {QStringLiteral("kdenlive_pid"), qint64(m_editor.processId())},
@@ -392,17 +425,29 @@ private:
         const QString raw = QDir(m_session).filePath(QStringLiteral("raw-events-%1.jsonl").arg(number));
         const QString console = QDir(m_session).filePath(QStringLiteral("kdenlive-console-%1.log").arg(number));
         const QString project = QDir(m_session).filePath(QStringLiteral("edit.kdenlive"));
+        const QString renderOutput = QDir(m_session).filePath(QStringLiteral("editor-final.mp4"));
+        const QString renderTemp = QDir(m_session).filePath(QStringLiteral("render-temp"));
         m_readyFile = QDir(m_session).filePath(QStringLiteral("kdenlive-ready-%1").arg(number));
         QFile::remove(m_readyFile);
+        QString renderSafetyProblem;
+        if (!prepareRenderSafetyConfig(m_configName, m_session, &renderSafetyProblem)) {
+            m_activity->appendPlainText(renderSafetyProblem);
+        } else {
+            m_activity->appendPlainText(QStringLiteral("Memory-safe rendering enabled: 1 processing thread, 2 encoder threads, session-local temp storage."));
+        }
         QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
         environment.insert(QStringLiteral("KDENLIVE_VIDEO_PATH_CONFIG"), m_configName);
         environment.insert(QStringLiteral("KDENLIVE_VIDEO_PATH_PROJECT"), project);
+        environment.insert(QStringLiteral("KDENLIVE_VIDEO_PATH_RENDER_OUTPUT"), renderOutput);
         environment.insert(QStringLiteral("KDENLIVE_VIDEO_PATH_LOG"), raw);
         environment.insert(QStringLiteral("KDENLIVE_VIDEO_PATH_SESSION_ID"), m_sessionId);
         environment.insert(QStringLiteral("KDENLIVE_VIDEO_PATH_SEGMENT"), QString::number(m_segment));
         environment.insert(QStringLiteral("KDENLIVE_VIDEO_PATH_STATE_DIR"), QDir(m_session).filePath(QStringLiteral("states")));
         environment.insert(QStringLiteral("KDENLIVE_VIDEO_PATH_ENTITY_MAP"), QDir(m_session).filePath(QStringLiteral("entity-map.json")));
         environment.insert(QStringLiteral("KDENLIVE_VIDEO_PATH_READY_FILE"), m_readyFile);
+        environment.insert(QStringLiteral("TEMP"), QDir::toNativeSeparators(renderTemp));
+        environment.insert(QStringLiteral("TMP"), QDir::toNativeSeparators(renderTemp));
+        environment.insert(QStringLiteral("OMP_NUM_THREADS"), QStringLiteral("2"));
         environment.remove(QStringLiteral("KDENLIVE_VIDEO_PATH_CLIPS"));
         environment.remove(QStringLiteral("QSG_RHI_BACKEND"));
         environment.remove(QStringLiteral("LIBGL_ALWAYS_SOFTWARE"));
@@ -482,8 +527,8 @@ private:
                 writeManifest(QStringLiteral("ready_to_finish"));
                 m_finish->setEnabled(true);
                 offerConfirmedNewSession();
-                setStatus(
-                    QStringLiteral("Your editing steps were saved. Render your finished video into the session folder, then click Create Dataset Sample."));
+                setStatus(QStringLiteral(
+                    "Your editing steps were saved. Click Create Dataset Sample; EditPath will locate the Kdenlive render automatically and generate the replay."));
             } else if (m_lastEditorExitCrashed) {
                 writeManifest(QStringLiteral("recovery_available"));
                 m_recover->setVisible(true);
@@ -610,6 +655,21 @@ int runSelfTest()
     bool passed = !root.isEmpty();
     checks.insert(QStringLiteral("application_root"),
                   QJsonObject{{QStringLiteral("passed"), !root.isEmpty()}, {QStringLiteral("path"), QDir::toNativeSeparators(root)}});
+    QTemporaryDir renderSafetyRoot;
+    const QString renderSafetyName = QStringLiteral("edit-path-self-test-%1rc").arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
+    QString renderSafetyProblem;
+    const bool renderSafetyPassed = [&]() {
+        if (!renderSafetyRoot.isValid() || !prepareRenderSafetyConfig(renderSafetyName, renderSafetyRoot.path(), &renderSafetyProblem)) return false;
+        QSettings config(QDir(QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)).filePath(renderSafetyName), QSettings::IniFormat);
+        return !config.value(QStringLiteral("project/parallelrender"), true).toBool()
+            && config.value(QStringLiteral("tools/processingthreads"), 0).toInt() == 1
+            && config.value(QStringLiteral("tools/encodethreads"), 0).toInt() == 2
+            && !config.value(QStringLiteral("tools/currenttmpfolder")).toString().isEmpty();
+    }();
+    QFile::remove(QDir(QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)).filePath(renderSafetyName));
+    checks.insert(QStringLiteral("memory_safe_rendering"),
+                  QJsonObject{{QStringLiteral("passed"), renderSafetyPassed}, {QStringLiteral("error"), renderSafetyProblem}});
+    passed = renderSafetyPassed && passed;
     passed = checkFile(QStringLiteral("kdenlive"), kdenlive) && passed;
     passed = checkFile(QStringLiteral("ffmpeg"), ffmpeg) && passed;
     passed = checkFile(QStringLiteral("ffprobe"), ffprobe) && passed;

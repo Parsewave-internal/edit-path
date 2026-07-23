@@ -9,7 +9,9 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
-from job_pipeline import canonical_hash, organize_dataset_item, project_resources, replay_report, resolve_assets
+from job_pipeline import (canonical_hash, discover_rendered_video, embedded_project_assets,
+                          organize_dataset_item, project_render_output, project_resources, replay_report,
+                          resolve_assets, used_asset_references)
 from normalize_sample import accepted_commits, build_sample
 from sample_collector import bind_project_assets
 from validate_sample import validate_sample
@@ -63,6 +65,10 @@ class MvpTests(unittest.TestCase):
         self.assertIn("m_lastEditorExitCrashed = exitStatus != QProcess::NormalExit || exitCode != 0", source)
         self.assertIn("QApplication::clipboard()->setText(nativePath)", source)
         self.assertIn('environment.remove(QStringLiteral("QSG_RHI_BACKEND"))', source)
+        self.assertIn('config.setValue(QStringLiteral("parallelrender"), false)', source)
+        self.assertIn('config.setValue(QStringLiteral("processingthreads"), 1)', source)
+        self.assertIn('config.setValue(QStringLiteral("encodethreads"), 2)', source)
+        self.assertIn('environment.insert(QStringLiteral("TEMP")', source)
         self.assertIn("unset QSG_RHI_BACKEND LIBGL_ALWAYS_SOFTWARE", launcher)
 
     def test_supervisor_uses_editor_facing_language(self):
@@ -83,6 +89,8 @@ class MvpTests(unittest.TestCase):
         self.assertNotIn("else if (m_autoRecover)", source)
         self.assertIn("Kdenlive closed unexpectedly, but your saved work is available", source)
         self.assertIn('KDENLIVE_VIDEO_PATH_READY_FILE', source)
+        self.assertIn('KDENLIVE_VIDEO_PATH_RENDER_OUTPUT', source)
+        self.assertIn("No file copying or dragging is required.", source)
         self.assertIn('m_launchProgress->setRange(0, 0)', source)
         self.assertIn('m_readyFile + QStringLiteral(".ack")', source)
         self.assertIn('QStringLiteral("supervisor-activity.log")', source)
@@ -95,6 +103,8 @@ class MvpTests(unittest.TestCase):
         self.assertIn("document->isModified()", editor_main)
         self.assertIn("pCore->projectManager()->saveFile()", editor_main)
         self.assertIn('qEnvironmentVariable("KDENLIVE_VIDEO_PATH_READY_FILE")', editor_main)
+        self.assertIn('qEnvironmentVariable("KDENLIVE_VIDEO_PATH_RENDER_OUTPUT")', editor_main)
+        self.assertIn('setDocumentProperty(QStringLiteral("renderurl"), recorderRenderOutput)', editor_main)
         self.assertIn('readyFile.write("ready\\n")', editor_main)
         self.assertIn('document == nullptr || document->loading', editor_main)
         self.assertIn('captureTimelineCheckpoint(QStringLiteral("gui.ready"))', editor_main)
@@ -121,7 +131,7 @@ class MvpTests(unittest.TestCase):
         self.assertIn('-version "[17.0,18.0)"', source)
         self.assertIn('$env:CRAFT_PYTHON', source)
         self.assertIn('"bin\\craft.py"', source)
-        self.assertIn('& $craftPython $craftScript --ci-mode --src-dir $sourceRoot', source)
+        self.assertIn('& $craftPython $craftScript --ci-mode --options "kde/kdemultimedia/kdenlive.srcDir=$sourceRoot"', source)
         self.assertIn('@("sh.exe", "gcc.exe", "g++.exe", "cpp.exe")', source)
 
     def test_project_asset_binding_requires_path_or_content_identity(self):
@@ -166,6 +176,97 @@ class MvpTests(unittest.TestCase):
             </mlt>''', encoding="utf-8")
             resources, _ = project_resources(project)
             self.assertEqual(resources, {"7": media.resolve()})
+
+    def test_embedded_kdenlive_title_is_resolved_without_a_fake_file(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            media = root / "image.png"
+            media.write_bytes(b"image")
+            project = root / "edit.kdenlive"
+            project.write_text(f'''<mlt root="{root}">
+              <profile frame_rate_num="25" frame_rate_den="1" width="1920" height="1080"/>
+              <producer><property name="kdenlive:id">4</property><property name="mlt_service">qimage</property>
+                <property name="resource">{media}</property></producer>
+              <producer><property name="kdenlive:id">5</property><property name="mlt_service">kdenlivetitle</property>
+                <property name="resource"></property><property name="xmldata">&lt;kdenlivetitle/&gt;</property></producer>
+              <producer><property name="kdenlive:id">7</property><property name="mlt_service">avformat</property>
+                <property name="resource">{root / 'missing.mp4'}</property></producer>
+              <tractor><property name="kdenlive:id">6</property><property name="kdenlive:producer_type">17</property></tractor>
+            </mlt>''', encoding="utf-8")
+            resources, _ = project_resources(project)
+            embedded = embedded_project_assets(project)
+            self.assertEqual(resources, {"4": media.resolve(), "7": (root / "missing.mp4").resolve()})
+            self.assertEqual(set(embedded), {"5", "6"})
+            self.assertEqual(embedded["5"]["service"], "kdenlivetitle")
+
+            raw = root / "raw-events.jsonl"
+            raw.write_text(json.dumps({"event_type": "state.diff", "diff": {"changes": [
+                {"entity": "clip", "change": "added", "after": {"asset_reference": "5"}}
+            ]}}) + "\n", encoding="utf-8")
+            self.assertEqual(used_asset_references([raw]), {"5"})
+            self.assertFalse(used_asset_references([raw]) - set(embedded))
+
+    def test_embedded_title_normalizes_as_a_resolved_project_asset(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "evidence").mkdir()
+            raw = root / "evidence" / "raw-events.jsonl"
+            raw.write_text(json.dumps({
+                "event_type": "state.diff", "boundary": "commit", "event_id": "title-add", "sequence": 1,
+                "after_hash": HASH_B, "diff": {"changes": [{"entity": "clip", "native_id": 9,
+                    "change": "added", "after": {"asset_reference": "5", "asset_id": "stable-title-id",
+                    "duration_frames": 25}}]},
+            }) + "\n", encoding="utf-8")
+            sample = build_sample(root, {
+                "sample_id": "title-sample", "prompt": "Add a title",
+                "project": {"frame_rate": {"numerator": 25, "denominator": 1}, "width": 1920, "height": 1080},
+                "assets": [], "asset_binding_method": "project_resource_sha256",
+                "embedded_project_assets": {"5": {"native_reference": "5", "kind": "generator",
+                    "service": "kdenlivetitle", "project_content_sha256": "a" * 64}},
+                "artifacts": {"final_video": "output/final.mp4", "final_video_sha256": "b" * 64,
+                    "native_project": "internal/final.kdenlive", "native_project_sha256": "c" * 64,
+                    "raw_events": [{"file": "evidence/raw-events.jsonl"}]},
+            })
+            self.assertEqual(sample["quality"]["unresolved_asset_ids"], [])
+            self.assertEqual(sample["inputs"]["embedded_assets"][0]["asset_id"], "stable-title-id")
+            self.assertEqual(sample["edit_path"]["operations"][0]["changes"][0]["after"]["asset_id"], "stable-title-id")
+            sample_path = root / "sample.json"
+            sample_path.write_text(json.dumps(sample), encoding="utf-8")
+            self.assertEqual(validate_sample(sample_path), [])
+
+    def test_render_output_is_discovered_from_saved_kdenlive_destination(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            session = root / "session"
+            session.mkdir()
+            external = root / "Videos" / "client-final.mkv"
+            external.parent.mkdir()
+            external.write_bytes(b"render")
+            project = session / "edit.kdenlive"
+            project.write_text(
+                f'''<mlt root="{session}"><playlist id="main_bin">
+                <property name="kdenlive:docproperties.renderurl">{external}</property>
+                </playlist></mlt>''',
+                encoding="utf-8",
+            )
+            self.assertEqual(project_render_output(project), external.resolve())
+            self.assertEqual(discover_rendered_video(session, project), external.resolve())
+
+            managed = session / "editor-final.mp4"
+            managed.write_bytes(b"managed render")
+            self.assertEqual(discover_rendered_video(session, project), managed.resolve())
+
+    def test_missing_saved_render_has_actionable_error(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            session = Path(temporary)
+            missing = session.parent / "missing-final.mp4"
+            project = session / "edit.kdenlive"
+            project.write_text(
+                f'''<mlt><playlist><property name="kdenlive:docproperties.renderurl">{missing}</property></playlist></mlt>''',
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "did not complete or no longer exists"):
+                discover_rendered_video(session, project)
 
     def test_legacy_sample_without_checkpoint_stays_supported(self):
         with tempfile.TemporaryDirectory() as temporary:

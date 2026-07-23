@@ -16,8 +16,10 @@ must be prepared in the app before editing.
 3. Make the requested video normally. Import or create assets whenever needed.
 4. The recorder creates `edit.kdenlive` in the session folder automatically.
    Save normally while editing; do not create a second project file.
-5. Render exactly one final video (`.mp4`, `.mov`, `.mkv`, or `.webm`) into that
-   same folder.
+5. Render exactly one final video (`.mp4`, `.mov`, `.mkv`, or `.webm`). EditPath
+   presets `editor-final.mp4` in the session folder. If you intentionally choose
+   another destination, EditPath discovers it from the project automatically;
+   never copy or drag the rendered file into the session manually.
 6. Close Kdenlive normally. The completion screen then appears and validates
    the recording.
 7. If Kdenlive ended unexpectedly, restart the recorder and use **Resume

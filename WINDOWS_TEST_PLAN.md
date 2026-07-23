@@ -25,7 +25,9 @@ Perform the normal-session test before the crash-recovery test.
 9. Press **Ctrl+Z** once and **Ctrl+Shift+Z** once.
 10. Save normally. Confirm no second project filename is requested and the
    session contains `edit.kdenlive`.
-11. Render one MP4 directly into the displayed session folder.
+11. Render one MP4 using the destination already selected by EditPath. If you
+    intentionally choose another destination, leave the file there; do not copy
+    or drag it into the session folder.
 12. Close Kdenlive normally.
 13. Confirm the EditPath completion screen appears, then click **Create Dataset
     Sample**.
@@ -57,7 +59,8 @@ Record PASS/FAIL and notes for every check:
 5. Confirm the recovery screen appears.
 6. Choose **Resume Editing**.
 7. Confirm `edit.kdenlive` reopens and the saved timeline edit remains.
-8. Make one additional edit, save, render an MP4, and close normally.
+8. Make one additional edit, save, render an MP4 using the preselected output,
+   and close normally.
 9. Finish the session and confirm multiple numbered raw-event and console-log
    segments were retained.
 

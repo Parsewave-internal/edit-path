@@ -140,13 +140,15 @@ for developer testing rather than editor distribution.
 3. If Kdenlive stops unexpectedly, existing evidence remains immutable.
    **Resume Editing** reopens the same project and configuration, retains
    stable entity IDs, and records the continuation as a new numbered segment.
-4. The editor renders one independent final video into the displayed session
-   folder and closes Kdenlive normally. The accepted extensions are `.mp4`,
-   `.mov`, `.mkv`, and `.webm`; H.264 is not required. There must be exactly
-   one top-level rendered video in the session folder.
+4. The editor renders one independent final video and closes Kdenlive normally.
+   EditPath presets `editor-final.mp4` inside the active session, and if the
+   editor chooses another `.mp4`, `.mov`, `.mkv`, or `.webm` destination,
+   finalization discovers that path from the saved Kdenlive project. No manual
+   file copying is required; H.264 is not required.
 5. **Create Dataset Sample** discovers and hashes project assets, assembles recovery
-   segments, resolves the accepted commit/undo/redo branch, and reconstructs
-   from the exact accepted project state—not from mouse/keyboard replay.
+   segments, resolves file-backed media separately from self-contained Kdenlive
+   generators and sequences, resolves the accepted commit/undo/redo branch, and
+   reconstructs from the exact accepted project state—not from mouse/keyboard replay.
 6. Melt first renders a validation file matched to the independent editor
    render, then creates `verification/reconstructed.mp4` with the first available supported
    encoder (`libx264`, `libopenh264`, then `mpeg4`). FFprobe rejects an

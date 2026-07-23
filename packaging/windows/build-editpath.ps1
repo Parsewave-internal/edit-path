@@ -5,16 +5,61 @@
 param(
     [string]$CraftRoot = "C:\CraftRoot",
     [string]$OutputDirectory = "",
+    [string]$SigningCertificateThumbprint = $env:EDIT_PATH_SIGNING_CERT_THUMBPRINT,
+    [string]$TimestampUrl = "http://timestamp.digicert.com",
+    [switch]$RequireCodeSigning,
     [switch]$PreflightOnly,
     [switch]$SkipTestMedia
 )
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
+$utf8NoBom = New-Object System.Text.UTF8Encoding -ArgumentList $false
 
 function Stop-Build([string]$Message) {
     try { Stop-Transcript | Out-Null } catch { }
     throw "EditPath build prerequisite failed: $Message"
+}
+
+function Find-SignTool {
+    $onPath = Get-Command signtool.exe -ErrorAction SilentlyContinue
+    if ($onPath) { return $onPath.Source }
+
+    $candidates = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" -ErrorAction SilentlyContinue |
+        Sort-Object { [version]$_.Directory.Parent.Name } -Descending
+    if ($candidates) { return $candidates[0].FullName }
+    return $null
+}
+
+function Find-CodeSigningCertificate([string]$Thumbprint) {
+    $normalizedThumbprint = ($Thumbprint -replace '\s', '').ToUpperInvariant()
+    $certificate = Get-ChildItem -Path "Cert:\CurrentUser\My", "Cert:\LocalMachine\My" -CodeSigningCert -ErrorAction SilentlyContinue |
+        Where-Object { $_.Thumbprint -eq $normalizedThumbprint } |
+        Select-Object -First 1
+    if (-not $certificate) {
+        Stop-Build "code-signing certificate $normalizedThumbprint was not found in the CurrentUser or LocalMachine personal certificate store."
+    }
+    if (-not $certificate.HasPrivateKey) {
+        Stop-Build "code-signing certificate $normalizedThumbprint does not have an accessible private key."
+    }
+    $now = Get-Date
+    if ($certificate.NotBefore -gt $now -or $certificate.NotAfter -le $now) {
+        Stop-Build "code-signing certificate $normalizedThumbprint is not currently valid."
+    }
+    return $certificate
+}
+
+function Sign-And-VerifyWindowsBinary([string]$SignTool, [System.Security.Cryptography.X509Certificates.X509Certificate2]$Certificate, [string]$Path) {
+    Write-Host "Authenticode signing $Path"
+    & $SignTool sign /sha1 $Certificate.Thumbprint /fd SHA256 /tr $TimestampUrl /td SHA256 /v $Path
+    if ($LASTEXITCODE -ne 0) { Stop-Build "Authenticode signing failed for $Path." }
+
+    & $SignTool verify /pa /all /v $Path
+    if ($LASTEXITCODE -ne 0) { Stop-Build "Authenticode verification failed for $Path." }
+    $signature = Get-AuthenticodeSignature $Path
+    if ($signature.Status -ne "Valid") {
+        Stop-Build "Windows reported Authenticode status '$($signature.Status)' for $Path."
+    }
 }
 
 if (-not [Environment]::Is64BitOperatingSystem) {
@@ -25,6 +70,10 @@ $sourceRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 if (-not (Test-Path (Join-Path $sourceRoot "CMakeLists.txt"))) {
     Stop-Build "run this script from a complete EditPath repository checkout."
 }
+# WSL can launch PowerShell with a \\wsl.localhost UNC working directory.
+# Craft invokes cmd.exe while importing the MSVC environment, and cmd.exe does
+# not support UNC current directories. Always enter the native source path.
+Set-Location $sourceRoot
 if (-not $OutputDirectory) {
     $OutputDirectory = Join-Path $sourceRoot "windows-output"
 }
@@ -63,6 +112,21 @@ if (-not (Test-Path $vswhere)) {
 $visualStudio = & $vswhere -latest -products * -version "[17.0,18.0)" -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
 if (-not $visualStudio) {
     Stop-Build "download Visual Studio 2022 Build Tools from https://aka.ms/vs/17/release/vs_BuildTools.exe and select 'Desktop development with C++'. Visual Studio 2026 is not supported by Craft yet."
+}
+
+$signToolPath = $null
+$signingCertificate = $null
+if ($SigningCertificateThumbprint) {
+    $signToolPath = Find-SignTool
+    if (-not $signToolPath) {
+        Stop-Build "signtool.exe is required for code signing; install the Windows 10 or 11 SDK."
+    }
+    $signingCertificate = Find-CodeSigningCertificate $SigningCertificateThumbprint
+    Write-Host "Code signing: $($signingCertificate.Subject) ($($signingCertificate.Thumbprint))"
+} elseif ($RequireCodeSigning) {
+    Stop-Build "-RequireCodeSigning was requested, but -SigningCertificateThumbprint (or EDIT_PATH_SIGNING_CERT_THUMBPRINT) was not provided."
+} else {
+    Write-Host "Code signing: disabled (engineering build only)"
 }
 
 $conflictingToolDirectories = @()
@@ -128,6 +192,20 @@ if (-not (Test-Path $craftEnvironment)) {
     Stop-Build "Craft bootstrap did not create $craftEnvironment."
 }
 
+# Windows PowerShell 5's `Set-Content -Encoding UTF8` writes a BOM. Python's
+# configparser does not accept that BOM before the first INI section header, so
+# normalize the file before craftenv.ps1 imports Craft.
+$settings = Join-Path $CraftRoot "etc\CraftSettings.ini"
+$settingsText = Get-Content $settings -Raw
+if ($settingsText.Contains('#PackageType = SevenZipPackager')) {
+    $settingsText = $settingsText.Replace('#PackageType = SevenZipPackager', 'PackageType = PortablePackager')
+} elseif ($settingsText.Contains('PackageType = SevenZipPackager')) {
+    $settingsText = $settingsText.Replace('PackageType = SevenZipPackager', 'PackageType = PortablePackager')
+} elseif (-not $settingsText.Contains('PackageType = PortablePackager')) {
+    Stop-Build "the Craft package type setting changed; update this script before building."
+}
+[IO.File]::WriteAllText($settings, $settingsText, $utf8NoBom)
+
 . $craftEnvironment
 
 $craftPython = $env:CRAFT_PYTHON
@@ -144,42 +222,53 @@ if (-not $blueprint) {
 }
 $blueprintText = Get-Content $blueprint.FullName -Raw
 $oldFilter = 'bin/(?!(ff|kdenlive|kioworker|melt|update-mime-database|snoretoast|drmingw|data/kdenlive)).*'
-$newFilter = 'bin/(?!(ff|kdenlive|EditPath|kioworker|melt|update-mime-database|snoretoast|drmingw|data/kdenlive)).*'
+$editPathOnlyFilter = 'bin/(?!(ff|kdenlive|EditPath|kioworker|melt|update-mime-database|snoretoast|drmingw|data/kdenlive)).*'
+$newFilter = 'bin/(?!(ff|kdenlive|EditPath|kioworker|melt|update-mime-database|snoretoast|drmingw|data/kdenlive|video-path-pilot)).*'
 if ($blueprintText.Contains($oldFilter)) {
     $blueprintText = $blueprintText.Replace($oldFilter, $newFilter)
-    Set-Content $blueprint.FullName $blueprintText -Encoding UTF8
+    [IO.File]::WriteAllText($blueprint.FullName, $blueprintText, $utf8NoBom)
+} elseif ($blueprintText.Contains($editPathOnlyFilter)) {
+    $blueprintText = $blueprintText.Replace($editPathOnlyFilter, $newFilter)
+    [IO.File]::WriteAllText($blueprint.FullName, $blueprintText, $utf8NoBom)
 } elseif (-not $blueprintText.Contains($newFilter)) {
     Stop-Build "the Craft Kdenlive executable filter changed; update this script before building."
 }
 
 Write-Host "Building EditPath and all required Kdenlive dependencies..."
-& $craftPython $craftScript --ci-mode --src-dir $sourceRoot kde/kdemultimedia/kdenlive
+& $craftPython $craftScript --ci-mode --options "kde/kdemultimedia/kdenlive.srcDir=$sourceRoot" kde/kdemultimedia/kdenlive
 if ($LASTEXITCODE -ne 0) { Stop-Build "Craft compilation failed." }
 
-$settings = Join-Path $CraftRoot "etc\CraftSettings.ini"
-$settingsText = Get-Content $settings -Raw
-if ($settingsText.Contains('#PackageType = SevenZipPackager')) {
-    $settingsText = $settingsText.Replace('#PackageType = SevenZipPackager', 'PackageType = SevenZipPackager')
-    Set-Content $settings $settingsText -Encoding UTF8
-}
-
 Write-Host "Creating dependency-complete portable package..."
-& $craftPython $craftScript --ci-mode --src-dir $sourceRoot --package kde/kdemultimedia/kdenlive
+& $craftPython $craftScript --ci-mode --options "kde/kdemultimedia/kdenlive.srcDir=$sourceRoot" --package kde/kdemultimedia/kdenlive
 if ($LASTEXITCODE -ne 0) { Stop-Build "Craft packaging failed." }
 
 $archive = Get-ChildItem $CraftRoot -Recurse -File -Filter '*kdenlive*.7z' |
-    Where-Object { $_.Name -notmatch '(debug|symbols|src)' } |
+    Where-Object { $_.Name -notmatch '(-dbg|-logs|debug|symbols|src)' } |
     Sort-Object LastWriteTimeUtc -Descending |
     Select-Object -First 1
 if (-not $archive) { Stop-Build "Craft did not produce a Kdenlive 7z package." }
 
-$sevenZip = Get-Command 7z.exe -ErrorAction SilentlyContinue
-if (-not $sevenZip) {
-    $sevenZipCandidate = Join-Path $CraftRoot "bin\7z.exe"
-    if (Test-Path $sevenZipCandidate) { $sevenZip = Get-Item $sevenZipCandidate }
+$sevenZipPath = $null
+foreach ($commandName in @("7z.exe", "7za.exe")) {
+    $sevenZip = Get-Command $commandName -ErrorAction SilentlyContinue
+    if ($sevenZip) {
+        $sevenZipPath = $sevenZip.Source
+        break
+    }
 }
-if (-not $sevenZip) { Stop-Build "7z.exe was not found after Craft packaging." }
-$sevenZipPath = if ($sevenZip -is [IO.FileInfo]) { $sevenZip.FullName } else { $sevenZip.Source }
+if (-not $sevenZipPath) {
+    foreach ($sevenZipCandidate in @(
+        (Join-Path $CraftRoot "bin\7z.exe"),
+        (Join-Path $CraftRoot "bin\7za.exe"),
+        (Join-Path $CraftRoot "dev-utils\bin\7za.exe")
+    )) {
+        if (Test-Path $sevenZipCandidate) {
+            $sevenZipPath = $sevenZipCandidate
+            break
+        }
+    }
+}
+if (-not $sevenZipPath) { Stop-Build "7z.exe or 7za.exe was not found after Craft packaging." }
 
 $portable = Join-Path $OutputDirectory "EditPath-Windows-x64"
 if (Test-Path $portable) {
@@ -218,12 +307,20 @@ if (-not (Test-Path (Join-Path $packagedEditPath "__main__.py"))) {
     Stop-Build "the edit_path reconstruction package is missing from the portable build."
 }
 
+$signedFiles = @()
+if ($signingCertificate) {
+    foreach ($binary in @($editPath, $kdenlive)) {
+        Sign-And-VerifyWindowsBinary $signToolPath $signingCertificate $binary.FullName
+        $signedFiles += $binary.FullName.Substring($portable.Length + 1)
+    }
+}
+
 $selfTestReport = Join-Path $portable "SELF-TEST.json"
 $env:EDIT_PATH_SELF_TEST_REPORT = $selfTestReport
 $savedPath = $env:PATH
 $env:PATH = "$bin;$pythonDirectory;$env:SystemRoot\System32"
-& $editPath.FullName --self-test
-$selfTestExitCode = $LASTEXITCODE
+$selfTestProcess = Start-Process -FilePath $editPath.FullName -ArgumentList '--self-test' -Wait -PassThru -NoNewWindow
+$selfTestExitCode = $selfTestProcess.ExitCode
 Remove-Item Env:\EDIT_PATH_SELF_TEST_REPORT -ErrorAction SilentlyContinue
 if ($selfTestExitCode -ne 0 -or -not (Test-Path $selfTestReport)) {
     $env:PATH = $savedPath
@@ -234,12 +331,29 @@ if (-not $selfTest.passed) {
     $env:PATH = $savedPath
     Stop-Build "the packaged runtime reported a failed dependency check."
 }
+$portablePrefix = [IO.Path]::GetFullPath($portable).TrimEnd('\') + '\'
+foreach ($checkName in @('application_root', 'edit_path_module', 'ffmpeg', 'ffprobe', 'kdenlive', 'melt', 'pipeline', 'python', 'qt_multimedia_qml', 'validator')) {
+    $checkPath = [string]$selfTest.checks.$checkName.path
+    if (-not $checkPath -or -not [IO.Path]::GetFullPath($checkPath).StartsWith($portablePrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        $env:PATH = $savedPath
+        Stop-Build "the packaged runtime self-test resolved '$checkName' outside the portable bundle: $checkPath"
+    }
+}
 
 $embeddedPython = Join-Path $pythonDirectory "python.exe"
 $savedPythonPath = $env:PYTHONPATH
 $env:PYTHONPATH = "$bin;$sourceRoot"
-& $embeddedPython -m unittest -v tests.edit_path.test_reconstruction_pipeline.MediaIntegrationTests.test_real_checkpoint_and_final_ssim_pipeline
-$mediaTestExitCode = $LASTEXITCODE
+Push-Location $portable
+try {
+    $importedEditPath = (& $embeddedPython -c "import edit_path; print(edit_path.__file__)" | Select-Object -Last 1).Trim()
+    if ($LASTEXITCODE -ne 0 -or -not [IO.Path]::GetFullPath($importedEditPath).StartsWith($portablePrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        Stop-Build "embedded Python imported edit_path outside the portable bundle: $importedEditPath"
+    }
+    & $embeddedPython -m unittest -v tests.edit_path.test_reconstruction_pipeline.MediaIntegrationTests.test_real_checkpoint_and_final_ssim_pipeline
+    $mediaTestExitCode = $LASTEXITCODE
+} finally {
+    Pop-Location
+}
 if ($null -eq $savedPythonPath) {
     Remove-Item Env:\PYTHONPATH -ErrorAction SilentlyContinue
 } else {
@@ -288,6 +402,9 @@ if (Test-Path $outputZip) {
     Move-Item $outputZip "$outputZip.previous.$(Get-Date -Format 'yyyyMMdd-HHmmss')"
 }
 Compress-Archive -Path (Join-Path $portable '*') -DestinationPath $outputZip -CompressionLevel Optimal
+$archiveSha256 = (Get-FileHash $outputZip -Algorithm SHA256).Hash.ToLowerInvariant()
+$checksumFile = "$outputZip.sha256"
+"$archiveSha256  $([IO.Path]::GetFileName($outputZip))" | Set-Content $checksumFile -Encoding ASCII
 
 $manifest = [ordered]@{
     built_at_utc = (Get-Date).ToUniversalTime().ToString("o")
@@ -296,6 +413,14 @@ $manifest = [ordered]@{
     editpath_exe = $editPath.FullName.Substring($portable.Length + 1)
     kdenlive_exe = $kdenlive.FullName.Substring($portable.Length + 1)
     test_media_included = -not $SkipTestMedia
+    code_signed = [bool]$signingCertificate
+    signed_files = $signedFiles
+    signer_subject = if ($signingCertificate) { $signingCertificate.Subject } else { $null }
+    signer_thumbprint = if ($signingCertificate) { $signingCertificate.Thumbprint } else { $null }
+    signer_certificate_expires_utc = if ($signingCertificate) { $signingCertificate.NotAfter.ToUniversalTime().ToString("o") } else { $null }
+    timestamp_url = if ($signingCertificate) { $TimestampUrl } else { $null }
+    archive_sha256 = $archiveSha256
+    checksum_file = $checksumFile
 }
 $manifest | ConvertTo-Json | Set-Content (Join-Path $OutputDirectory "build-manifest.json") -Encoding UTF8
 
@@ -303,6 +428,7 @@ Write-Host ""
 Write-Host "BUILD COMPLETE" -ForegroundColor Green
 Write-Host "Portable folder: $portable"
 Write-Host "Shareable ZIP:    $outputZip"
+Write-Host "SHA-256 file:     $checksumFile"
 Write-Host "Start executable: $($editPath.FullName)"
 [EditPathPower]::RestoreDefaults() | Out-Null
 Stop-Transcript | Out-Null

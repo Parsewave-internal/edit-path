@@ -575,11 +575,24 @@ int main(int argc, char *argv[])
         // gives Kdenlive's normal autosave/backup recovery a stable target even
         // when the editor has not manually used Save As before a crash.
         const QString recorderProject = qEnvironmentVariable("KDENLIVE_VIDEO_PATH_PROJECT");
-        if (!recorderProject.isEmpty() && app.url.isEmpty() && !QFileInfo::exists(recorderProject)) {
-            QTimer::singleShot(1000, &app, [recorderProject]() {
-                QDir().mkpath(QFileInfo(recorderProject).absolutePath());
-                if (!pCore->projectManager()->saveFileAs(recorderProject, false)) {
+        const QString recorderRenderOutput = qEnvironmentVariable("KDENLIVE_VIDEO_PATH_RENDER_OUTPUT");
+        if (!recorderProject.isEmpty()) {
+            const bool createRecorderProject = app.url.isEmpty() && !QFileInfo::exists(recorderProject);
+            QTimer::singleShot(1000, &app, [recorderProject, recorderRenderOutput, createRecorderProject]() {
+                if (createRecorderProject) {
+                    QDir().mkpath(QFileInfo(recorderProject).absolutePath());
+                }
+                if (createRecorderProject && !pCore->projectManager()->saveFileAs(recorderProject, false)) {
                     qWarning() << "Could not create recorder project" << recorderProject;
+                    return;
+                }
+                KdenliveDoc *document = pCore->currentDoc();
+                if (document != nullptr && !recorderRenderOutput.isEmpty() && !document->hasDocumentProperty(QStringLiteral("renderurl"))) {
+                    document->setDocumentProperty(QStringLiteral("renderurl"), recorderRenderOutput);
+                    document->setModified();
+                    if (!pCore->projectManager()->saveFile()) {
+                        qWarning() << "Could not save recorder render destination" << recorderRenderOutput;
+                    }
                 }
             });
         }

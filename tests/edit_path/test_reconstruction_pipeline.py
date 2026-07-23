@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 import stat
 import subprocess
@@ -12,9 +13,11 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
-from edit_path.io import sha256_file, write_json, write_jsonl
+from edit_path.io import replace_with_retry, sha256_file, write_json, write_jsonl
+from edit_path.errors import EditPathError, GateError
 from edit_path.pipeline import (
     build_dataset_index,
     build_qa_queue,
@@ -22,12 +25,20 @@ from edit_path.pipeline import (
     process_next_queued,
     process_session,
     publish_bundle,
+    quarantine_session,
     record_qa_review,
     preflight_session,
+    validate_checkpoints,
     validate_event_envelope,
     validate_state_transitions,
 )
-from edit_path.process_video import _compatible_filters, build_replay_moments, build_replay_steps
+from edit_path.process_video import (
+    _parse_drawtext_filter,
+    _write_ass_labels,
+    build_replay_moments,
+    build_replay_steps,
+    render_edit_process,
+)
 from edit_path.reconstruct import render_project, select_video_encoder
 from edit_path.runtime import runtime_fingerprint
 from edit_path.state import canonical_hash, load_state_reference, resolve_accepted_branch, validate_action_semantics
@@ -49,6 +60,41 @@ def event(sequence: int, event_type: str, **values: object) -> dict:
 
 
 class BranchResolutionTests(unittest.TestCase):
+    def test_action_for_undone_transaction_is_ignored(self) -> None:
+        deleted = event(2, "state.diff", boundary="commit", transaction_id="delete", diff={"changes": []})
+        action = event(3, "action", action="clip.delete", transaction_id="delete")
+
+        reports = validate_action_semantics([deleted, action], [])
+
+        self.assertEqual(reports[0]["status"], "ignored")
+        self.assertEqual(reports[0]["attribution"], "not_on_accepted_branch")
+
+    def test_inconsistent_action_is_reported_as_degraded_instead_of_raising(self) -> None:
+        moved = event(
+            2,
+            "state.diff",
+            boundary="commit",
+            transaction_id="move",
+            diff={
+                "changes": [
+                    {
+                        "entity": "clip",
+                        "native_id": 1,
+                        "change": "updated",
+                        "before": {"timeline_start_frame": 0},
+                        "after": {"timeline_start_frame": 10},
+                    }
+                ]
+            },
+        )
+        action = event(3, "action", action="clip.delete", transaction_id="move")
+
+        reports = validate_action_semantics([moved, action], [moved])
+
+        self.assertEqual(reports[0]["inferred"], "clip.move")
+        self.assertFalse(reports[0]["compatible"])
+        self.assertEqual(reports[0]["status"], "degraded")
+
     def test_merged_transaction_is_undone_and_redone_as_one_group(self) -> None:
         p0, p1, p2 = (character * 64 for character in "abc")
         checkpoint = event(1, "state.checkpoint", state_hash="d" * 64, snapshot={}, project_state={"sha256": p0})
@@ -85,12 +131,127 @@ class BranchResolutionTests(unittest.TestCase):
 
 
 class StateTests(unittest.TestCase):
-    def test_replay_can_render_without_drawtext(self) -> None:
-        filters = ["drawbox=x=0:y=0:w=10:h=10:t=fill", "drawtext=text='Edit':x=0:y=0"]
-        self.assertEqual(
-            _compatible_filters(filters, text_enabled=False),
-            ["drawbox=x=0:y=0:w=10:h=10:t=fill"],
+    def test_exact_preview_failure_uses_semantic_state_and_keeps_replay(self) -> None:
+        moment = {
+            "index": 0,
+            "sequence": 2,
+            "event": {"event_id": "diff", "event_type": "state.diff"},
+            "event_type": "state.diff",
+            "operation": "clip.insert",
+            "snapshot": {
+                "duration_frames": 25,
+                "clips": [{"native_id": 1, "timeline_start_frame": 0}],
+                "compositions": [],
+            },
+            "state_event": {"project_state": {"sha256": "b" * 64, "path": "states/missing.zst"}},
+        }
+
+        def fake_scene(*args: object, **_kwargs: object) -> int:
+            Path(args[3]).write_bytes(b"scene")
+            return 10
+
+        def fake_run(command: list[str], _label: str, **_kwargs: object) -> None:
+            Path(command[-1]).write_bytes(b"replay")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with (
+                mock.patch("edit_path.process_video.shutil.which", return_value="ffmpeg"),
+                mock.patch("edit_path.process_video.select_video_encoder", return_value="libx264"),
+                mock.patch("edit_path.process_video._supports_filter", return_value=True),
+                mock.patch("edit_path.process_video.build_replay_steps", return_value=[]),
+                mock.patch("edit_path.process_video.build_replay_moments", return_value=[moment]),
+                mock.patch("edit_path.process_video._asset_lookup", return_value=({}, [])),
+                mock.patch("edit_path.process_video.render_event", side_effect=EditPathError("unmanifested asset")),
+                mock.patch("edit_path.process_video._render_scene", side_effect=fake_scene),
+                mock.patch("edit_path.process_video._run", side_effect=fake_run),
+                mock.patch(
+                    "edit_path.process_video.probe",
+                    return_value={"format": {"duration": "1.5"}, "streams": [{"codec_type": "video"}]},
+                ),
+            ):
+                output, report = render_edit_process(
+                    root,
+                    [],
+                    [],
+                    "a" * 64,
+                    root / "replay.mp4",
+                    root / "work",
+                )
+                output_exists = output.is_file()
+
+        self.assertTrue(output_exists)
+        self.assertEqual(report["state_preview_quality"], "degraded")
+        self.assertEqual(report["events"][0]["monitor"], "semantic_ui_only")
+        self.assertIn("semantic editor state used instead", report["state_preview_warnings"][0])
+
+    def test_replay_label_failure_falls_back_to_degraded_unlabeled_video(self) -> None:
+        moment = {
+            "index": 0,
+            "sequence": 1,
+            "event": {"event_id": "start", "event_type": "session.start"},
+            "event_type": "session.start",
+            "operation": "session.start",
+            "snapshot": {"duration_frames": 0, "clips": [], "compositions": []},
+            "state_event": None,
+        }
+        renderers: list[str] = []
+
+        def fake_scene(*_args: object, **kwargs: object) -> int:
+            renderer = str(kwargs["text_renderer"])
+            renderers.append(renderer)
+            if renderer == "ass":
+                raise EditPathError("simulated ASS renderer failure")
+            Path(_args[3]).write_bytes(b"scene")
+            return 0
+
+        def fake_run(command: list[str], _label: str, **_kwargs: object) -> None:
+            Path(command[-1]).write_bytes(b"replay")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with (
+                mock.patch("edit_path.process_video.shutil.which", return_value="ffmpeg"),
+                mock.patch("edit_path.process_video.select_video_encoder", return_value="libx264"),
+                mock.patch("edit_path.process_video._supports_filter", side_effect=[False, True]),
+                mock.patch("edit_path.process_video.build_replay_steps", return_value=[]),
+                mock.patch("edit_path.process_video.build_replay_moments", return_value=[moment]),
+                mock.patch("edit_path.process_video._asset_lookup", return_value=({}, [])),
+                mock.patch("edit_path.process_video._render_scene", side_effect=fake_scene),
+                mock.patch("edit_path.process_video._run", side_effect=fake_run),
+                mock.patch(
+                    "edit_path.process_video.probe",
+                    return_value={"format": {"duration": "2.0"}, "streams": [{"codec_type": "video"}]},
+                ),
+            ):
+                output, report = render_edit_process(
+                    root,
+                    [],
+                    [],
+                    "a" * 64,
+                    root / "replay.mp4",
+                    root / "work",
+                )
+                output_exists = output.is_file()
+
+        self.assertTrue(output_exists)
+        self.assertEqual(renderers, ["ass", "none"])
+        self.assertEqual(report["training_ui_quality"], "degraded")
+        self.assertEqual(report["text_overlays"], "none")
+        self.assertIn("replay continued without labels", report["training_ui_warnings"][0])
+
+    def test_replay_converts_required_labels_to_ass_when_drawtext_is_unavailable(self) -> None:
+        label = _parse_drawtext_filter(
+            "drawtext=font=Sans:text='Project Bin':x=18:y=94:fontsize=18:fontcolor=0xf3f4f6"
         )
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "labels.ass"
+            _write_ass_labels(path, [label], 1.35)
+            content = path.read_text(encoding="utf-8")
+
+        self.assertIn("Project Bin", content)
+        self.assertIn(r"\pos(18,94)", content)
+        self.assertIn("PlayResX: 1920", content)
 
     def test_edit_process_replays_baseline_then_every_accepted_state(self) -> None:
         empty = {
@@ -244,7 +405,222 @@ class RuntimeTests(unittest.TestCase):
         self.assertIn(["/usr/bin/ffprobe", "-version"], commands)
 
 
+class AtomicReplaceTests(unittest.TestCase):
+    def test_repeated_quarantine_uses_a_unique_destination(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            trajectory = root / "trajectory.jsonl"
+            trajectory.write_text("evidence\n", encoding="utf-8")
+            quarantine = root / "quarantine"
+            suffix = sha256_file(trajectory)[:12]
+            (quarantine / "session").mkdir(parents=True)
+            (quarantine / f"session-{suffix}").mkdir()
+
+            destination = quarantine_session(
+                root,
+                quarantine,
+                "session",
+                GateError("test", "failure"),
+                trajectory,
+            )
+
+            self.assertEqual(destination.name, f"session-{suffix}-2")
+            self.assertTrue((destination / "rejection.json").is_file())
+
+    @mock.patch("edit_path.io.time.sleep")
+    @mock.patch("edit_path.io.os.replace")
+    def test_transient_access_denied_is_retried(self, replace: mock.Mock, sleep: mock.Mock) -> None:
+        replace.side_effect = [PermissionError(13, "Access is denied"), None]
+
+        replace_with_retry(Path("temporary"), Path("published"))
+
+        self.assertEqual(replace.call_count, 2)
+        sleep.assert_called_once_with(0.05)
+
+    @mock.patch("edit_path.io.time.sleep")
+    @mock.patch("edit_path.io.os.replace", side_effect=FileNotFoundError("missing"))
+    def test_unrelated_replace_error_is_not_retried(self, replace: mock.Mock, sleep: mock.Mock) -> None:
+        with self.assertRaises(FileNotFoundError):
+            replace_with_retry(Path("missing"), Path("published"))
+
+        replace.assert_called_once()
+        sleep.assert_not_called()
+
+
 class PublicationTests(unittest.TestCase):
+    def test_unmanifested_reconstruction_asset_falls_back_to_editor_project(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "session"
+            work = Path(temporary) / "work"
+            output = Path(temporary) / "dataset" / "accepted"
+            (root / "assets").mkdir(parents=True)
+            (root / "internal").mkdir()
+            work.mkdir()
+            asset = root / "assets" / "source.mp4"
+            asset.write_bytes(b"asset")
+            unmanifested = root / "other-source.mp4"
+            unmanifested.write_bytes(b"other")
+            manifest = {
+                "schema": "video-path/assets@2",
+                "assets": [
+                    {
+                        "asset_id": "asset_001",
+                        "original_filename": "source.mp4",
+                        "original_path": str(asset),
+                        "file": "assets/source.mp4",
+                        "sha256": sha256_file(asset),
+                        "bytes": asset.stat().st_size,
+                        "license_status": "pending",
+                    }
+                ],
+            }
+            write_json(root / "asset-manifest.json", manifest)
+            project = work / "reconstructed.kdenlive"
+            project.write_text(f'<mlt><producer><property name="resource">{unmanifested}</property></producer></mlt>', encoding="utf-8")
+            (root / "internal" / "final.kdenlive").write_text(
+                f'<mlt><producer><property name="resource">{asset}</property></producer></mlt>',
+                encoding="utf-8",
+            )
+            final = work / "final.mp4"
+            final.write_bytes(b"video")
+            report = work / "report.json"
+            write_json(report, {"quality_status": "passed", "quality_warnings": []})
+            raw = root / "trajectory.jsonl"
+            events = [event(1, "session.start"), event(2, "session.end", state_sidecars_complete=True)]
+            write_jsonl(raw, events)
+
+            bundle = publish_bundle(
+                root,
+                output,
+                "session-test",
+                {
+                    "final_video": final,
+                    "project": project,
+                    "report": report,
+                    "raw_trajectory": raw,
+                    "manifest_path": root / "asset-manifest.json",
+                },
+                events,
+                [],
+                manifest,
+            )
+
+            portable = (bundle / "reconstructed.kdenlive").read_text(encoding="utf-8")
+            published_report = json.loads((bundle / "render-report.json").read_text(encoding="utf-8"))
+            self.assertIn("assets/source.mp4", portable)
+            self.assertNotIn("other-source.mp4", portable)
+            self.assertEqual(published_report["quality_status"], "degraded")
+            self.assertEqual(published_report["quality_warnings"][0]["fallback"], "used_editor_saved_project")
+
+    def test_missing_checkpoint_proxy_is_degraded_instead_of_rejected(self) -> None:
+        checkpoint = event(
+            1,
+            "state.checkpoint",
+            project_state={"sha256": "a" * 64},
+            snapshot={"duration_frames": 25, "clips": [{"native_id": 1}], "compositions": [], "mixes": []},
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            results = validate_checkpoints(
+                root,
+                [checkpoint],
+                root / "work",
+                minimum_ssim=0.995,
+                melt_binary=None,
+                require_references=True,
+            )
+
+        self.assertEqual(results[0]["status"], "degraded")
+        self.assertFalse(results[0]["accepted"])
+
+    def test_final_ssim_miss_packages_with_state_replay_and_warning(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            session = root / "session"
+            output_root = root / "pipeline-output"
+            session.mkdir()
+            output_root.mkdir()
+            trajectory = session / "trajectory.jsonl"
+            trajectory.write_text("", encoding="utf-8")
+            reference = session / "editor-final.mp4"
+            reference.write_bytes(b"editor-final")
+            manifest_path = session / "asset-manifest.json"
+            write_json(manifest_path, {"schema": "video-path/assets@2", "assets": []})
+            captured_report: dict[str, object] = {}
+
+            def fake_render_session(_session: Path, destination: Path, **_kwargs: object) -> Path:
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(b"recreated")
+                destination.with_suffix(".kdenlive").write_text("<mlt/>", encoding="utf-8")
+                return destination
+
+            def fake_replay(
+                _session: Path,
+                _events: list[dict],
+                _accepted: list[dict],
+                _baseline_hash: str,
+                destination: Path,
+                _work_dir: Path,
+                **_kwargs: object,
+            ) -> tuple[Path, dict]:
+                destination.write_bytes(b"state-replay")
+                return destination, {"accepted": True, "training_ui_quality": "passed"}
+
+            def fake_publish(
+                _session: Path,
+                destination_root: Path,
+                session_id: str,
+                artifacts: dict,
+                *_args: object,
+            ) -> Path:
+                captured_report.update(json.loads(Path(artifacts["report"]).read_text(encoding="utf-8")))
+                destination = destination_root / session_id
+                destination.mkdir(parents=True)
+                return destination
+
+            preflight = {
+                "trajectory": trajectory,
+                "events": [],
+                "envelope": {"session_id": "session-test"},
+                "require_exact": False,
+                "state_reports": [],
+                "project_states": 0,
+                "stable_entities": 0,
+                "branch": SimpleNamespace(accepted=[], baseline_hash="a" * 64, final_hash="b" * 64),
+                "actions": [],
+                "activity": {},
+                "manifest_path": manifest_path,
+                "manifest": {"schema": "video-path/assets@2", "assets": []},
+                "verified_assets": [],
+            }
+            mismatch = {
+                "accepted": False,
+                "ssim": 0.75,
+                "minimum_ssim": 0.99,
+                "duration_delta_seconds": 0.0,
+            }
+            with (
+                mock.patch("edit_path.pipeline.preflight_session", return_value=preflight),
+                mock.patch("edit_path.pipeline.runtime_fingerprint", return_value={}),
+                mock.patch("edit_path.pipeline.validate_checkpoints", return_value=[]),
+                mock.patch("edit_path.pipeline._reference_video", return_value=reference),
+                mock.patch("edit_path.pipeline.reference_matched_render", return_value=(".mp4", None, True)),
+                mock.patch("edit_path.pipeline.render_session", side_effect=fake_render_session),
+                mock.patch("edit_path.pipeline.validate_render", return_value=mismatch.copy()),
+                mock.patch("edit_path.pipeline.render_edit_process", side_effect=fake_replay),
+                mock.patch("edit_path.pipeline.publish_bundle", side_effect=fake_publish),
+            ):
+                result = process_session(session, output_root)
+
+            self.assertEqual(result["status"], "accepted")
+            self.assertEqual(captured_report["quality_status"], "degraded")
+            self.assertEqual(captured_report["final"]["status"], "degraded")
+            self.assertEqual(captured_report["quality_warnings"][0]["gate"], "final_render")
+            self.assertEqual(
+                captured_report["quality_warnings"][0]["fallback"],
+                "preserved_editor_final_and_generated_state_replay",
+            )
+
     def test_no_edit_session_is_quarantined_with_a_specific_gate(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / "session"
@@ -281,7 +657,22 @@ class PublicationTests(unittest.TestCase):
             raw = root / "trajectory.jsonl"
             events = [event(1, "session.start"), event(2, "session.end", state_sidecars_complete=True)]
             write_jsonl(raw, events)
-            bundle = publish_bundle(root, output, "session-test", {"final_video": final, "reconstructed_video": reconstructed, "project": project, "report": report, "raw_trajectory": raw, "manifest_path": root / "asset-manifest.json"}, events, [], manifest)
+            real_replace = os.replace
+            blocked_once = False
+
+            def transient_directory_lock(source: Path | str, destination: Path | str) -> None:
+                nonlocal blocked_once
+                if not blocked_once and Path(source).is_dir() and Path(destination).name == "session-test":
+                    blocked_once = True
+                    raise PermissionError(13, "Access is denied")
+                real_replace(source, destination)
+
+            with mock.patch("edit_path.io.os.replace", side_effect=transient_directory_lock), mock.patch(
+                "edit_path.io.time.sleep"
+            ) as sleep:
+                bundle = publish_bundle(root, output, "session-test", {"final_video": final, "reconstructed_video": reconstructed, "project": project, "report": report, "raw_trajectory": raw, "manifest_path": root / "asset-manifest.json"}, events, [], manifest)
+            self.assertTrue(blocked_once)
+            sleep.assert_called_once_with(0.05)
             self.assertEqual(stat.S_IMODE(bundle.stat().st_mode), 0o755)
             self.assertTrue((bundle / "assets" / "source.mp4").is_file())
             self.assertEqual((bundle / "reconstructed-output.mp4").read_bytes(), b"reconstructed")
@@ -417,20 +808,19 @@ class MediaIntegrationTests(unittest.TestCase):
                     "project": {"frame_rate": {"numerator": 25, "denominator": 1}, "width": 320, "height": 180},
                 },
             )
-            self.assertTrue((completed / "final.mp4").is_file())
-            self.assertTrue((completed / "reconstructed-output.mp4").is_file())
-            self.assertEqual(stat.S_IMODE(completed.stat().st_mode), 0o755)
-            self.assertTrue((completed / "reference" / "editor-final.mp4").is_file())
-            self.assertTrue((completed / "evidence" / "raw-events-001.jsonl").is_file())
-            published_manifest = json.loads((completed / "asset-manifest.json").read_text(encoding="utf-8"))
-            self.assertTrue(published_manifest["assets"])
-            self.assertNotIn("source", published_manifest["assets"][0])
-            self.assertNotIn("original_path", published_manifest["assets"][0])
+            self.assertTrue((completed / "edit-path" / "replay.mp4").is_file())
+            self.assertTrue((completed / "verification" / "reconstructed.mp4").is_file())
+            if sys.platform != "win32":
+                self.assertEqual(stat.S_IMODE(completed.stat().st_mode), 0o755)
+            self.assertTrue((completed / "outputs" / "final.mp4").is_file())
+            self.assertTrue((completed / "provenance" / "segments" / "raw-events-001.jsonl").is_file())
+            bindings = json.loads((completed / "provenance" / "asset-bindings.json").read_text(encoding="utf-8"))
+            self.assertTrue(bindings["bindings"])
             sample = json.loads((completed / "sample.json").read_text(encoding="utf-8"))
             self.assertEqual(sample["task"]["prompt_status"], "pending_internal_entry")
             self.assertEqual(sample["quality"]["media_reconstruction"], "passed")
-            self.assertEqual(sample["output"]["edit_process_video"], "final.mp4")
-            self.assertEqual(sample["output"]["reconstructed_video"], "reconstructed-output.mp4")
+            self.assertEqual(sample["output"]["edit_process_video"], "edit-path/replay.mp4")
+            self.assertEqual(sample["output"]["reconstructed_video"], "verification/reconstructed.mp4")
             self.assertEqual(json.loads((root / "session.json").read_text(encoding="utf-8"))["status"], "packaged")
             self.assertEqual(json.loads((completed / "session.json").read_text(encoding="utf-8"))["status"], "packaged")
 

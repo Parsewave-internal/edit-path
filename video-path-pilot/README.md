@@ -110,7 +110,9 @@ Version 1 semantic events retained as outcome signals:
 
 Kdenlive's numeric object IDs remain as session-scoped diagnostic handles for
 backward compatibility. Schema 0.3 also records UUID entity IDs; normalization
-uses those stable IDs and the manifest's exact `bin_reference` mapping.
+uses those stable IDs and the manifest's exact `bin_reference` mapping. Embedded
+Kdenlive generators and sequences are identified separately so they remain
+resolved without being misrepresented as external files.
 
 ## Build and run by operating system
 
@@ -205,8 +207,10 @@ Successful samples are atomically published under `accepted/<session_id>/`.
 Failures are atomically published under `quarantine/<session_id>/` with a
 machine-readable `rejection.json` naming the failed gate and sequence.
 
-In the freeform GUI flow, save exactly one independent `.mp4`, `.mov`, `.mkv`,
-or `.webm` render directly in the session folder, then click **Create Dataset Sample**.
+In the freeform GUI flow, render one independent `.mp4`, `.mov`, `.mkv`, or
+`.webm`, close Kdenlive, then click **Create Dataset Sample**. EditPath presets
+the active session as the output destination and also discovers a different
+path saved by Kdenlive, so the editor never has to move the render manually.
 H.264 is optional. The finished trajectory and reconstruction are in
 `completed-sample/edit-path/events.jsonl`,
 `completed-sample/verification/reconstructed.kdenlive`,

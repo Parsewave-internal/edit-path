@@ -6,14 +6,43 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import time
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Sequence
 
 from .errors import EditPathError
 
 
 RAW_SCHEMA_VERSIONS = {"0.1.0", "0.2.0", "0.3.0"}
 TRAJECTORY_SCHEMA = "edit-path/trajectory@1"
+REPLACE_RETRY_DELAYS = (0.05, 0.10, 0.25, 0.50, 1.00, 1.00, 1.00, 1.00)
+
+
+def replace_with_retry(
+    source: Path | str,
+    destination: Path | str,
+    *,
+    retry_delays: Sequence[float] = REPLACE_RETRY_DELAYS,
+) -> None:
+    """Atomically replace a path, tolerating short-lived file scanner locks.
+
+    Windows antivirus and indexing services can briefly hold a newly written
+    file or a child of a newly populated directory. During that window both
+    ``os.replace`` and ``os.rename`` report access denied even though the
+    caller owns the paths. Retrying only permission/sharing failures preserves
+    the atomic publication contract without hiding permanent or unrelated
+    filesystem errors.
+    """
+
+    for attempt in range(len(retry_delays) + 1):
+        try:
+            os.replace(source, destination)
+            return
+        except OSError as error:
+            retryable = isinstance(error, PermissionError) or getattr(error, "winerror", None) in {5, 32, 33}
+            if not retryable or attempt == len(retry_delays):
+                raise
+            time.sleep(retry_delays[attempt])
 
 
 def sha256_file(path: Path) -> str:
@@ -28,7 +57,7 @@ def write_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.tmp-{os.getpid()}")
     temporary.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    os.replace(temporary, path)
+    replace_with_retry(temporary, path)
 
 
 def write_jsonl(path: Path, events: Iterable[dict[str, Any]]) -> None:
@@ -40,7 +69,7 @@ def write_jsonl(path: Path, events: Iterable[dict[str, Any]]) -> None:
             stream.write("\n")
         stream.flush()
         os.fsync(stream.fileno())
-    os.replace(temporary, path)
+    replace_with_retry(temporary, path)
 
 
 def read_jsonl(path: Path, *, max_line_bytes: int = 64 * 1024 * 1024) -> list[dict[str, Any]]:

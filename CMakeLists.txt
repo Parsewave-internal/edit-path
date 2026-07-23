@@ -239,6 +239,7 @@ if(BUILD_EDIT_PATH_RECORDER)
         video-path-pilot/job_pipeline.py
         video-path-pilot/media_reconstruct.py
         video-path-pilot/normalize_sample.py
+        video-path-pilot/reliability.py
         video-path-pilot/validate_sample.py
         video-path-pilot/validate_video_path.py
         video-path-pilot/sample.schema.json

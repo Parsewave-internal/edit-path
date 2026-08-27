@@ -38,7 +38,14 @@ $ffmpeg = if (Test-Path $bundleBin) { $bundleBin } else { (Get-Command ffmpeg.ex
 $passed=(Check 'ffmpeg' { if (-not (Test-Path $ffmpeg)) { throw "FFmpeg not found: $ffmpeg" }; $ffmpeg }) -and $passed
 $passed=(Check 'microphone_directshow' { $devices=& $ffmpeg -hide_banner -list_devices true -f dshow -i dummy 2>&1; if ($devices -notmatch 'DirectShow audio devices|DirectShow audio devices') { throw 'DirectShow audio device enumeration failed' }; 'enumerated' }) -and $passed
 if ($passed -and -not $Offline) { $passed=(Check 'model_download_and_self_test' { $probe=Join-Path $InstallRoot 'whisper-self-test.wav'; & $ffmpeg -hide_banner -loglevel error -f lavfi -i 'sine=frequency=440:duration=1' -y $probe; & $python -m whisper $probe --model $Model --output_format json --output_dir $InstallRoot --verbose False; if ($LASTEXITCODE) { throw 'Whisper self-test failed' }; Remove-Item $probe -Force -ErrorAction SilentlyContinue; 'passed' }) -and $passed }
-$report=[ordered]@{schema='edit-path/dependency-installer@1'; generated_at_utc=[DateTime]::UtcNow.ToString('o'); model=$Model; install_root=$InstallRoot; offline=[bool]$Offline; passed=$passed; checks=$checks}
+$summary = [ordered]@{}
+foreach ($name in $checks.Keys) {
+  $check = $checks[$name]
+  $summary[$name] = if ($check.passed) { "INSTALLED/PASS" } else { "MISSING/FAILED" }
+}
+Log "Dependency summary:"
+foreach ($name in $summary.Keys) { Log ("  {0}: {1}" -f $name, $summary[$name]) }
+$report=[ordered]@{schema='edit-path/dependency-installer@1'; generated_at_utc=[DateTime]::UtcNow.ToString('o'); model=$Model; install_root=$InstallRoot; offline=[bool]$Offline; passed=$passed; summary=$summary; checks=$checks}
 $report | ConvertTo-Json -Depth 8 | Set-Content -Encoding UTF8 $ReportPath
 Log "Installer finished: passed=$passed; report=$ReportPath"
 Write-Output ($report | ConvertTo-Json -Depth 8)

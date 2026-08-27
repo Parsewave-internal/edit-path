@@ -369,16 +369,76 @@ def prepare_assets(session: Path, project: Path, source_assets: list[dict] | Non
     return records, bindings, problems
 
 
+def observed_asset_values(raw_paths: list[Path]) -> list[dict]:
+    """Yield every recorded entity that names a Kdenlive bin reference.
+
+    References appear in two places. Diffs carry them on either side of a
+    change, and the baseline checkpoint carries them on clips that already
+    existed when recording started. Scanning only diffs misses every asset the
+    editor never touched after the baseline.
+    """
+    values: list[dict] = []
+    for path in raw_paths:
+        for event in read_jsonl(path):
+            event_type = event.get("event_type")
+            if event_type == "state.checkpoint":
+                candidates = event.get("snapshot", {}).get("clips", [])
+            elif event_type == "state.diff":
+                candidates = [
+                    change.get(side)
+                    for change in event.get("diff", {}).get("changes", [])
+                    for side in ("before", "after")
+                ]
+            else:
+                continue
+            values.extend(
+                value for value in candidates
+                if isinstance(value, dict) and value.get("asset_reference") is not None
+            )
+    return values
+
+
 def used_asset_references(raw_paths: list[Path]) -> set[str]:
-    return {
-        str(value["asset_reference"])
-        for path in raw_paths
-        for event in read_jsonl(path)
-        if event.get("event_type") == "state.diff"
-        for change in event.get("diff", {}).get("changes", [])
-        for side in ("before", "after")
-        if isinstance((value := change.get(side)), dict) and value.get("asset_reference") is not None
-    }
+    return {str(value["asset_reference"]) for value in observed_asset_values(raw_paths)}
+
+
+def asset_reference_index(raw_paths: list[Path], bindings: dict[str, str], assets: list[dict],
+                          embedded_assets: dict[str, dict]) -> dict[str, dict]:
+    """Resolve every observed bin reference to the input file it identifies.
+
+    The recorder writes two unrelated identifiers onto each clip: an
+    ``asset_reference`` holding the Kdenlive bin ID, and an ``asset_id`` holding
+    a per-session UUID from ``stableEntityId()``. That UUID is not a manifest
+    asset ID, so resolution must go through ``bindings``, which
+    ``prepare_assets()`` derives from each asset's SHA-256 rather than from
+    import order. The recorder UUID is still worth publishing, but as its own
+    field so the two identity spaces stay separate.
+    """
+    by_id = {asset["asset_id"]: asset for asset in assets}
+    index: dict[str, dict] = {}
+    for value in observed_asset_values(raw_paths):
+        reference = str(value["asset_reference"])
+        entry = index.setdefault(reference, {})
+        recorder_uuid = value.get("asset_id")
+        if recorder_uuid:
+            entry["recorder_asset_uuid"] = str(recorder_uuid)
+        asset_id = bindings.get(reference)
+        asset = by_id.get(str(asset_id)) if asset_id is not None else None
+        if asset is not None:
+            entry.update({
+                "resolution": "file",
+                "asset_id": asset["asset_id"],
+                "original_filename": asset["original_filename"],
+                "sha256": asset["sha256"],
+            })
+        elif reference in embedded_assets:
+            # Titles, colour clips and nested sequences are carried entirely by
+            # the project XML. They have no input filename to resolve to, so
+            # they are reported as resolved-but-embedded rather than unresolved.
+            # embedded_assets already carries its own "kind" (generator or
+            # sequence); keep it and mark the resolution class separately.
+            entry.update({"resolution": "embedded", **embedded_assets[reference]})
+    return {reference: index[reference] for reference in sorted(index)}
 
 
 def refresh_bundle_manifest(bundle: Path) -> None:
@@ -430,11 +490,15 @@ def organize_dataset_item(bundle: Path, output_suffix: str) -> None:
         manifest = json.loads(bindings_path.read_text(encoding="utf-8"))
         bindings = []
         for asset in manifest.get("assets", []):
-            # Keep the source identity in the published binding index.  The
-            # old layout retained only Kdenlive IDs, making asset references
+            # Keep the source identity in the published binding index. The old
+            # layout retained only Kdenlive IDs, making asset references
             # impossible to resolve once the original manifest was moved.
+            # "file" is deliberately excluded: sample.json already holds the
+            # organized inputs/assets path, and load_manifest() overlays these
+            # keys onto it, so republishing a pre-organization path here would
+            # clobber the correct one and fail the asset verification gate.
             binding = {"asset_id": asset.get("asset_id")}
-            for key in ("original_filename", "file", "sha256", "bytes",
+            for key in ("original_filename", "sha256", "bytes",
                         "bin_reference", "bin_references", "asset_references",
                         "license_status"):
                 if key in asset:
@@ -447,9 +511,15 @@ def organize_dataset_item(bundle: Path, output_suffix: str) -> None:
     if portable_project.is_file():
         portable_project.write_bytes(portable_project.read_bytes().replace(b"assets/", b"../inputs/assets/"))
 
-    # Portable state/proxy paths live inside the canonical event stream.
-    events_path = bundle / "edit-path" / "events.jsonl"
-    if events_path.is_file():
+    # Portable state/proxy paths live inside the canonical event stream and in
+    # the verbatim provenance logs, which carry the states of undone edits.
+    for relative in ("edit-path/events.jsonl", "provenance/assembled-events.jsonl",
+                     *(path.relative_to(bundle).as_posix()
+                       for path in sorted((bundle / "provenance" / "segments").glob("raw-events-*.jsonl"))
+                       if (bundle / "provenance" / "segments").is_dir())):
+        events_path = bundle / relative
+        if not events_path.is_file():
+            continue
         events = read_jsonl(events_path)
         for event in events:
             state = event.get("project_state")
@@ -459,6 +529,16 @@ def organize_dataset_item(bundle: Path, output_suffix: str) -> None:
             if isinstance(proxy, dict) and isinstance(proxy.get("path"), str):
                 proxy["path"] = proxy["path"].replace("checkpoint_refs/", "verification/checkpoints/", 1)
         write_jsonl(events_path, events)
+
+    final_state_path = bundle / "final-project-state.json"
+    if final_state_path.is_file():
+        value = json.loads(final_state_path.read_text(encoding="utf-8"))
+        if isinstance(value.get("path"), str):
+            value["path"] = value["path"].replace("states/", "provenance/states/", 1)
+        destination = bundle / "verification" / "final-project-state.json"
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        dump(destination, value)
+        final_state_path.unlink()
 
 
 def finalize_session(session: Path, project: Path, output: Path, job: dict, *, source_root: Path | None = None) -> Path:
@@ -472,29 +552,16 @@ def finalize_session(session: Path, project: Path, output: Path, job: dict, *, s
         raise ValueError(f"saved project profile {project_settings} does not match assigned profile {job['project']}")
     assets, bindings, problems = prepare_assets(session, project, job.get("assets"), source_root)
     embedded_assets = embedded_project_assets(project)
-    # Capture the logical references used by the edit alongside native bin IDs.
-    # This survives normalization and lets consumers resolve a clip to the
-    # exact input filename without relying on ordering or editor internals.
-    reference_to_asset: dict[str, str] = {}
-    for raw in raw_paths:
-        for event in read_jsonl(raw):
-            if event.get("event_type") != "state.diff":
-                continue
-            for change in event.get("diff", {}).get("changes", []):
-                for side in ("before", "after"):
-                    value = change.get(side)
-                    if not isinstance(value, dict) or value.get("asset_reference") is None:
-                        continue
-                    reference = str(value["asset_reference"])
-                    asset_id = value.get("asset_id") or bindings.get(reference)
-                    if asset_id:
-                        reference_to_asset[reference] = str(asset_id)
-    by_id = {asset["asset_id"]: asset for asset in assets}
-    for reference, asset_id in reference_to_asset.items():
-        if asset_id in by_id:
-            by_id[asset_id].setdefault("asset_references", []).append(reference)
+    # Publish the reference -> asset -> filename chain explicitly. Consumers
+    # otherwise have to guess import order, which is unrecoverable when an edit
+    # uses more references than there are input files.
+    reference_index = asset_reference_index(raw_paths, bindings, assets, embedded_assets)
+    references_by_asset: dict[str, list[str]] = {}
+    for reference, entry in reference_index.items():
+        if entry.get("asset_id"):
+            references_by_asset.setdefault(entry["asset_id"], []).append(reference)
     for asset in assets:
-        asset["asset_references"] = sorted(set(asset.get("asset_references", [])))
+        asset["asset_references"] = sorted(references_by_asset.get(asset["asset_id"], []))
     unresolved_used = sorted(ref for ref in used_asset_references(raw_paths) if ref not in bindings and ref not in embedded_assets)
     if unresolved_used: raise ValueError(f"project could not resolve used Kdenlive asset IDs: {', '.join(unresolved_used)}")
 
@@ -529,12 +596,7 @@ def finalize_session(session: Path, project: Path, output: Path, job: dict, *, s
     dump(session / "asset-manifest.json", {
         "schema": "video-path/assets@3",
         "assets": assets,
-        "asset_references": {
-            reference: {"asset_id": asset_id,
-                        "original_filename": by_id[asset_id]["original_filename"]}
-            for reference, asset_id in sorted(reference_to_asset.items())
-            if asset_id in by_id
-        },
+        "asset_references": reference_index,
     })
 
     pipeline_output = session / "pipeline-output"

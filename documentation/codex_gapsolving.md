@@ -3,218 +3,269 @@ SPDX-FileCopyrightText: 2026 Video Path Pilot contributors
 SPDX-License-Identifier: GPL-3.0-only
 -->
 
-# Gap 2 — sidecars and the asset identity map: status of the in-progress fix
+# Gap 2 — sidecars and the asset identity map
 
-This file documents the uncommitted change in `video-path-pilot/job_pipeline.py`
-that was written to close client gap 2, what that change actually does, how it
-flows through the pipeline, and which parts of the gap are still open. It is an
-assessment document, not a claim that the gap is closed.
+Client report, two parts:
 
-## The gap as reported
+1. **Sidecars didn't ship.** The TikTok delivery references 2,373
+   `states/*.kdenlive.zst` files and its `session.end` says
+   `state_sidecars_complete: false`. Without the sidecars there is no final
+   project state in the record, only the rendered MP4, so there is nothing to
+   verify a reconstruction against.
+2. **No asset identity map.** Neither delivery maps
+   `asset_reference`/`asset_id` to an input filename. In The Signal, none of the
+   39 input filenames appear in the record and there are 45 distinct asset
+   references, so they cannot be resolved even by guessing order.
 
-The client raised two distinct complaints under one heading.
+Both are packaging problems, not design problems: the recorder already emits the
+identity information and the gates already validate sidecars. The loss happened
+downstream, in what got written into the delivered bundle. Each fix below is
+tied to the specific line that caused the loss.
 
-1. **Sidecars didn't ship.** The TikTok delivery referenced 2,373
-   `states/*.kdenlive.zst` files and its `session.end` carried
-   `state_sidecars_complete: false`, so there was no final project state in the
-   record to verify a reconstruction against — only the rendered MP4.
-2. **No asset identity map.** Neither delivery contained a map from
-   `asset_reference` → `asset_id` → input filename. In The Signal, none of the
-   39 input filenames appeared in the record while 45 distinct asset references
-   did, so references could not be resolved even by guessing import order.
+## Diagnosis
 
-Both were characterised as packaging problems rather than design problems. That
-framing is right: the recorder already emits the identity information, and the
-reconstruction gates already validate sidecars. The loss happened downstream, in
-what got written into the delivered bundle.
+### Why the sidecars went missing
 
-## What the change does
+`publish_bundle()` writes three event logs into a bundle, and only one of them
+was ever made portable:
 
-The diff touches `video-path-pilot/job_pipeline.py` in three places.
+| Log | How it is written | Sidecars copied? |
+| --- | --- | --- |
+| `trajectory.jsonl` | `_clean_events()` then `_make_state_references_portable()` | yes |
+| `raw-trajectory.jsonl` | `shutil.copy2`, byte-for-byte | **no** |
+| `evidence/raw-events-*.jsonl` | `shutil.copy2`, byte-for-byte | **no** |
 
-### 1. The published binding index keeps source identity
+`_clean_events()` (`edit_path/pipeline.py:338`) keeps only accepted commits and
+checkpoints. Every undone, redone, or rejected edit is dropped. Those dropped
+events still carry `project_state` sidecar references, and they survive verbatim
+in `raw-trajectory.jsonl` — which keeps its original session-relative
+`states/...` paths pointing at files that were never copied into the bundle.
 
-`organize_dataset_item()` moves `asset-manifest.json` to
-`provenance/asset-bindings.json` and rewrites it. Previously the rewrite kept
-only `asset_id`, `bin_reference`/`bin_references` and `license_status`, so the
-delivered file was a pure Kdenlive-ID index with no way back to a filename. The
-rewrite now also carries `original_filename`, `file`, `sha256`, `bytes` and
-`asset_references`, and the schema tag moves to
-`video-path/native-asset-bindings@2` (`job_pipeline.py:432-444`).
+That is the 2,373 figure. A long session accumulates thousands of exact states;
+only the accepted subset was rehomed, and the rest stayed as dangling paths.
+Nothing in the pipeline checked this, so the bundle published cleanly.
 
-This is the part of the change that does real work. A consumer holding only
-`provenance/asset-bindings.json` can now resolve a Kdenlive bin ID to an input
-filename and content hash.
+The `state_sidecars_complete: false` observation is a separate signal, and the
+gate for it already works (`edit_path/pipeline.py:62`, verified below). A
+session that ends that way is rejected at ingestion today. So the reported
+bundle either predates that gate or bypassed `process_session()`. Worth
+confirming against the delivery's provenance before assuming more code is
+needed — I did not change that gate.
 
-### 2. A reference → asset map is collected during finalization
+### Why the asset map was unresolvable
 
-`finalize_session()` walks every `state.diff` event in every recording segment,
-picks up each `asset_reference` seen on either side of a change, resolves it to
-an asset ID, and records the result in `reference_to_asset`
-(`job_pipeline.py:475-497`). Resolution prefers an `asset_id` carried inline on
-the change and falls back to `bindings`, the sha256-derived map produced by
-`prepare_assets()`. Each manifest asset then gains a sorted
-`asset_references` list.
-
-The intent is that references resolve from observed event data rather than from
-import order, so an edit with more references than files, duplicate references,
-or reordered assets stays resolvable.
-
-### 3. The map is published on the manifest
-
-`asset-manifest.json` gains a top-level `asset_references` object mapping each
-reference to `{asset_id, original_filename}`, and the schema tag moves to
-`video-path/assets@3` (`job_pipeline.py:529-538`).
-
-### How it reaches the delivered bundle
-
-The plumbing is sound. `finalize_session()` writes
-`asset-manifest.json` into the session directory, `load_manifest()`
-(`edit_path/assets.py:98`) picks that file up as its first candidate,
-`_public_asset_manifest()` (`edit_path/pipeline.py:417`) deep-copies the whole
-manifest — stripping only the local `source` and `original_path` keys — and
-`publish_bundle()` writes it into the bundle. `organize_dataset_item()` then
-moves it to `provenance/asset-bindings.json` and forwards `asset_references`
-through the rewrite. Nothing along that path drops the new field.
-
-## Verification performed
-
-Tests run with Python 3.12 (`python3` on this machine is 3.8 and cannot parse
-the `X | None` annotations in `edit_path/errors.py`, which is the sole cause of
-the `TypeError: unsupported operand type(s) for |` import failure seen earlier —
-not a defect in the change).
-
-```
-python3.12 -m unittest tests.edit_path.test_reconstruction_pipeline tests.edit_path.test_segments
-  → 30 tests, OK (4 skipped: ffmpeg/MLT, zstandard, two pilot fixtures absent)
-
-cd video-path-pilot && python3.12 -m unittest discover -s tests
-  → 18 tests, 1 FAILED
-```
-
-The reconstruction suite is unaffected. The pilot suite has one failure and I
-found two further problems by direct probe.
-
-## What is still open
-
-### A. `test_completed_sample_has_role_oriented_layout` fails
-
-`video-path-pilot/tests/test_mvp.py:48` asserts the rewritten binding index
-equals exactly `[{"asset_id": "asset_001", "bin_references": ["4"]}]`. The
-richer binding now also carries `file`, `sha256` and `bytes`, so the assertion
-fails. This is the test encoding the old lossy shape; the assertion needs
-updating to the intended `@2` shape. It is not evidence the new shape is wrong,
-but the suite is red and no test yet covers the lossy packaging scenario the
-change is meant to fix.
-
-### B. The reference map is empty on real v0.3 recordings
-
-This is the substantive problem. The recorder emits *both* keys on every clip
+The recorder writes two unrelated identifiers onto every clip
 (`src/videopath/videopathrecorder.cpp:443-444`):
 
 ```cpp
-clip.insert(QStringLiteral("asset_reference"), assetReference);          // Kdenlive bin ID, e.g. "4"
+clip.insert(QStringLiteral("asset_reference"), assetReference);  // Kdenlive bin ID, e.g. "4"
 clip.insert(QStringLiteral("asset_id"), stableEntityId(QStringLiteral("asset"), assetReference));
 ```
 
-`stableEntityId()` returns a `QUuid` (`videopathrecorder.cpp:312-323`), not a
-manifest asset ID. The manifest IDs are `asset_001`-style, minted by
-`prepare_assets()` (`job_pipeline.py:345`). Because the resolution order is
-`value.get("asset_id") or bindings.get(reference)`, the inline recorder UUID
-always wins, and the resulting asset ID is never a key in `by_id`. Both
-publication sites are guarded by `if asset_id in by_id`, so both silently emit
-nothing.
+`stableEntityId()` returns a fresh `QUuid` (`videopathrecorder.cpp:312-323`).
+It is **not** a manifest asset ID — manifest IDs are `asset_001`-style, minted
+by `prepare_assets()`. The two identity spaces are unrelated, and the only
+reliable link between a bin reference and an input file is `bindings`, which
+`prepare_assets()` derives from each asset's SHA-256 rather than from import
+order.
 
-Reproduced against a realistic recorder event carrying both keys:
+An earlier attempt resolved with `value.get("asset_id") or bindings.get(reference)`.
+Because the recorder always populates `asset_id`, the UUID always won, never
+matched the manifest, and both publication sites were guarded by
+`if asset_id in by_id` — so both silently emitted nothing. The map was empty on
+every real recording and only populated for legacy events that omit `asset_id`,
+the opposite of the reported deliveries. Reproduced before the fix:
 
 ```
-reference_to_asset: {'4': '3f2c9b10-...-8ab0d1e6f7a9', '5': 'b81de4aa-...-11c9e0a5f3b2'}
+reference_to_asset: {'4': '3f2c9b10-...', '5': 'b81de4aa-...'}
 published asset_references map: {}
-per-asset asset_references: {'asset_001': [], 'asset_002': []}
 ```
 
-The map populates only for legacy recordings that omit `asset_id` and therefore
-fall through to `bindings`. That is exactly backwards from the deliveries the
-client is complaining about. The fix is to prefer `bindings.get(reference)` —
-the sha256-derived binding, which is the authoritative link to a manifest
-asset — and to treat the recorder UUID as a separate stable-identity field
-rather than as a manifest asset ID. `normalize_sample.py:181` already keeps the
-two spaces distinct via `observed_asset_ids()`; `finalize_session()` conflates
-them.
+Two further gaps in that approach: it scanned only `state.diff` events, missing
+every clip that existed at the baseline checkpoint and was never edited
+afterwards; and it published `"file"` into the binding index, which regressed
+re-ingestion (see below).
 
-### C. The new `file` key breaks re-ingestion of a delivered item
+## Changes
 
-`load_manifest()` has a recovery path for bundles that no longer have a
-top-level `asset-manifest.json`: it reads `sample.json`, then overlays every
-non-`asset_id` key from `provenance/asset-bindings.json` on top
-(`edit_path/assets.py:121-127`). `sample.json` stores the organized path
-`inputs/assets/...`, because `finalize_session()` rewrites it
-(`job_pipeline.py:560-563`). The binding index stores the pre-organization
-`assets/...` path. The overlay therefore clobbers the correct path with the
-stale one:
+Five changes, each addressing one of the above.
+
+### 1. Rehome sidecars in verbatim logs — `edit_path/pipeline.py`
+
+`_rehome_verbatim_state_references()` walks `raw-trajectory.jsonl` and each
+evidence segment, copies every sidecar that still exists into `states/` under
+its content address, and repoints the reference at the copy. This reuses the
+content-addressed naming `_make_state_references_portable()` already uses, so
+states shared between the cleaned and verbatim logs deduplicate to one file.
+
+A sidecar the recorder never durably wrote is marked `"available": false`
+instead of being left as a dangling path. This distinction matters: a consumer
+can tell "the recorder lost this state" from "the packaging lost this state".
+Silently dropping the reference would erase evidence that an edit happened.
+
+### 2. Refuse to publish a bundle with dangling references — `edit_path/pipeline.py`
+
+`_verify_no_dangling_state_references()` runs over all three delivered logs
+after rehoming and raises `GateError("state_sidecars", ...)` if any event names
+a sidecar the bundle does not contain. References explicitly marked
+`available: false` are tolerated.
+
+This is the gate the reported deliveries needed. A bundle whose record points at
+states it does not carry cannot verify a reconstruction, so it must not be
+publishable. Without this the class of bug recurs the next time an event log is
+added to the bundle.
+
+### 3. Name the final project state — `edit_path/pipeline.py`
+
+`publish_bundle()` now writes `final-project-state.json` identifying the last
+exact state in the record by path, sha256, bytes and encoding. This addresses
+"there's nothing to verify a reconstruction against" directly: the state was
+usually present in the bundle, but a consumer had to replay the whole event
+chain to work out which of thousands of sidecars was the final one.
+`organize_dataset_item()` moves it to `verification/`, next to the artifacts it
+is used to check.
+
+### 4. Resolve references through hash bindings — `video-path-pilot/job_pipeline.py`
+
+`asset_reference_index()` replaces the broken inline block. It resolves through
+`bindings` (SHA-256 derived, order-independent) and publishes, per reference:
+
+- `resolution` — `file` or `embedded`
+- `asset_id`, `original_filename`, `sha256` for file-backed references
+- `recorder_asset_uuid` — the recorder's UUID, preserved in its own field so the
+  two identity spaces stay separate rather than being conflated
+- embedded metadata for titles, colour clips and nested sequences, which have no
+  input filename because the project XML carries them entirely
+
+`observed_asset_values()` scans **both** `state.checkpoint` snapshots and
+`state.diff` changes, so clips present at the baseline and never edited are
+included. `used_asset_references()` now shares this scan, so the packaging gate
+and the published map cannot disagree about which references an edit used.
+
+The result is published in two places: `asset-manifest.json` (as
+`asset_references`, schema `video-path/assets@3`) and, after organization,
+`provenance/asset-bindings.json` (schema `video-path/native-asset-bindings@2`).
+Each asset also gains an `asset_references` list for the reverse direction.
+
+### 5. Keep the binding index from clobbering asset paths — `video-path-pilot/job_pipeline.py`
+
+The binding index deliberately publishes `original_filename`, `sha256` and
+`bytes` but **not** `file`. `load_manifest()` overlays binding keys onto
+`sample.json`, and the two disagree on prefix (`assets/` vs `inputs/assets/`).
+Republishing the pre-organization path made the stale one win and broke asset
+verification on re-ingest:
 
 ```
 merged file field -> assets/abc-clip.mp4
 verify_assets FAILED: GateError asset 0 is missing: assets/abc-clip.mp4
 ```
 
-So re-verifying a delivered dataset item now fails a gate that passed before the
-change. Either omit `file` from the binding index (`original_filename`, `sha256`
-and `bytes` carry the identity without the path ambiguity), rewrite it to the
-organized prefix alongside the other path rewrites, or exclude `file` from the
-overlay in `load_manifest()`.
+`sample.json` owns the organized path; the binding index adds identity only.
 
-### D. Complaint 1 — sidecars — is untouched
+## Verification
 
-The diff contains no sidecar changes. The existing machinery is already
-strict, and worth stating plainly so it isn't re-litigated:
+Run with Python 3.12 in a venv with `zstandard` (needed to exercise the sidecar
+path rather than skip it). Note `python3` on this machine is 3.8 and cannot
+parse the `X | None` annotations in `edit_path/errors.py`; the resulting
+`TypeError: unsupported operand type(s) for |` is environmental, not a defect.
 
-- `validate_event_envelope()` rejects any complete v0.3 session whose
-  `session.end` lacks `state_sidecars_complete: true`
-  (`edit_path/pipeline.py:62-63`). A delivery carrying `false` could not pass
-  this gate, which suggests the TikTok bundle predates the gate or bypassed
-  `process_session()`. Worth confirming against that bundle's provenance before
-  concluding anything about current behaviour.
-- `validate_project_state_sidecars()` requires an exact `project_state` on every
-  v0.3 state event, loads and hash-checks each one, and validates the
-  `project_before_hash` → `project_after_hash` chain
-  (`edit_path/pipeline.py:111-157`).
-- `_make_state_references_portable()` copies each sidecar to
-  `states/<sha256><suffix>` inside the bundle and rewrites event paths to that
-  content-addressed location, raising `GateError` on a missing or symlinked
-  sidecar (`edit_path/pipeline.py:371-392`).
-- `organize_dataset_item()` rewrites those paths to `provenance/states/`
-  (`job_pipeline.py:450-461`), and the final project ships as
-  `provenance/editor-project.kdenlive`.
+```bash
+python3.12 -m venv /tmp/epvenv && /tmp/epvenv/bin/pip install zstandard
 
-The `test_zstd_sidecar_hash_and_size_are_checked` test that would exercise the
-hash/size path is **skipped** here because `zstandard` is not installed, so the
-sidecar validation path is unverified on this machine. Installing `zstandard`
-before drawing conclusions about the sidecar half is worthwhile.
+/tmp/epvenv/bin/python -m unittest \
+    tests.edit_path.test_reconstruction_pipeline tests.edit_path.test_segments
+# → Ran 32 tests, OK (skipped=3: ffmpeg/MLT and two absent pilot fixtures)
 
-### E. Worth checking before more work on the identity map
+cd video-path-pilot && /tmp/epvenv/bin/python -m unittest discover -s tests
+# → Ran 21 tests, OK
+```
 
-The claim that filenames are absent from the record deserves a second look,
-because `sample.json` — which `documentation.md` calls authoritative — already
-carries the full chain. `normalize_sample.py:109-111` rewrites each change's
-`asset_reference` into an `asset_id` using `native_asset_bindings`, and
-`inputs.assets` carries `asset_id` → `original_filename`
-(`normalize_sample.py:220-221`). So `asset_reference` → `asset_id` →
-`original_filename` was resolvable from `sample.json` alone before this change.
-That suggests the affected deliveries either predate this normalization or were
-produced by a different path (`sample_collector.py` writes
-`video-path/assets@2` directly at line 235). Establishing which would tell us
-whether the remaining work is a packaging fix or a re-delivery.
+`ffmpeg`/`melt` are not installed here, so tests needing a real render stay
+skipped. The changed code is all packaging logic and is fully covered without
+them.
 
-## Summary
+### Tests added
 
-| Item | State |
-| --- | --- |
-| Binding index keeps `original_filename`/`sha256`/`bytes` | Working |
-| `asset_references` plumbed through publish and organize | Working |
-| `asset_references` populated for real v0.3 recordings | **Broken** — always empty (B) |
-| Re-ingestion of a delivered item | **Regressed** — `verify_assets` gate fails (C) |
-| Pilot test suite | **Red** — one stale assertion (A) |
-| Test covering the lossy packaging scenario | Not written |
-| Sidecar half of the gap | Unchanged; existing gates look sufficient, unverified locally (D) |
-| `documentation/codex_gapsolving.md` | Was reported as written but was absent from disk; this file replaces it |
+In `tests/edit_path/test_reconstruction_pipeline.py`:
+
+- `test_verbatim_logs_get_their_undone_state_sidecars_copied` — an undone edit's
+  sidecar is copied and repointed; a never-written one is marked
+  `available: false`; the gate tolerates the marker and rejects a real dangle.
+- `test_published_bundle_carries_every_state_it_references` — end-to-end
+  packaging of the reported failure. A session with one accepted and one undone
+  edit goes through `publish_bundle()` and `organize_dataset_item()`; asserts
+  both states ship, the verbatim log points at the copy, the final state is
+  named, and every reference still resolves after the role-oriented layout move.
+
+In `video-path-pilot/tests/test_mvp.py`:
+
+- `test_asset_references_resolve_through_hash_bindings_not_recorder_uuids` —
+  the exact lossy scenario: clips carrying both keys, where the recorder UUID
+  previously shadowed the binding and produced an empty map.
+- `test_asset_references_survive_more_references_than_files` — the reported
+  45-references-over-39-files shape: two bin IDs sharing one input file, plus an
+  embedded title with no input file.
+- `test_asset_references_include_untouched_baseline_clips` — a clip present at
+  the baseline and never edited still resolves.
+- `test_completed_sample_has_role_oriented_layout` — updated; it asserted the
+  old lossy binding shape, and now pins the `@2` shape including the absence of
+  `file`.
+
+### The new gate provably catches the reported bug
+
+Disabling the rehoming call and rerunning the end-to-end test:
+
+```
+GateError: published bundle references a missing state sidecar:
+  states/c5fe87b4...cd3dc.kdenlive.zst (raw-trajectory.jsonl)
+FAILED (errors=1)
+```
+
+Restored, it passes. The test fails for the right reason rather than passing
+vacuously.
+
+### Behaviour confirmed by direct probe
+
+Reference resolution on a realistic recorder event, which produced `{}` before:
+
+```json
+{
+  "4": {
+    "recorder_asset_uuid": "3f2c9b10-7a41-4d2e-9c55-8ab0d1e6f7a9",
+    "resolution": "file",
+    "asset_id": "asset_001",
+    "original_filename": "clip_a.mp4",
+    "sha256": "aaaa…"
+  },
+  "5": { "…": "clip_b.mp4" }
+}
+```
+
+Re-ingestion of an organized bundle, which failed before change 5:
+
+```
+merged file field -> inputs/assets/abc-clip.mp4
+verify_assets: OK
+```
+
+The pre-existing `state_sidecars_complete` gate, unchanged:
+
+```
+state_sidecars_complete=False -> REJECTED [state_sidecars] v0.3 session did not
+                                 durably finish its state and checkpoint sidecars
+state_sidecars_complete=True  -> ACCEPTED
+```
+
+## What this does not cover
+
+- **Existing deliveries are not repaired.** These changes fix the packaging path
+  going forward. The TikTok and Signal bundles must be repackaged from their
+  source sessions; if those sessions are gone, the undone-edit states are
+  unrecoverable.
+- **`state_sidecars_complete: false` is not newly handled.** That gate already
+  rejects such sessions. The reported bundle predates it or bypassed
+  `process_session()`, which is worth confirming from its provenance.
+- **No recorder changes.** The identity data the recorder emits is sufficient;
+  only the packaging discarded it. Making `stableEntityId()` agree with manifest
+  IDs would be a design change, not a packaging fix, and the SHA-256 bindings
+  are the more reliable link regardless.

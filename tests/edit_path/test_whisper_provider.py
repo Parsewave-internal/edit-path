@@ -1,0 +1,34 @@
+import json
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+from edit_path.whisper_provider import transcribe_with_whisper
+
+
+class WhisperProviderTests(unittest.TestCase):
+    def test_literal_transcript_is_not_rewritten(self):
+        with tempfile.TemporaryDirectory() as td:
+            audio = Path(td) / "reasoning.flac"; audio.touch()
+            def fake_run(command, **_):
+                out = Path(command[command.index("--output_dir") + 1]) / "reasoning.json"
+                out.write_text(json.dumps({"text": "I'm cutting this clip because it feels too slow."}), encoding="utf-8")
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            with mock.patch("edit_path.whisper_provider.subprocess.run", side_effect=fake_run):
+                result = transcribe_with_whisper(audio, whisper_binary="whisper")
+            self.assertEqual(result["text"], "I'm cutting this clip because it feels too slow.")
+
+    def test_provider_failure_is_actionable(self):
+        with tempfile.TemporaryDirectory() as td:
+            audio = Path(td) / "reasoning.flac"; audio.touch()
+            with mock.patch("edit_path.whisper_provider.subprocess.run", return_value=mock.Mock(returncode=2, stdout="", stderr="bad model")):
+                with self.assertRaisesRegex(RuntimeError, "Whisper failed"):
+                    transcribe_with_whisper(audio, whisper_binary="whisper")
+
+    def test_missing_json_is_rejected(self):
+        with tempfile.TemporaryDirectory() as td:
+            audio = Path(td) / "reasoning.flac"; audio.touch()
+            with mock.patch("edit_path.whisper_provider.subprocess.run", return_value=mock.Mock(returncode=0, stdout="", stderr="")):
+                with self.assertRaisesRegex(RuntimeError, "without producing"):
+                    transcribe_with_whisper(audio, whisper_binary="whisper")

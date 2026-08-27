@@ -346,7 +346,11 @@ private:
         if (!QFileInfo::exists(ffmpeg)) ffmpeg = QStandardPaths::findExecutable(QStringLiteral("ffmpeg"));
         if (ffmpeg.isEmpty()) { setStatus(QStringLiteral("FFmpeg was not found; reasoning audio was not started."), true); return; }
         m_audioOutput = output;
-        m_audioCapture.start(ffmpeg, {QStringLiteral("-hide_banner"), QStringLiteral("-loglevel"), QStringLiteral("error"), QStringLiteral("-f"), QStringLiteral("dshow"), QStringLiteral("-i"), QStringLiteral("audio=default"), QStringLiteral("-c:a"), QStringLiteral("flac"), QStringLiteral("-y"), output});
+        QString microphone = QStringLiteral("default");
+        const QString configured = QDir(QStandardPaths::writableLocation(QStandardPaths::LocalAppDataLocation)).filePath(QStringLiteral("EditPath/microphone-device.txt"));
+        QFile microphoneFile(configured);
+        if (microphoneFile.open(QIODevice::ReadOnly | QIODevice::Text)) microphone = QString::fromUtf8(microphoneFile.readAll()).trimmed();
+        m_audioCapture.start(ffmpeg, {QStringLiteral("-hide_banner"), QStringLiteral("-loglevel"), QStringLiteral("error"), QStringLiteral("-f"), QStringLiteral("dshow"), QStringLiteral("-i"), QStringLiteral("audio=") + microphone, QStringLiteral("-c:a"), QStringLiteral("flac"), QStringLiteral("-y"), output});
         if (m_audioCapture.waitForStarted(3000)) { m_recordReasoning->setEnabled(false); m_stopReasoning->setEnabled(true); setStatus(QStringLiteral("Reasoning audio recording is active.")); }
         else setStatus(QStringLiteral("Could not start microphone capture. Show technical details."), true);
     }

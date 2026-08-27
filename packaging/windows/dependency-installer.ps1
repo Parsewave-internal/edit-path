@@ -36,7 +36,9 @@ $passed=(Check 'whisper_import' { & $python -c 'import whisper; print(whisper.__
 $bundleBin = Join-Path $PSScriptRoot 'bin\ffmpeg.exe'
 $ffmpeg = if (Test-Path $bundleBin) { $bundleBin } else { (Get-Command ffmpeg.exe -ErrorAction Stop).Source }
 $passed=(Check 'ffmpeg' { if (-not (Test-Path $ffmpeg)) { throw "FFmpeg not found: $ffmpeg" }; $ffmpeg }) -and $passed
-$passed=(Check 'microphone_directshow' { $devices=& $ffmpeg -hide_banner -list_devices true -f dshow -i dummy 2>&1; if ($devices -notmatch 'DirectShow audio devices|DirectShow audio devices') { throw 'DirectShow audio device enumeration failed' }; 'enumerated' }) -and $passed
+$audioDevice = $null
+$passed=(Check 'microphone_directshow' { $devices=& $ffmpeg -hide_banner -list_devices true -f dshow -i dummy 2>&1; $audioLine=$devices | Where-Object { $_ -match '"(.+)" \(audio\)' } | Select-Object -First 1; if (-not $audioLine) { throw 'No DirectShow audio device was found' }; $audioDevice=([regex]::Match([string]$audioLine, '"(.+)" \(audio\)')).Groups[1].Value; if (-not $audioDevice) { throw 'Could not parse DirectShow microphone name' }; $audioDevice }) -and $passed
+if ($passed -and $audioDevice) { Set-Content (Join-Path $InstallRoot 'microphone-device.txt') $audioDevice -Encoding UTF8 }
 if ($passed -and -not $Offline) { $passed=(Check 'model_download_and_self_test' { $probe=Join-Path $InstallRoot 'whisper-self-test.wav'; & $ffmpeg -hide_banner -loglevel error -f lavfi -i 'sine=frequency=440:duration=1' -y $probe; & $python -m whisper $probe --model $Model --output_format json --output_dir $InstallRoot --verbose False; if ($LASTEXITCODE) { throw 'Whisper self-test failed' }; Remove-Item $probe -Force -ErrorAction SilentlyContinue; 'passed' }) -and $passed }
 $summary = [ordered]@{}
 foreach ($name in $checks.Keys) {

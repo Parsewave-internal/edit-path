@@ -360,7 +360,15 @@ try {
     if ($LASTEXITCODE -ne 0 -or -not [IO.Path]::GetFullPath($importedEditPath).StartsWith($portablePrefix, [StringComparison]::OrdinalIgnoreCase)) {
         Stop-Build "embedded Python imported edit_path outside the portable bundle: $importedEditPath"
     }
-    & $embeddedPython -m unittest -v tests.edit_path.test_reconstruction_pipeline.MediaIntegrationTests.test_real_checkpoint_and_final_ssim_pipeline
+    # Verbose unittest writes progress/status to stderr on Windows. Do not let
+    # PowerShell promote that normal diagnostic stream into a terminating error.
+    $testPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        & $embeddedPython -m unittest -v tests.edit_path.test_reconstruction_pipeline.MediaIntegrationTests.test_real_checkpoint_and_final_ssim_pipeline
+    } finally {
+        $ErrorActionPreference = $testPreference
+    }
     $mediaTestExitCode = $LASTEXITCODE
 } finally {
     Pop-Location

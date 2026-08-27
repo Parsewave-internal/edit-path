@@ -105,6 +105,40 @@ class BranchResolutionTests(unittest.TestCase):
         self.assertEqual(resolve_accepted_branch([checkpoint, first, merged, undo], require_targets=True).accepted, [])
         self.assertEqual(resolve_accepted_branch([checkpoint, first, merged, undo, redo], require_targets=True).accepted, [first, merged])
 
+    def test_undo_allows_equivalent_state_to_be_reserialized(self) -> None:
+        p0, p1, p0_reserialized = ("a" * 64, "b" * 64, "c" * 64)
+        checkpoint = event(
+            1,
+            "state.checkpoint",
+            state_hash="d" * 64,
+            snapshot={},
+            project_state={"sha256": p0},
+        )
+        commit = event(
+            2,
+            "state.diff",
+            boundary="commit",
+            transaction_id="tx",
+            undo_entry_id="entry",
+            project_before_hash=p0,
+            project_after_hash=p1,
+        )
+        undo = event(
+            3,
+            "state.diff",
+            boundary="undo",
+            transaction_id="undo",
+            undo_entry_id="entry",
+            target_transaction_id="tx",
+            project_before_hash=p1,
+            project_after_hash=p0_reserialized,
+        )
+
+        branch = resolve_accepted_branch([checkpoint, commit, undo], require_targets=True)
+
+        self.assertEqual(branch.accepted, [])
+        self.assertEqual(branch.final_hash, p0_reserialized)
+
     def test_wrong_undo_target_is_rejected(self) -> None:
         p0, p1, p0_again = (character * 64 for character in "aba")
         checkpoint = event(1, "state.checkpoint", state_hash="d" * 64, snapshot={}, project_state={"sha256": p0})

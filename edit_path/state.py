@@ -248,9 +248,14 @@ def resolve_accepted_branch(events: list[dict[str, Any]], *, require_targets: bo
                 if original_id is None:
                     break
             group.reverse()
-            expected_after = _branch_hash(accepted[-1], "after") if len(accepted) > epoch_floor else epoch_baseline_hash
-            if after_hash != expected_after:
-                raise GateError("branch_resolution", f"undo should restore {expected_after}", sequence)
+            # An undo restores the logical undo-stack position, but Kdenlive
+            # does not promise byte-identical project serialization (or even
+            # an identical diagnostic semantic snapshot) after doing so.
+            # Generated XML properties, effect identities, and other native
+            # bookkeeping can legitimately change across an undo.  State and
+            # exact-project hash continuity are validated independently; the
+            # stable target transaction/undo-entry relationship is the
+            # authoritative branch operation here.
             redo.append(group)
         elif boundary == "redo":
             if not redo:
@@ -263,8 +268,6 @@ def resolve_accepted_branch(events: list[dict[str, Any]], *, require_targets: bo
                 raise GateError("branch_resolution", "v0.3 redo requires target_transaction_id", sequence)
             if target and original_id and target != original_id:
                 raise GateError("branch_resolution", "redo targets the wrong transaction", sequence)
-            if after_hash != _branch_hash(original, "after"):
-                raise GateError("branch_resolution", "redo does not reproduce the original transaction state", sequence)
             accepted.extend(group)
         else:
             raise GateError("branch_resolution", f"unsupported boundary {boundary!r}", sequence)

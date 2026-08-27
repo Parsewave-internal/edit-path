@@ -155,6 +155,9 @@ On macOS, build the same targets using the dependencies in
 [`dev-docs/build.md`](../dev-docs/build.md), then run
 `EDIT_PATH_REPO_ROOT="$PWD" ./build/bin/EditPath`. macOS is currently a
 developer source-build path; there is no signed/notarized EditPath bundle.
+For a checkout-local Homebrew setup, run
+`./packaging/macos/bootstrap-dependencies.sh`; it creates only `.venv` and
+leaves other Kdenlive installations untouched.
 
 For Linux/macOS recorder diagnostics, bypass the supervisor only when a raw
 JSONL is specifically required:

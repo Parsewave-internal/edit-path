@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import copy
+import math
 import os
 import re
 import shutil
@@ -205,7 +206,18 @@ def _font_option() -> str:
     candidates = (
         Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
         Path("/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf"),
+        Path("/System/Library/Fonts/Supplemental/Arial.ttf"),
+        Path("/System/Library/Fonts/Helvetica.ttc"),
     )
+    fc_match = shutil.which("fc-match")
+    if fc_match:
+        try:
+            resolved = subprocess.run([fc_match, "-f", "%{file}", "sans-serif"], text=True,
+                                      capture_output=True, check=False, timeout=3).stdout.strip()
+            if resolved and Path(resolved).is_file():
+                candidates = (Path(resolved),) + candidates
+        except (OSError, subprocess.SubprocessError):
+            pass
     font = next((path for path in candidates if path.is_file()), None)
     return f"fontfile={font}:" if font else "font=Sans:"
 
@@ -1051,7 +1063,13 @@ def render_edit_process(
     output_probe = probe(output)
     video_streams = [stream for stream in output_probe.get("streams", []) if stream.get("codec_type") == "video"]
     duration = float(output_probe.get("format", {}).get("duration", 0.0))
-    expected_duration = sum(_scene_duration(moment) for moment in moments)
+    # Every independently rendered scene is quantized to a whole output
+    # frame.  Summing the requested fractional durations underestimates a
+    # long replay by up to one frame per moment.
+    expected_duration = sum(
+        math.ceil(_scene_duration(moment) * PROCESS_FPS) / PROCESS_FPS
+        for moment in moments
+    )
     if not video_streams or abs(duration - expected_duration) > 0.75:
         raise GateError(
             "edit_process",

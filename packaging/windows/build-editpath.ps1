@@ -350,8 +350,6 @@ foreach ($checkName in @('application_root', 'edit_path_module', 'ffmpeg', 'ffpr
         Stop-Build "the packaged runtime self-test resolved '$checkName' outside the portable bundle: $checkPath"
     }
 }
-if (-not (Test-Path (Join-Path $portable "dependency-installer.exe"))) { Stop-Build "dependency-installer.exe is missing from the portable bundle." }
-
 $embeddedPython = Join-Path $pythonDirectory "python.exe"
 $savedPythonPath = $env:PYTHONPATH
 $env:PYTHONPATH = "$bin;$sourceRoot"
@@ -424,6 +422,7 @@ $dependencyInstaller = Join-Path $portable "dependency-installer.exe"
 & $csc.FullName /nologo /target:exe /out:$dependencyInstaller (Join-Path $portable "DependencyInstaller.cs")
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path $dependencyInstaller)) { Stop-Build "could not compile dependency-installer.exe." }
 Remove-Item (Join-Path $portable "DependencyInstaller.cs") -Force
+if (-not (Test-Path $dependencyInstaller)) { Stop-Build "dependency-installer.exe is missing from the portable bundle." }
 @"
 EditPath first-run dependency setup
 

@@ -308,6 +308,8 @@ private:
         connect(&m_worker, &QProcess::readyReadStandardOutput, this, &RecorderWindow::readWorker);
         connect(&m_worker, &QProcess::readyReadStandardError, this, &RecorderWindow::readWorker);
         connect(&m_worker, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this, &RecorderWindow::workerFinished);
+        connect(&m_reasoningWorker, &QProcess::readyReadStandardOutput, this, [this] { m_activity->appendPlainText(QString::fromUtf8(m_reasoningWorker.readAllStandardOutput()).trimmed()); });
+        connect(&m_reasoningWorker, &QProcess::readyReadStandardError, this, [this] { m_activity->appendPlainText(QString::fromUtf8(m_reasoningWorker.readAllStandardError()).trimmed()); });
         m_heartbeat.setInterval(60000);
         connect(&m_heartbeat, &QTimer::timeout, this, [this] {
             if (m_editor.state() != QProcess::NotRunning) writeManifest(QStringLiteral("recording"));
@@ -356,7 +358,13 @@ private:
         if (!m_audioCapture.waitForFinished(5000)) { m_audioCapture.kill(); m_audioCapture.waitForFinished(2000); }
         m_recordReasoning->setEnabled(true); m_stopReasoning->setEnabled(false);
         m_activity->appendPlainText(QStringLiteral("Reasoning audio saved: %1").arg(m_audioOutput));
-        setStatus(QStringLiteral("Reasoning audio saved. Whisper transcription can now be run for this segment."));
+        setStatus(QStringLiteral("Reasoning audio saved. Transcribing and aligning it with the edit events…"));
+        QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
+        const QString existing = environment.value(QStringLiteral("PYTHONPATH"));
+        environment.insert(QStringLiteral("PYTHONPATH"), existing.isEmpty() ? m_repoRoot : m_repoRoot + QDir::listSeparator() + existing);
+        m_reasoningWorker.setProcessEnvironment(environment);
+        m_reasoningWorker.setWorkingDirectory(m_repoRoot);
+        m_reasoningWorker.start(pythonExecutable(), {QStringLiteral("-m"), QStringLiteral("edit_path.reasoning_cli"), m_session, m_audioOutput});
     }
 
     void writeManifest(const QString &status)
@@ -660,7 +668,7 @@ private:
     QString m_repoRoot, m_session, m_sessionId, m_configName, m_workerPurpose, m_readyFile, m_workerTranscript;
     int m_segment{0};
     int m_lastEditorExitCode{0};
-    QProcess m_editor, m_worker, m_audioCapture;
+    QProcess m_editor, m_worker, m_audioCapture, m_reasoningWorker;
     QTimer m_heartbeat, m_readyPoll;
     bool m_showExistingCompletion{false}, m_lastEditorExitCrashed{false}, m_confirmNewSession{false};
     QLabel *m_title{}, *m_instructions{}, *m_status{}, *m_sessionLabel{};

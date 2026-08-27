@@ -415,6 +415,15 @@ Sessions: %USERPROFILE%\Videos\EditPathSessions
 Test instructions: WINDOWS_TEST_PLAN.md in the source repository.
 "@ | Set-Content (Join-Path $portable "START-HERE.txt") -Encoding UTF8
 Copy-Item (Join-Path $sourceRoot "WINDOWS_TEST_PLAN.md") (Join-Path $portable "WINDOWS_TEST_PLAN.md")
+Copy-Item (Join-Path $sourceRoot "packaging\windows\dependency-installer.ps1") (Join-Path $portable "dependency-installer.ps1")
+@"
+EditPath first-run dependency setup
+
+Run this once from PowerShell (internet required for Whisper/model download):
+Set-ExecutionPolicy -Scope Process Bypass -Force
+.\dependency-installer.ps1 -InstallRoot `"$env:LOCALAPPDATA\EditPath`"
+Then start .\bin\EditPath.exe
+"@ | Set-Content (Join-Path $portable "INSTALL-DEPENDENCIES.txt") -Encoding UTF8
 
 $outputZip = Join-Path $OutputDirectory "EditPath-Windows-x64.zip"
 if (Test-Path $outputZip) {

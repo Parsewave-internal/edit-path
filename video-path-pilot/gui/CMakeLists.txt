@@ -8,7 +8,9 @@ endif()
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Widgets)
+# The recorder uses only Qt 6.4 APIs. Keeping the minimum aligned with Ubuntu
+# 24.04 also lets CI compile the same GUI source used by Windows packaging.
+find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Widgets)
 
 qt_add_executable(edit-path-recorder main.cpp)
 set_target_properties(edit-path-recorder PROPERTIES OUTPUT_NAME EditPath)

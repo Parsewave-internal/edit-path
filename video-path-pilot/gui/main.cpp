@@ -177,6 +177,10 @@ public:
 protected:
     void closeEvent(QCloseEvent *event) override
     {
+        if (m_audioCapture.state() != QProcess::NotRunning) {
+            m_audioCapture.terminate();
+            if (!m_audioCapture.waitForFinished(3000)) m_audioCapture.kill();
+        }
         if (m_editor.state() != QProcess::NotRunning || m_worker.state() != QProcess::NotRunning) {
             QMessageBox::warning(this, QStringLiteral("Please wait"),
                                  QStringLiteral("EditPath is still working. Wait for it to finish, or close Kdenlive normally first."));
@@ -232,6 +236,13 @@ private:
         primary->addWidget(m_start);
         primary->addWidget(m_recover);
         primary->addWidget(m_finish);
+        m_recordReasoning = new QPushButton(QStringLiteral("Record Reasoning"));
+        m_stopReasoning = new QPushButton(QStringLiteral("Stop Reasoning"));
+        m_recordReasoning->setMinimumHeight(42);
+        m_stopReasoning->setMinimumHeight(42);
+        m_stopReasoning->setEnabled(false);
+        primary->addWidget(m_recordReasoning);
+        primary->addWidget(m_stopReasoning);
         layout->addLayout(primary);
         auto *secondary = new QHBoxLayout;
         m_openSession = new QPushButton(QStringLiteral("Open Session Folder"));
@@ -270,6 +281,8 @@ private:
             launchSegment();
         });
         connect(m_finish, &QPushButton::clicked, this, &RecorderWindow::finishSession);
+        connect(m_recordReasoning, &QPushButton::clicked, this, [this] { startReasoning(); });
+        connect(m_stopReasoning, &QPushButton::clicked, this, [this] { stopReasoning(); });
         connect(m_openSession, &QPushButton::clicked, this, [this] { openFolder(m_session, QStringLiteral("Session folder")); });
         connect(m_openCompleted, &QPushButton::clicked, this,
                 [this] { openFolder(m_session + QStringLiteral("/completed-sample"), QStringLiteral("Generated sample")); });
@@ -320,6 +333,30 @@ private:
         m_status->setText(text);
         m_status->setStyleSheet(error ? QStringLiteral("padding:10px;background:#f7dddd;color:#7d1010;border-radius:4px;")
                                       : QStringLiteral("padding:10px;background:#e2f2e5;color:#164d24;border-radius:4px;"));
+    }
+
+    void startReasoning()
+    {
+        if (m_session.isEmpty() || m_audioCapture.state() != QProcess::NotRunning) return;
+        const QString output = QDir(m_session).filePath(QStringLiteral("EDIT-PATH/reasoning/audio-%1.flac").arg(++m_audioIndex, 3, 10, QLatin1Char('0')));
+        QDir().mkpath(QFileInfo(output).absolutePath());
+        QString ffmpeg = QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("ffmpeg.exe"));
+        if (!QFileInfo::exists(ffmpeg)) ffmpeg = QStandardPaths::findExecutable(QStringLiteral("ffmpeg"));
+        if (ffmpeg.isEmpty()) { setStatus(QStringLiteral("FFmpeg was not found; reasoning audio was not started."), true); return; }
+        m_audioOutput = output;
+        m_audioCapture.start(ffmpeg, {QStringLiteral("-hide_banner"), QStringLiteral("-loglevel"), QStringLiteral("error"), QStringLiteral("-f"), QStringLiteral("dshow"), QStringLiteral("-i"), QStringLiteral("audio=default"), QStringLiteral("-c:a"), QStringLiteral("flac"), QStringLiteral("-y"), output});
+        if (m_audioCapture.waitForStarted(3000)) { m_recordReasoning->setEnabled(false); m_stopReasoning->setEnabled(true); setStatus(QStringLiteral("Reasoning audio recording is active.")); }
+        else setStatus(QStringLiteral("Could not start microphone capture. Show technical details."), true);
+    }
+
+    void stopReasoning()
+    {
+        if (m_audioCapture.state() == QProcess::NotRunning) return;
+        m_audioCapture.terminate();
+        if (!m_audioCapture.waitForFinished(5000)) { m_audioCapture.kill(); m_audioCapture.waitForFinished(2000); }
+        m_recordReasoning->setEnabled(true); m_stopReasoning->setEnabled(false);
+        m_activity->appendPlainText(QStringLiteral("Reasoning audio saved: %1").arg(m_audioOutput));
+        setStatus(QStringLiteral("Reasoning audio saved. Whisper transcription can now be run for this segment."));
     }
 
     void writeManifest(const QString &status)
@@ -623,13 +660,15 @@ private:
     QString m_repoRoot, m_session, m_sessionId, m_configName, m_workerPurpose, m_readyFile, m_workerTranscript;
     int m_segment{0};
     int m_lastEditorExitCode{0};
-    QProcess m_editor, m_worker;
+    QProcess m_editor, m_worker, m_audioCapture;
     QTimer m_heartbeat, m_readyPoll;
     bool m_showExistingCompletion{false}, m_lastEditorExitCrashed{false}, m_confirmNewSession{false};
     QLabel *m_title{}, *m_instructions{}, *m_status{}, *m_sessionLabel{};
-    QPushButton *m_start{}, *m_recover{}, *m_finish{}, *m_openSession{}, *m_openCompleted{}, *m_toggleDetails{};
+    QPushButton *m_start{}, *m_recover{}, *m_finish{}, *m_recordReasoning{}, *m_stopReasoning{}, *m_openSession{}, *m_openCompleted{}, *m_toggleDetails{};
     QPlainTextEdit *m_activity{};
     QProgressBar *m_launchProgress{};
+    QString m_audioOutput;
+    int m_audioIndex{0};
 };
 
 int runSelfTest()

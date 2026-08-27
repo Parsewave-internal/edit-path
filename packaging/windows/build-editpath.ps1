@@ -206,7 +206,18 @@ if ($settingsText.Contains('#PackageType = SevenZipPackager')) {
 }
 [IO.File]::WriteAllText($settings, $settingsText, $utf8NoBom)
 
-. $craftEnvironment
+# Craft's environment script invokes Python and older Craft releases emit
+# informational diagnostics on stderr. PowerShell 7 turns native stderr into
+# ErrorRecords under `Stop`, which aborts before Craft has initialized. Keep
+# strict failure handling for our checks, but do not treat that bootstrap
+# chatter as a build failure.
+$previousErrorActionPreference = $ErrorActionPreference
+try {
+    $ErrorActionPreference = "Continue"
+    . $craftEnvironment
+} finally {
+    $ErrorActionPreference = $previousErrorActionPreference
+}
 
 $craftPython = $env:CRAFT_PYTHON
 $craftScript = Join-Path (Split-Path $craftEnvironment -Parent) "bin\craft.py"

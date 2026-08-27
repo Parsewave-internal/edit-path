@@ -226,6 +226,7 @@ private:
         m_recover->setMinimumHeight(42);
         m_recover->setVisible(false);
         m_finish = new QPushButton(QStringLiteral("Create Dataset Sample"));
+        m_finish->setToolTip(QStringLiteral("Create Edit Replay after the final render"));
         m_finish->setMinimumHeight(42);
         m_finish->setEnabled(false);
         primary->addWidget(m_start);
@@ -530,7 +531,7 @@ private:
                 m_finish->setEnabled(true);
                 offerConfirmedNewSession();
                 setStatus(QStringLiteral(
-                    "Your editing steps were saved. Click Create Dataset Sample; EditPath will locate the Kdenlive render automatically and generate the replay."));
+                    "Your editing steps were saved. Click Create Edit Replay after rendering; EditPath combines every EDIT-PATH journal segment, locates the Kdenlive render, and generates the replay."));
             } else if (m_lastEditorExitCrashed) {
                 writeManifest(QStringLiteral("recovery_available"));
                 m_recover->setVisible(true);

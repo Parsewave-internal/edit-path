@@ -10,6 +10,12 @@ internal static class DependencyInstaller {
     var psi = new ProcessStartInfo("powershell.exe") { UseShellExecute=false };
     psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -File \"" + script + "\"";
     foreach (var arg in args) psi.Arguments += " \"" + arg.Replace("\"", "\\\"") + "\"";
-    using var process = Process.Start(psi); process.WaitForExit(); return process.ExitCode;
+    try {
+      using var process = Process.Start(psi);
+      if (process == null) { Console.Error.WriteLine("Could not start PowerShell"); Console.ReadKey(); return 3; }
+      process.WaitForExit();
+      if (process.ExitCode != 0) { Console.Error.WriteLine("Dependency installation failed (exit " + process.ExitCode + "). See dependency-install.log"); Console.ReadKey(); }
+      return process.ExitCode;
+    } catch (Exception error) { Console.Error.WriteLine(error); Console.ReadKey(); return 4; }
   }
 }

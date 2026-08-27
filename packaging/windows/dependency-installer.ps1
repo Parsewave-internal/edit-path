@@ -8,11 +8,23 @@ param(
 $ErrorActionPreference='Stop'; Set-StrictMode -Version Latest
 if (-not $ReportPath) { $ReportPath = Join-Path $InstallRoot 'dependency-install-report.json' }
 $checks = [ordered]@{}
-function Check($name, [scriptblock]$action) {
-  try { $value=&$action; $checks[$name]=[ordered]@{passed=$true; result=$value}; return $true }
-  catch { $checks[$name]=[ordered]@{passed=$false; error=$_.Exception.Message}; return $false }
+$logPath = Join-Path (Split-Path $ReportPath -Parent) 'dependency-install.log'
+function Log([string]$message) {
+  $line = "[$([DateTime]::Now.ToString('s'))] $message"
+  Write-Host $line
+  Add-Content -Path $logPath -Value $line -Encoding UTF8
+}
+function Check($name, [scriptblock]$action, [int]$attempts=3) {
+  Log "[$name] starting"
+  for ($attempt=1; $attempt -le $attempts; $attempt++) {
+    try { $value=&$action; $checks[$name]=[ordered]@{passed=$true; attempts=$attempt; result=$value}; Log "[$name] passed (attempt $attempt)"; return $true }
+    catch { Log "[$name] failed (attempt $attempt/$attempts): $($_.Exception.Message)"; if ($attempt -lt $attempts) { Start-Sleep -Seconds ([Math]::Min(2*$attempt,8)) } }
+  }
+  $checks[$name]=[ordered]@{passed=$false; attempts=$attempts; error='all retry attempts failed'}; return $false
 }
 New-Item -ItemType Directory -Force $InstallRoot | Out-Null
+$logParent = Split-Path $ReportPath -Parent; New-Item -ItemType Directory -Force $logParent | Out-Null
+Log "EditPath dependency installer started; model=$Model"
 $passed=$true
 $passed = (Check 'architecture' { if (-not [Environment]::Is64BitOperatingSystem) { throw '64-bit Windows is required' }; 'x64' }) -and $passed
 $passed = (Check 'disk_space' { $drive=(Get-Item $InstallRoot).PSDrive; $free=(Get-PSDrive $drive.Name).Free; if ($free -lt 10GB) { throw "at least 10 GB free space required; found $([math]::Round($free/1GB,2)) GB" }; "$([math]::Round($free/1GB,2)) GB free" }) -and $passed
@@ -28,5 +40,6 @@ $passed=(Check 'microphone_directshow' { $devices=& $ffmpeg -hide_banner -list_d
 if ($passed -and -not $Offline) { $passed=(Check 'model_download_and_self_test' { $probe=Join-Path $InstallRoot 'whisper-self-test.wav'; & $ffmpeg -hide_banner -loglevel error -f lavfi -i 'sine=frequency=440:duration=1' -y $probe; & $python -m whisper $probe --model $Model --output_format json --output_dir $InstallRoot --verbose False; if ($LASTEXITCODE) { throw 'Whisper self-test failed' }; Remove-Item $probe -Force -ErrorAction SilentlyContinue; 'passed' }) -and $passed }
 $report=[ordered]@{schema='edit-path/dependency-installer@1'; generated_at_utc=[DateTime]::UtcNow.ToString('o'); model=$Model; install_root=$InstallRoot; offline=[bool]$Offline; passed=$passed; checks=$checks}
 $report | ConvertTo-Json -Depth 8 | Set-Content -Encoding UTF8 $ReportPath
+Log "Installer finished: passed=$passed; report=$ReportPath"
 Write-Output ($report | ConvertTo-Json -Depth 8)
 if (-not $passed) { exit 1 }

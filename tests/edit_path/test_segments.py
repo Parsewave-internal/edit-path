@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 
 from edit_path.errors import GateError
-from edit_path.segments import assemble_segments
+from edit_path.segments import assemble_segments, discover_segments
 from edit_path.state import canonical_hash
 
 
@@ -49,6 +49,11 @@ def write_events(path: Path, events: list[dict]) -> None:
 
 
 class SegmentAssemblyTests(unittest.TestCase):
+    def test_discover_segments_accepts_recorder_edit_path_layout(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td); (root / "EDIT-PATH").mkdir()
+            (root / "EDIT-PATH/events-001.jsonl").write_text('{}\n', encoding='utf-8')
+            self.assertEqual([root / "EDIT-PATH/events-001.jsonl"], discover_segments(root))
     def make_segments(self, root: Path, *, break_continuity: bool = False) -> None:
         empty = {"timeline_id": "timeline", "duration_frames": 0, "tracks": [], "clips": [], "compositions": [], "mixes": [], "master_effects": []}
         inserted = {**empty, "duration_frames": 25, "clips": [{"native_id": 1, "entity_id": "clip", "asset_id": "asset", "track_native_id": 2}]}

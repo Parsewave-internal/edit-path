@@ -350,6 +350,7 @@ foreach ($checkName in @('application_root', 'edit_path_module', 'ffmpeg', 'ffpr
         Stop-Build "the packaged runtime self-test resolved '$checkName' outside the portable bundle: $checkPath"
     }
 }
+if (-not (Test-Path (Join-Path $portable "dependency-installer.exe"))) { Stop-Build "dependency-installer.exe is missing from the portable bundle." }
 
 $embeddedPython = Join-Path $pythonDirectory "python.exe"
 $savedPythonPath = $env:PYTHONPATH
@@ -416,6 +417,13 @@ Test instructions: WINDOWS_TEST_PLAN.md in the source repository.
 "@ | Set-Content (Join-Path $portable "START-HERE.txt") -Encoding UTF8
 Copy-Item (Join-Path $sourceRoot "WINDOWS_TEST_PLAN.md") (Join-Path $portable "WINDOWS_TEST_PLAN.md")
 Copy-Item (Join-Path $sourceRoot "packaging\windows\dependency-installer.ps1") (Join-Path $portable "dependency-installer.ps1")
+Copy-Item (Join-Path $sourceRoot "packaging\windows\DependencyInstaller.cs") (Join-Path $portable "DependencyInstaller.cs")
+$csc = Get-ChildItem "${env:ProgramFiles}\Microsoft Visual Studio", "${env:ProgramFiles(x86)}\Microsoft Visual Studio" -Recurse -Filter csc.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not $csc) { Stop-Build "C# compiler csc.exe is required to build dependency-installer.exe." }
+$dependencyInstaller = Join-Path $portable "dependency-installer.exe"
+& $csc.FullName /nologo /target:exe /out:$dependencyInstaller (Join-Path $portable "DependencyInstaller.cs")
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path $dependencyInstaller)) { Stop-Build "could not compile dependency-installer.exe." }
+Remove-Item (Join-Path $portable "DependencyInstaller.cs") -Force
 @"
 EditPath first-run dependency setup
 

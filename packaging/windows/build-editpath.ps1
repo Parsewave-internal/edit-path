@@ -206,7 +206,18 @@ if ($settingsText.Contains('#PackageType = SevenZipPackager')) {
 }
 [IO.File]::WriteAllText($settings, $settingsText, $utf8NoBom)
 
-. $craftEnvironment
+# Craft's environment script invokes Python and older Craft releases emit
+# informational diagnostics on stderr. PowerShell 7 turns native stderr into
+# ErrorRecords under `Stop`, which aborts before Craft has initialized. Keep
+# strict failure handling for our checks, but do not treat that bootstrap
+# chatter as a build failure.
+$previousErrorActionPreference = $ErrorActionPreference
+try {
+    $ErrorActionPreference = "Continue"
+    . $craftEnvironment
+} finally {
+    $ErrorActionPreference = $previousErrorActionPreference
+}
 
 $craftPython = $env:CRAFT_PYTHON
 $craftScript = Join-Path (Split-Path $craftEnvironment -Parent) "bin\craft.py"
@@ -349,7 +360,15 @@ try {
     if ($LASTEXITCODE -ne 0 -or -not [IO.Path]::GetFullPath($importedEditPath).StartsWith($portablePrefix, [StringComparison]::OrdinalIgnoreCase)) {
         Stop-Build "embedded Python imported edit_path outside the portable bundle: $importedEditPath"
     }
-    & $embeddedPython -m unittest -v tests.edit_path.test_reconstruction_pipeline.MediaIntegrationTests.test_real_checkpoint_and_final_ssim_pipeline
+    # Verbose unittest writes progress/status to stderr on Windows. Do not let
+    # PowerShell promote that normal diagnostic stream into a terminating error.
+    $testPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        & $embeddedPython -m unittest -v tests.edit_path.test_reconstruction_pipeline.MediaIntegrationTests.test_real_checkpoint_and_final_ssim_pipeline
+    } finally {
+        $ErrorActionPreference = $testPreference
+    }
     $mediaTestExitCode = $LASTEXITCODE
 } finally {
     Pop-Location

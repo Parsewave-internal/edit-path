@@ -626,6 +626,13 @@ def finalize_session(session: Path, project: Path, output: Path, job: dict, *, s
     sample["evidence"]["native_project"] = "provenance/editor-project.kdenlive"
     for raw in sample["evidence"].get("raw_events", []):
         raw["file"] = raw["file"].replace("evidence/", "provenance/segments/", 1)
+        # Organizing the bundle rewrites the state sidecar paths inside these
+        # verbatim logs, so the hash recorded before the move no longer matches
+        # the delivered bytes. Re-hash what actually ships, the way the video
+        # and project artifacts above already do.
+        delivered = completed / raw["file"]
+        if delivered.is_file():
+            raw["sha256"] = sha256(delivered)
     sample["quality"]["segment_assembly"]["path"] = "edit-path/events.jsonl"
     sample["quality"]["canonical_reconstruction"] = "passed"
     media_accepted = report.get("final", {}).get("accepted") and report.get("delivery", {}).get("accepted")

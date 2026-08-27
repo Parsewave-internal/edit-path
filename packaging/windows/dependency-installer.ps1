@@ -21,7 +21,7 @@ $venv=Join-Path $InstallRoot 'python'; $python=Join-Path $venv 'Scripts\python.e
 if ($passed) { $passed=(Check 'python_environment' { if (-not (Test-Path $python)) { & py.exe -3.11 -m venv $venv }; if (-not (Test-Path $python)) { throw 'venv creation failed' }; $python }) -and $passed }
 if ($passed -and -not $Offline) { $passed=(Check 'whisper_install' { & $python -m pip install --disable-pip-version-check -U openai-whisper; if ($LASTEXITCODE) { throw 'pip install openai-whisper failed' }; 'installed' }) -and $passed }
 $passed=(Check 'whisper_import' { & $python -c 'import whisper; print(whisper.__file__)'; if ($LASTEXITCODE) { throw 'Whisper import failed' } }) -and $passed
-$bundleBin = Join-Path (Split-Path $PSScriptRoot -Parent) 'bin\ffmpeg.exe'
+$bundleBin = Join-Path $PSScriptRoot 'bin\ffmpeg.exe'
 $ffmpeg = if (Test-Path $bundleBin) { $bundleBin } else { (Get-Command ffmpeg.exe -ErrorAction Stop).Source }
 $passed=(Check 'ffmpeg' { if (-not (Test-Path $ffmpeg)) { throw "FFmpeg not found: $ffmpeg" }; $ffmpeg }) -and $passed
 $passed=(Check 'microphone_directshow' { $devices=& $ffmpeg -hide_banner -list_devices true -f dshow -i dummy 2>&1; if ($devices -notmatch 'DirectShow audio devices|DirectShow audio devices') { throw 'DirectShow audio device enumeration failed' }; 'enumerated' }) -and $passed

@@ -49,3 +49,18 @@ def align_reasoning(record: dict[str, Any], events: Iterable[dict[str, Any]]) ->
     result["previous_event_id"] = before[-1].get("event_id") if before else None
     result["next_event_id"] = after[0].get("event_id") if after else None
     return result
+
+
+def transcript_to_vtt(records: Iterable[dict[str, Any]]) -> str:
+    """Render human transcript spans as WebVTT captions without inventing text."""
+    rows = [r for r in records if isinstance(r.get("transcript"), dict) and r["transcript"].get("text")]
+    rows.sort(key=lambda r: int(r.get("started_monotonic_ns", 0)))
+    origin = int(rows[0].get("started_monotonic_ns", 0)) if rows else 0
+    lines = ["WEBVTT", ""]
+    for index, record in enumerate(rows, 1):
+        start = max(0, (int(record.get("started_monotonic_ns", 0)) - origin) // 1_000_000)
+        end = max(start + 1, (int(record.get("ended_monotonic_ns", 0)) - origin) // 1_000_000)
+        def stamp(ms: int) -> str:
+            return f"{ms // 3_600_000:02d}:{(ms // 60_000) % 60:02d}:{(ms // 1000) % 60:02d}.{ms % 1000:03d}"
+        lines.extend([str(index), f"{stamp(start)} --> {stamp(end)}", str(record["transcript"]["text"]).strip(), ""])
+    return "\n".join(lines)

@@ -430,12 +430,18 @@ def organize_dataset_item(bundle: Path, output_suffix: str) -> None:
         manifest = json.loads(bindings_path.read_text(encoding="utf-8"))
         bindings = []
         for asset in manifest.get("assets", []):
+            # Keep the source identity in the published binding index.  The
+            # old layout retained only Kdenlive IDs, making asset references
+            # impossible to resolve once the original manifest was moved.
             binding = {"asset_id": asset.get("asset_id")}
-            for key in ("bin_reference", "bin_references", "license_status"):
+            for key in ("original_filename", "file", "sha256", "bytes",
+                        "bin_reference", "bin_references", "asset_references",
+                        "license_status"):
                 if key in asset:
                     binding[key] = asset[key]
             bindings.append(binding)
-        dump(bindings_path, {"schema": "video-path/native-asset-bindings@1", "bindings": bindings})
+        dump(bindings_path, {"schema": "video-path/native-asset-bindings@2", "bindings": bindings,
+                             "asset_references": manifest.get("asset_references", {})})
 
     portable_project = bundle / "verification" / "reconstructed.kdenlive"
     if portable_project.is_file():
@@ -466,6 +472,29 @@ def finalize_session(session: Path, project: Path, output: Path, job: dict, *, s
         raise ValueError(f"saved project profile {project_settings} does not match assigned profile {job['project']}")
     assets, bindings, problems = prepare_assets(session, project, job.get("assets"), source_root)
     embedded_assets = embedded_project_assets(project)
+    # Capture the logical references used by the edit alongside native bin IDs.
+    # This survives normalization and lets consumers resolve a clip to the
+    # exact input filename without relying on ordering or editor internals.
+    reference_to_asset: dict[str, str] = {}
+    for raw in raw_paths:
+        for event in read_jsonl(raw):
+            if event.get("event_type") != "state.diff":
+                continue
+            for change in event.get("diff", {}).get("changes", []):
+                for side in ("before", "after"):
+                    value = change.get(side)
+                    if not isinstance(value, dict) or value.get("asset_reference") is None:
+                        continue
+                    reference = str(value["asset_reference"])
+                    asset_id = value.get("asset_id") or bindings.get(reference)
+                    if asset_id:
+                        reference_to_asset[reference] = str(asset_id)
+    by_id = {asset["asset_id"]: asset for asset in assets}
+    for reference, asset_id in reference_to_asset.items():
+        if asset_id in by_id:
+            by_id[asset_id].setdefault("asset_references", []).append(reference)
+    for asset in assets:
+        asset["asset_references"] = sorted(set(asset.get("asset_references", [])))
     unresolved_used = sorted(ref for ref in used_asset_references(raw_paths) if ref not in bindings and ref not in embedded_assets)
     if unresolved_used: raise ValueError(f"project could not resolve used Kdenlive asset IDs: {', '.join(unresolved_used)}")
 
@@ -497,7 +526,16 @@ def finalize_session(session: Path, project: Path, output: Path, job: dict, *, s
     sample["quality"]["project_asset_resolution_problems"] = problems
     sample["quality"]["segment_assembly"] = {**assembly, "path": "trajectory.jsonl"}
     dump(session / "sample.json", sample)
-    dump(session / "asset-manifest.json", {"schema": "video-path/assets@2", "assets": assets})
+    dump(session / "asset-manifest.json", {
+        "schema": "video-path/assets@3",
+        "assets": assets,
+        "asset_references": {
+            reference: {"asset_id": asset_id,
+                        "original_filename": by_id[asset_id]["original_filename"]}
+            for reference, asset_id in sorted(reference_to_asset.items())
+            if asset_id in by_id
+        },
+    })
 
     pipeline_output = session / "pipeline-output"
     result = process_session(session, pipeline_output)

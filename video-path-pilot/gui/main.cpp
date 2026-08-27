@@ -226,6 +226,7 @@ private:
         m_recover->setMinimumHeight(42);
         m_recover->setVisible(false);
         m_finish = new QPushButton(QStringLiteral("Create Dataset Sample"));
+        m_finish->setToolTip(QStringLiteral("Create Edit Replay after the final render"));
         m_finish->setMinimumHeight(42);
         m_finish->setEnabled(false);
         primary->addWidget(m_start);
@@ -422,7 +423,9 @@ private:
         m_start->setVisible(false);
         m_finish->setEnabled(false);
         const QString number = QStringLiteral("%1").arg(m_segment, 3, 10, QLatin1Char('0'));
-        const QString raw = QDir(m_session).filePath(QStringLiteral("raw-events-%1.jsonl").arg(number));
+        const QString journal = QDir(m_session).filePath(QStringLiteral("EDIT-PATH"));
+        QDir().mkpath(journal);
+        const QString raw = QDir(journal).filePath(QStringLiteral("events-%1.jsonl").arg(number));
         const QString console = QDir(m_session).filePath(QStringLiteral("kdenlive-console-%1.log").arg(number));
         const QString project = QDir(m_session).filePath(QStringLiteral("edit.kdenlive"));
         const QString renderOutput = QDir(m_session).filePath(QStringLiteral("editor-final.mp4"));
@@ -486,7 +489,7 @@ private:
                                         ? QStringLiteral("Kdenlive crashed with signal/exit code %1; checking recoverable evidence…").arg(exitCode)
                                         : QStringLiteral("Kdenlive exited with code %1; checking the recording…").arg(exitCode));
         m_workerPurpose = QStringLiteral("validate");
-        const QString raw = QDir(m_session).filePath(QStringLiteral("raw-events-%1.jsonl").arg(m_segment, 3, 10, QLatin1Char('0')));
+        const QString raw = QDir(m_session).filePath(QStringLiteral("EDIT-PATH/events-%1.jsonl").arg(m_segment, 3, 10, QLatin1Char('0')));
         m_worker.start(pythonExecutable(), {m_repoRoot + QStringLiteral("/video-path-pilot/validate_video_path.py"), raw});
     }
 
@@ -528,7 +531,7 @@ private:
                 m_finish->setEnabled(true);
                 offerConfirmedNewSession();
                 setStatus(QStringLiteral(
-                    "Your editing steps were saved. Click Create Dataset Sample; EditPath will locate the Kdenlive render automatically and generate the replay."));
+                    "Your editing steps were saved. Click Create Edit Replay after rendering; EditPath combines every EDIT-PATH journal segment, locates the Kdenlive render, and generates the replay."));
             } else if (m_lastEditorExitCrashed) {
                 writeManifest(QStringLiteral("recovery_available"));
                 m_recover->setVisible(true);

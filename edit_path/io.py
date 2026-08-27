@@ -111,6 +111,25 @@ def find_trajectory(session_dir: Path) -> Path:
     for candidate in candidates:
         if candidate.is_file():
             return candidate
+    # Crash-recovered sessions retain numbered JSONL segments.  Prefer the
+    # canonical assembled trajectory when present, but make the multi-file
+    # evidence discoverable to callers that only know the session directory.
+    numbered = sorted(session_dir.glob("raw-events-*.jsonl"))
+    if not numbered:
+        numbered = sorted((session_dir / "EDIT-PATH").glob("events-*.jsonl"))
+    if numbered:
+        from .segments import assemble_segments
+        assembled = session_dir / "trajectory.jsonl"
+        # The assembler accepts the session root convention; mirror the
+        # durable EDIT-PATH journal into its expected names when necessary.
+        if numbered[0].parent.name == "EDIT-PATH":
+            import shutil
+            for source in numbered:
+                target = session_dir / source.name.replace("events-", "raw-events-")
+                if not target.exists():
+                    shutil.copyfile(source, target)
+        assemble_segments(session_dir, assembled)
+        return assembled
     raise EditPathError(f"no trajectory JSONL found under {session_dir}")
 
 

@@ -359,7 +359,14 @@ private:
         const QString configured = QDir(QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation)).filePath(QStringLiteral("EditPath/microphone-device.txt"));
         QFile microphoneFile(configured);
         if (microphoneFile.open(QIODevice::ReadOnly | QIODevice::Text)) microphone = QString::fromUtf8(microphoneFile.readAll()).trimmed();
-        m_audioCapture.start(ffmpeg, {QStringLiteral("-hide_banner"), QStringLiteral("-loglevel"), QStringLiteral("error"), QStringLiteral("-f"), QStringLiteral("dshow"), QStringLiteral("-i"), QStringLiteral("audio=") + microphone, QStringLiteral("-c:a"), QStringLiteral("flac"), QStringLiteral("-y"), output});
+        QStringList captureArgs{QStringLiteral("-hide_banner"), QStringLiteral("-loglevel"), QStringLiteral("error")};
+#ifdef Q_OS_WIN
+        captureArgs << QStringLiteral("-f") << QStringLiteral("dshow") << QStringLiteral("-i") << (QStringLiteral("audio=") + microphone);
+#else
+        captureArgs << QStringLiteral("-f") << QStringLiteral("pulse") << QStringLiteral("-i") << microphone;
+#endif
+        captureArgs << QStringLiteral("-c:a") << QStringLiteral("flac") << QStringLiteral("-y") << output;
+        m_audioCapture.start(ffmpeg, captureArgs);
         if (m_audioCapture.waitForStarted(3000)) { m_recordReasoning->setEnabled(false); m_stopReasoning->setEnabled(true); setStatus(QStringLiteral("Reasoning audio recording is active.")); }
         else setStatus(QStringLiteral("Could not start microphone capture. Show technical details."), true);
     }
@@ -371,13 +378,7 @@ private:
         if (!m_audioCapture.waitForFinished(5000)) { m_audioCapture.kill(); m_audioCapture.waitForFinished(2000); }
         m_recordReasoning->setEnabled(true); m_stopReasoning->setEnabled(false);
         m_activity->appendPlainText(QStringLiteral("Reasoning audio saved: %1").arg(m_audioOutput));
-        setStatus(QStringLiteral("Reasoning audio saved. Transcribing and aligning it with the edit events…"));
-        QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
-        const QString existing = environment.value(QStringLiteral("PYTHONPATH"));
-        environment.insert(QStringLiteral("PYTHONPATH"), existing.isEmpty() ? m_repoRoot : m_repoRoot + QDir::listSeparator() + existing);
-        m_reasoningWorker.setProcessEnvironment(environment);
-        m_reasoningWorker.setWorkingDirectory(m_repoRoot);
-        m_reasoningWorker.start(pythonExecutable(), {QStringLiteral("-m"), QStringLiteral("edit_path.reasoning_cli"), m_session, m_audioOutput});
+        setStatus(QStringLiteral("Reasoning audio saved. Transcription will run asynchronously when the sample is finalized."));
     }
 
     void writeManifest(const QString &status)

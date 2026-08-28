@@ -7,9 +7,14 @@ from .reasoning_pipeline import transcribe_reasoning_segments
 from .whisper_provider import transcribe_with_whisper
 from .reasoning import align_reasoning
 from .io import write_json
+from .whisper_manager import whisper_available, install_whisper
 
 def main() -> int:
-    p=argparse.ArgumentParser(); p.add_argument("session", type=Path); p.add_argument("audio", type=Path); args=p.parse_args()
+    p=argparse.ArgumentParser(); p.add_argument("session", type=Path); p.add_argument("audio", type=Path); p.add_argument("--install", action="store_true"); args=p.parse_args()
+    if not whisper_available():
+        if not args.install:
+            raise RuntimeError("Whisper is not installed; rerun with --install after editor confirmation")
+        install_whisper()
     session=args.session.resolve(); audio=args.audio.resolve()
     events=[]
     for candidate in sorted((session/"EDIT-PATH").glob("events-*.jsonl")):

@@ -585,7 +585,7 @@ private:
             } else {
                 m_workerPurpose = QStringLiteral("transcribe");
                 m_worker.start(pythonExecutable(), {QStringLiteral("-m"), QStringLiteral("edit_path.reasoning_cli"), m_session,
-                                                     reasoningDir.filePath(recordings.constLast())});
+                                                     reasoningDir.filePath(recordings.constLast()), QStringLiteral("--install")});
                 return;
             }
         }

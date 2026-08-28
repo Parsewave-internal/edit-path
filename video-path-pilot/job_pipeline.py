@@ -509,17 +509,22 @@ def finalize_session(session: Path, project: Path, output: Path, job: dict, *, s
     if result["status"] != "accepted":
         raise ValueError(f"production reconstruction rejected at {result.get('gate')}: {result.get('message')}")
     source_bundle = Path(result["path"])
-    # A 0.3 delivery is not portable unless the referenced state snapshots and
-    # asset bindings are physically present. Fail before publishing a partial
-    # completed-sample bundle.
+    # Publish all recoverable evidence, but make an incomplete portable bundle
+    # explicit instead of aborting finalization and hiding the useful artifacts.
+    delivery_issues = []
     if not (source_bundle / "states").is_dir() or not any((source_bundle / "states").glob("*.kdenlive.zst")):
-        raise ValueError("production bundle is missing state sidecars")
+        delivery_issues.append("missing_state_sidecars")
     if not (source_bundle / "asset-manifest.json").is_file():
-        raise ValueError("production bundle is missing asset manifest")
+        delivery_issues.append("missing_asset_manifest")
     completed = session / "completed-sample"
     if completed.exists(): raise ValueError(f"completed sample already exists: {completed}")
     replace_with_retry(source_bundle, completed)
     organize_dataset_item(completed, output.suffix.lower())
+    dump(completed / "delivery-status.json", {
+        "schema": "video-path/delivery-status@1",
+        "complete": not delivery_issues,
+        "issues": delivery_issues,
+    })
 
     sample_path = completed / "sample.json"
     sample = json.loads(sample_path.read_text(encoding="utf-8"))
@@ -543,6 +548,8 @@ def finalize_session(session: Path, project: Path, output: Path, job: dict, *, s
     media_accepted = report.get("final", {}).get("accepted") and report.get("delivery", {}).get("accepted")
     sample["quality"]["media_reconstruction"] = "passed" if media_accepted else "degraded"
     sample["quality"]["media_reconstruction_warnings"] = report.get("quality_warnings", [])
+    sample["quality"]["delivery_complete"] = not delivery_issues
+    sample["quality"]["delivery_issues"] = delivery_issues
     sample["quality"]["edit_process_replay"] = (
         report.get("edit_process", {}).get("training_ui_quality", "degraded")
         if report.get("edit_process", {}).get("accepted")
@@ -552,6 +559,7 @@ def finalize_session(session: Path, project: Path, output: Path, job: dict, *, s
         sample["quality"]["canonical_reconstruction"] == "passed"
         and sample["quality"]["edit_process_replay"] in {"passed", "degraded"}
         and bool(sample["task"].get("prompt"))
+        and not delivery_issues
     )
     dump(sample_path, sample)
     errors = validate_sample(sample_path, check_files=True)

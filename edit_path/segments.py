@@ -24,6 +24,10 @@ def discover_segments(session_dir: Path) -> list[Path]:
     paths = sorted(session_dir.glob("raw-events-*.jsonl"))
     if not paths and (session_dir / "raw-events.jsonl").is_file():
         paths = [session_dir / "raw-events.jsonl"]
+    # The recorder writes durable segments under EDIT-PATH. Accept that
+    # canonical layout directly; older collectors continue using root files.
+    if not paths:
+        paths = sorted((session_dir / "EDIT-PATH").glob("events-*.jsonl"))
     if not paths:
         raise EditPathError(f"session contains no raw event segments: {session_dir}")
     return paths

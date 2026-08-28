@@ -377,9 +377,19 @@ def _make_state_references_portable(
     for event in events:
         reference = state_reference(event)
         if isinstance(reference, dict) and reference.get("path"):
-            relative = safe_relative(str(reference["path"]))
+            raw_path = Path(str(reference["path"]))
             base = session_dir if reference.get("base") == "session" else trajectory.parent
-            source = base / relative
+            # Recorder journals may be written beside the trajectory and use
+            # a safe path such as ``../states/<digest>.kdenlive.zst``.  Do not
+            # reject that representation merely because it contains ``..``;
+            # resolve it and enforce the real security boundary instead.
+            if raw_path.is_absolute():
+                raise GateError("state_sidecars", f"absolute project state path is not allowed: {raw_path}", event_sequence(event))
+            source = (base / raw_path).resolve()
+            try:
+                source.relative_to(session_dir.resolve())
+            except ValueError:
+                raise GateError("state_sidecars", f"project state path escapes session: {raw_path}", event_sequence(event))
             if not source.is_file() or source.is_symlink():
                 raise GateError("state_sidecars", f"project state sidecar is missing: {source}", event_sequence(event))
             suffix = "".join(source.suffixes) or ".state"

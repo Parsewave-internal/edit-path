@@ -566,12 +566,29 @@ private:
     void finishSession()
     {
         m_finish->setEnabled(false);
+        m_reasoningRequested = QMessageBox::question(
+            this, QStringLiteral("Create audio reasoning file?"),
+            QStringLiteral("Transcribe the recorded reasoning and include captions in the edit replay?"),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No) == QMessageBox::Yes;
         m_workerPurpose = QStringLiteral("finalize");
         m_workerTranscript.clear();
         m_instructions->setVisible(false);
         m_title->setText(
             QStringLiteral("<h1>Creating your dataset sample…</h1><p>You can leave the files where they are. EditPath is doing the packaging and checks.</p>"));
         setStatus(QStringLiteral("This can take several minutes for a long edit. Keep EditPath open until it finishes."));
+        if (m_reasoningRequested) {
+            const QDir reasoningDir(QDir(m_session).filePath(QStringLiteral("EDIT-PATH/reasoning")));
+            const QStringList recordings = reasoningDir.entryList({QStringLiteral("audio-*.flac")}, QDir::Files, QDir::Name);
+            if (recordings.isEmpty()) {
+                setStatus(QStringLiteral("No reasoning audio was recorded; continuing without transcription."), true);
+                m_reasoningRequested = false;
+            } else {
+                m_workerPurpose = QStringLiteral("transcribe");
+                m_worker.start(pythonExecutable(), {QStringLiteral("-m"), QStringLiteral("edit_path.reasoning_cli"), m_session,
+                                                     reasoningDir.filePath(recordings.constLast())});
+                return;
+            }
+        }
         m_worker.start(pythonExecutable(), {m_repoRoot + QStringLiteral("/video-path-pilot/job_pipeline.py"), QStringLiteral("finalize-freeform"), m_session});
     }
 
@@ -594,6 +611,14 @@ private:
     void workerFinished(int exitCode, QProcess::ExitStatus status)
     {
         readWorker();
+        if (m_workerPurpose == QLatin1String("transcribe")) {
+            if (status != QProcess::NormalExit || exitCode != 0) {
+                setStatus(QStringLiteral("Reasoning transcription failed; continuing without audio reasoning."), true);
+            }
+            m_workerPurpose = QStringLiteral("finalize");
+            m_worker.start(pythonExecutable(), {m_repoRoot + QStringLiteral("/video-path-pilot/job_pipeline.py"), QStringLiteral("finalize-freeform"), m_session});
+            return;
+        }
         const bool success = status == QProcess::NormalExit && exitCode == 0;
         if (m_workerPurpose == QStringLiteral("validate")) {
             if (success && !m_lastEditorExitCrashed && m_lastEditorExitCode == 0) {
@@ -691,6 +716,7 @@ private:
     }
 
     QString m_repoRoot, m_session, m_sessionId, m_configName, m_workerPurpose, m_readyFile, m_workerTranscript;
+    bool m_reasoningRequested{false};
     int m_segment{0};
     int m_lastEditorExitCode{0};
     QProcess m_editor, m_worker, m_audioCapture, m_reasoningWorker;

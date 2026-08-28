@@ -382,7 +382,12 @@ private:
         // reasoning segment.  The editor controls the lifecycle explicitly;
         // finalization/transcription happens only when requested below.
         m_audioCapture.terminate();
-        if (!m_audioCapture.waitForFinished(5000)) { m_audioCapture.kill(); m_audioCapture.waitForFinished(2000); }
+        if (!m_audioCapture.waitForFinished(1500)) {
+            // Windows console capture processes do not always honor the
+            // graceful terminate request.  Stop must be definitive.
+            m_audioCapture.kill();
+            m_audioCapture.waitForFinished(3000);
+        }
         m_recordReasoning->setEnabled(true); m_stopReasoning->setEnabled(false);
         m_activity->appendPlainText(QStringLiteral("Reasoning audio saved: %1").arg(m_audioOutput));
         setStatus(QStringLiteral("Reasoning audio saved. Transcription will run asynchronously when the sample is finalized."));

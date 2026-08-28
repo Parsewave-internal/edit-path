@@ -398,8 +398,14 @@ def load_state_reference(reference: dict[str, Any], base_dir: Path) -> bytes:
         except (ValueError, TypeError, KeyError) as exc:
             raise EditPathError(f"invalid base64 project state: {exc}") from exc
         return _decode_qcompress_bytes(encoded, reference)
-    relative = safe_relative(str(reference.get("path", "")))
-    path = base_dir / relative
+    raw_path = Path(str(reference.get("path", "")))
+    if raw_path.is_absolute():
+        raise EditPathError(f"unsafe bundle path: {raw_path!s}")
+    path = (base_dir / raw_path).resolve()
+    try:
+        path.relative_to(base_dir.resolve().parent)
+    except ValueError:
+        raise EditPathError(f"unsafe bundle path: {raw_path!s}")
     if not path.is_file() or path.is_symlink():
         raise EditPathError(f"project state sidecar is missing: {relative}")
     encoded = path.read_bytes()

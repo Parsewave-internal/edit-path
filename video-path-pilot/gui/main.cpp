@@ -382,15 +382,24 @@ private:
         // reasoning segment.  The editor controls the lifecycle explicitly;
         // finalization/transcription happens only when requested below.
         m_audioCapture.terminate();
+        bool forced = false;
         if (!m_audioCapture.waitForFinished(1500)) {
             // Windows console capture processes do not always honor the
             // graceful terminate request.  Stop must be definitive.
             m_audioCapture.kill();
+            forced = true;
             m_audioCapture.waitForFinished(3000);
         }
         m_recordReasoning->setEnabled(true); m_stopReasoning->setEnabled(false);
+        const QFileInfo recording(m_audioOutput);
+        if (!recording.isFile() || recording.size() < 128) {
+            setStatus(QStringLiteral("Reasoning audio could not be finalized; continuing without transcription."), true);
+            m_activity->appendPlainText(QStringLiteral("No usable reasoning audio was produced (%1 stop).").arg(forced ? QStringLiteral("forced") : QStringLiteral("normal")));
+            return;
+        }
         m_activity->appendPlainText(QStringLiteral("Reasoning audio saved: %1").arg(m_audioOutput));
-        setStatus(QStringLiteral("Reasoning audio saved. Transcription will run asynchronously when the sample is finalized."));
+        setStatus(forced ? QStringLiteral("Reasoning audio saved after forced stop; transcription may be unavailable.")
+                         : QStringLiteral("Reasoning audio saved. Transcription will run asynchronously when the sample is finalized."), forced);
     }
 
     void writeManifest(const QString &status)

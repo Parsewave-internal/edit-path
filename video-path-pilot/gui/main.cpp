@@ -325,7 +325,12 @@ private:
                 if (acknowledgement.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
                     acknowledgement.write(QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs).toUtf8());
                 }
-                if (m_editor.state() != QProcess::NotRunning) hide();
+                // Keep the compact supervisor visible while Kdenlive runs so
+                // editors can access Record/Stop Reasoning and session status.
+                if (m_editor.state() != QProcess::NotRunning) {
+                    show();
+                    raise();
+                }
             }
         });
     }
@@ -347,7 +352,7 @@ private:
         if (ffmpeg.isEmpty()) { setStatus(QStringLiteral("FFmpeg was not found; reasoning audio was not started."), true); return; }
         m_audioOutput = output;
         QString microphone = QStringLiteral("default");
-        const QString configured = QDir(QStandardPaths::writableLocation(QStandardPaths::LocalAppDataLocation)).filePath(QStringLiteral("EditPath/microphone-device.txt"));
+        const QString configured = QDir(QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation)).filePath(QStringLiteral("EditPath/microphone-device.txt"));
         QFile microphoneFile(configured);
         if (microphoneFile.open(QIODevice::ReadOnly | QIODevice::Text)) microphone = QString::fromUtf8(microphoneFile.readAll()).trimmed();
         m_audioCapture.start(ffmpeg, {QStringLiteral("-hide_banner"), QStringLiteral("-loglevel"), QStringLiteral("error"), QStringLiteral("-f"), QStringLiteral("dshow"), QStringLiteral("-i"), QStringLiteral("audio=") + microphone, QStringLiteral("-c:a"), QStringLiteral("flac"), QStringLiteral("-y"), output});

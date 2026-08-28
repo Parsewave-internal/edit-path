@@ -19,6 +19,7 @@ from unittest import mock
 from edit_path.io import replace_with_retry, sha256_file, write_json, write_jsonl
 from edit_path.errors import EditPathError, GateError
 from edit_path.pipeline import (
+    attribution_coverage,
     build_dataset_index,
     build_qa_queue,
     ingest_session,
@@ -41,7 +42,14 @@ from edit_path.process_video import (
 )
 from edit_path.reconstruct import render_project, select_video_encoder
 from edit_path.runtime import runtime_fingerprint
-from edit_path.state import canonical_hash, load_state_reference, resolve_accepted_branch, validate_action_semantics
+from edit_path.state import (
+    canonical_hash,
+    effect_operation_name,
+    load_state_reference,
+    operation_name,
+    resolve_accepted_branch,
+    validate_action_semantics,
+)
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "video-path-pilot"))
 from job_pipeline import finalize_session
@@ -104,6 +112,30 @@ class BranchResolutionTests(unittest.TestCase):
         redo = event(5, "state.diff", boundary="redo", transaction_id="redo", undo_entry_id="entry", target_transaction_id="tx", project_before_hash=p0, project_after_hash=p2)
         self.assertEqual(resolve_accepted_branch([checkpoint, first, merged, undo], require_targets=True).accepted, [])
         self.assertEqual(resolve_accepted_branch([checkpoint, first, merged, undo, redo], require_targets=True).accepted, [first, merged])
+
+    def test_undo_reserializing_the_project_still_has_to_restore_the_timeline(self) -> None:
+        """Observed on a real session: 6/6 undos restored the semantic snapshot
+        exactly while 3/6 rewrote incidental project XML. The gate has to accept
+        the reserialization and still reject a genuinely wrong restore."""
+        p0, p1, p0_rewritten = ("a" * 64, "b" * 64, "c" * 64)
+        s0, s1 = ("d" * 64, "e" * 64)
+        checkpoint = event(1, "state.checkpoint", state_hash=s0, snapshot={}, project_state={"sha256": p0})
+        commit = event(2, "state.diff", boundary="commit", transaction_id="tx", undo_entry_id="entry",
+                       project_before_hash=p0, project_after_hash=p1, before_hash=s0, after_hash=s1)
+
+        # Project bytes differ after the undo, timeline is restored: accepted.
+        undo = event(3, "state.diff", boundary="undo", transaction_id="undo", undo_entry_id="entry",
+                     target_transaction_id="tx", project_before_hash=p1, project_after_hash=p0_rewritten,
+                     before_hash=s1, after_hash=s0)
+        resolution = resolve_accepted_branch([checkpoint, commit, undo], require_targets=True)
+        self.assertEqual(resolution.accepted, [])
+
+        # Timeline not restored: still rejected, so the gate keeps its teeth.
+        wrong = event(3, "state.diff", boundary="undo", transaction_id="undo", undo_entry_id="entry",
+                      target_transaction_id="tx", project_before_hash=p1, project_after_hash=p0,
+                      before_hash=s1, after_hash="f" * 64)
+        with self.assertRaisesRegex(GateError, "undo should restore semantic state"):
+            resolve_accepted_branch([checkpoint, commit, wrong], require_targets=True)
 
     def test_wrong_undo_target_is_rejected(self) -> None:
         p0, p1, p0_again = (character * 64 for character in "aba")
@@ -823,6 +855,308 @@ class MediaIntegrationTests(unittest.TestCase):
             self.assertEqual(sample["output"]["reconstructed_video"], "verification/reconstructed.mp4")
             self.assertEqual(json.loads((root / "session.json").read_text(encoding="utf-8"))["status"], "packaged")
             self.assertEqual(json.loads((completed / "session.json").read_text(encoding="utf-8"))["status"], "packaged")
+
+
+class CommandCorrelationTests(unittest.TestCase):
+    """Joining ui.command evidence to the state it produced.
+
+    The recorder stamps interaction_id onto a diff only inside a two-second
+    window after the input, but stamps transaction_id unconditionally. These
+    pin the transaction join so command correlation stops depending on how fast
+    the editor happened to be working.
+    """
+
+    CLIP = {"native_id": 1, "entity_id": "clip-1", "track_native_id": 2,
+            "timeline_start_frame": 0, "duration_frames": 25, "effects": []}
+    EMPTY = {"timeline_id": "tl", "duration_frames": 0, "tracks": [], "clips": [],
+             "compositions": [], "mixes": [], "master_effects": []}
+
+    def _snapshots(self) -> tuple[dict, dict]:
+        before = {**self.EMPTY, "duration_frames": 25, "clips": [dict(self.CLIP)]}
+        after = {**self.EMPTY, "duration_frames": 35,
+                 "clips": [{**self.CLIP, "timeline_start_frame": 10}]}
+        return before, after
+
+    def _baseline(self) -> dict:
+        before, _ = self._snapshots()
+        return event(1, "state.checkpoint", timeline_id="tl", label="baseline",
+                     snapshot=before, state_hash=canonical_hash(before))
+
+    def _diff(self, sequence: int, **values: object) -> dict:
+        """A real move, hash-chained onto the baseline so the gates accept it."""
+        before, after = self._snapshots()
+        return event(
+            sequence,
+            "state.diff",
+            boundary="commit",
+            timeline_id="tl",
+            label="Move clip",
+            before_hash=canonical_hash(before),
+            after_hash=canonical_hash(after),
+            diff={
+                "changes": [
+                    {
+                        "entity": "clip",
+                        "native_id": 1,
+                        "change": "updated",
+                        "before": before["clips"][0],
+                        "after": after["clips"][0],
+                    }
+                ],
+                "duration_before": 25,
+                "duration_after": 35,
+            },
+            **values,
+        )
+
+    def test_command_links_to_its_diff_without_an_interaction_id(self) -> None:
+        # The case the interaction index cannot serve: the editor paused, so the
+        # recorder never stamped interaction_id onto the diff.
+        command = event(2, "ui.command", interaction_id="i-1", command_id="edit_move",
+                        label="Move", source="menu", shortcuts=[], transaction_id="tx-1")
+        diff = self._diff(3, transaction_id="tx-1")
+
+        moments = build_replay_moments([self._baseline(), command, diff])
+        command_moment = next(m for m in moments if m["event_type"] == "ui.command")
+
+        self.assertIsNotNone(command_moment["linked_diff"])
+        self.assertEqual(command_moment["linked_diff"]["transaction_id"], "tx-1")
+
+    def test_unmapped_command_is_named_by_the_state_it_produced(self) -> None:
+        # command_id "unmapped" means the Qt action had no objectName. Falling
+        # back to the diff is more informative than the visible label.
+        command = event(2, "ui.command", interaction_id="i-1", command_id="unmapped",
+                        label="Some Menu Item", source="menu", shortcuts=[], transaction_id="tx-1")
+        diff = self._diff(3, transaction_id="tx-1")
+
+        moments = build_replay_moments([self._baseline(), command, diff])
+        command_moment = next(m for m in moments if m["event_type"] == "ui.command")
+
+        self.assertEqual(command_moment["operation"], "clip.move")
+
+    def test_unmapped_command_without_a_link_still_falls_back_to_its_label(self) -> None:
+        command = event(2, "ui.command", interaction_id="i-1", command_id="unmapped",
+                        label="Some Menu Item", source="menu", shortcuts=[])
+
+        moments = build_replay_moments([self._baseline(), command])
+        command_moment = next(m for m in moments if m["event_type"] == "ui.command")
+
+        self.assertIsNone(command_moment["linked_diff"])
+        self.assertEqual(command_moment["operation"], "command.some_menu_item")
+
+    def test_interaction_id_still_wins_when_the_recorder_supplied_one(self) -> None:
+        # The existing join must keep priority: it is the recorder's own
+        # statement about causation, where the transaction join is an inference.
+        command = event(2, "ui.command", interaction_id="i-1", command_id="edit_move",
+                        label="Move", source="menu", shortcuts=[], transaction_id="tx-other")
+        precise = self._diff(3, interaction_id="i-1", transaction_id="tx-precise")
+        competing = self._diff(4, transaction_id="tx-other")
+
+        # Two diffs cannot share one hash chain, and the chain is not what this
+        # test is about, so the transition gate is isolated out.
+        with mock.patch("edit_path.process_video.validate_state_transitions", return_value=(None, [])):
+            moments = build_replay_moments([command, precise, competing])
+        command_moment = next(m for m in moments if m["event_type"] == "ui.command")
+
+        self.assertEqual(command_moment["linked_diff"]["transaction_id"], "tx-precise")
+
+    def test_coverage_counts_unmapped_and_correlated_commands(self) -> None:
+        diff = self._diff(2, transaction_id="tx-1")
+        mapped = event(3, "ui.command", interaction_id="i-1", command_id="edit_move",
+                       label="Move", source="menu", shortcuts=[], transaction_id="tx-1")
+        unmapped = event(4, "ui.command", interaction_id="i-2", command_id="unmapped",
+                         label="Mystery", source="menu", shortcuts=[])
+        events = [self._baseline(), diff, mapped, unmapped]
+
+        coverage = attribution_coverage(validate_action_semantics(events, [diff]), events)
+
+        self.assertEqual(coverage["ui_commands"], 2)
+        self.assertEqual(coverage["unmapped_commands"], 1)
+        self.assertEqual(coverage["transaction_linked_commands"], 1)
+
+
+class EffectAttributionTests(unittest.TestCase):
+    """Effect and keyframe intent recovered from the diffs the recorder already writes.
+
+    The fixtures mirror ``canonicalXmlElement`` in videopathrecorder.cpp: each
+    effect is ``{"name": "effect", "attributes": {"id": ...}, "children": [...]}``
+    and each parameter is a ``property`` child whose value lives in ``text``.
+    """
+
+    @staticmethod
+    def _effect(identifier: str, **properties: str) -> dict:
+        return {
+            "name": "effect",
+            "attributes": {"id": identifier},
+            "children": [
+                {"name": "property", "attributes": {"name": name}, "text": value}
+                for name, value in properties.items()
+            ],
+        }
+
+    def _clip_diff(self, before: list, after: list) -> dict:
+        return {
+            "changes": [
+                {
+                    "entity": "clip",
+                    "native_id": 1,
+                    "change": "updated",
+                    "before": {"effects": before},
+                    "after": {"effects": after},
+                }
+            ]
+        }
+
+    def test_stack_membership_changes_are_named(self) -> None:
+        transform = self._effect("qtblend", rect="0 0 100 100")
+        blur = self._effect("avfilter.gblur", sigma="5")
+        self.assertEqual(effect_operation_name([], [transform]), "effect.add")
+        self.assertEqual(effect_operation_name([transform], []), "effect.remove")
+        self.assertEqual(effect_operation_name([transform, blur], [blur, transform]), "effect.reorder")
+        self.assertIsNone(effect_operation_name([transform], [transform]))
+
+    def test_keyframed_parameter_is_distinguished_from_a_static_one(self) -> None:
+        # MLT writes animated values as "frame=value" pairs; that is the only
+        # reliable signal, since parameter names differ per effect.
+        static_before = self._effect("avfilter.gblur", sigma="5")
+        static_after = self._effect("avfilter.gblur", sigma="8")
+        self.assertEqual(
+            operation_name(self._clip_diff([static_before], [static_after])),
+            "effect.parameter_change",
+        )
+        keyed_before = self._effect("qtblend", rect="0=0 0 100 100")
+        keyed_after = self._effect("qtblend", rect="0=0 0 100 100;50=10 10 80 80")
+        self.assertEqual(
+            operation_name(self._clip_diff([keyed_before], [keyed_after])),
+            "effect.keyframe_change",
+        )
+
+    def test_repeated_effect_ids_are_told_apart_by_stack_position(self) -> None:
+        # Kdenlive allows the same effect twice on one clip, so the id alone
+        # cannot identify it; a change to the second copy must still register.
+        first = self._effect("avfilter.gblur", sigma="5")
+        second = self._effect("avfilter.gblur", sigma="9")
+        changed = self._effect("avfilter.gblur", sigma="12")
+        self.assertEqual(
+            operation_name(self._clip_diff([first, second], [first, changed])),
+            "effect.parameter_change",
+        )
+
+    def test_effect_work_on_tracks_and_master_is_attributed_too(self) -> None:
+        before = self._effect("volume", level="0")
+        after = self._effect("volume", level="-6")
+        for entity, fallback_fields in (("track", {}), ("master_effect", {})):
+            diff = {
+                "changes": [
+                    {
+                        "entity": entity,
+                        "native_id": 0,
+                        "change": "updated",
+                        "before": {"effects": [before], **fallback_fields},
+                        "after": {"effects": [after], **fallback_fields},
+                    }
+                ]
+            }
+            self.assertEqual(operation_name(diff), "effect.parameter_change", entity)
+
+    def test_track_state_change_alongside_effects_stays_a_state_change(self) -> None:
+        # Claiming effect intent when the mute flag also moved would mislabel
+        # the transaction, so the classifier only claims it when nothing else did.
+        diff = {
+            "changes": [
+                {
+                    "entity": "track",
+                    "native_id": 0,
+                    "change": "updated",
+                    "before": {"muted": False, "effects": [self._effect("volume", level="0")]},
+                    "after": {"muted": True, "effects": [self._effect("volume", level="-6")]},
+                }
+            ]
+        }
+        self.assertEqual(operation_name(diff), "track.set_state")
+
+    def test_declared_effect_action_links_to_the_effect_diff(self) -> None:
+        before = self._effect("qtblend", rect="0=0 0 100 100")
+        after = self._effect("qtblend", rect="0=0 0 100 100;50=10 10 80 80")
+        diff = event(2, "state.diff", boundary="commit", transaction_id="tx", diff=self._clip_diff([before], [after]))
+        action = event(3, "action", action="effect.keyframe_change", transaction_id="tx", timeline_id="timeline", parameters={})
+
+        reports = validate_action_semantics([diff, action], [diff])
+
+        self.assertEqual(reports[0]["inferred"], "effect.keyframe_change")
+        self.assertEqual(reports[0]["attribution"], "transaction")
+        self.assertTrue(reports[0]["compatible"])
+        self.assertEqual(reports[0]["status"], "passed")
+
+    def test_generic_inference_does_not_degrade_a_specific_declared_effect_action(self) -> None:
+        # An add plus a removal at different positions is real effect work the
+        # classifier cannot narrow down; that limit must not read as a conflict.
+        before = [self._effect("qtblend", rect="0 0 100 100")]
+        after = [self._effect("avfilter.gblur", sigma="5"), self._effect("volume", level="-6")]
+        self.assertEqual(operation_name(self._clip_diff(before, after)), "effect.change")
+        diff = event(2, "state.diff", boundary="commit", transaction_id="tx", diff=self._clip_diff(before, after))
+        action = event(3, "action", action="effect.add", transaction_id="tx", timeline_id="timeline", parameters={})
+
+        reports = validate_action_semantics([diff, action], [diff])
+
+        self.assertTrue(reports[0]["compatible"])
+        self.assertEqual(reports[0]["status"], "passed")
+
+    def test_keyframe_work_takes_precedence_over_a_static_tweak(self) -> None:
+        # One transaction can carry both. Keyframe work is the more specific
+        # claim and the harder signal to recover later, so it wins; pinning the
+        # precedence keeps the label stable rather than order-dependent.
+        before = self._effect("qtblend", rect="0=1 1 2 2", sigma="5")
+        after = self._effect("qtblend", rect="0=1 1 2 2;9=3 3 4 4", sigma="7")
+        self.assertEqual(
+            operation_name(self._clip_diff([before], [after])),
+            "effect.keyframe_change",
+        )
+
+    def test_keyframe_edit_on_an_existing_effect_is_not_read_as_an_add(self) -> None:
+        # The case the record is mostly made of: the effect was already on the
+        # clip and only its animation changed.
+        before = self._effect("avfilter.dblur", **{"av.angle": "0=45"})
+        after = self._effect("avfilter.dblur", **{"av.angle": "0=45;60=135"})
+        self.assertEqual(
+            operation_name(self._clip_diff([before], [after])),
+            "effect.keyframe_change",
+        )
+
+    def test_coverage_metric_reports_the_unattributed_share(self) -> None:
+        keyed = self._clip_diff(
+            [self._effect("qtblend", rect="0=0 0 100 100")],
+            [self._effect("qtblend", rect="0=0 0 100 100;50=10 10 80 80")],
+        )
+        moved = {
+            "changes": [
+                {
+                    "entity": "clip",
+                    "native_id": 1,
+                    "change": "updated",
+                    "before": {"timeline_start_frame": 0},
+                    "after": {"timeline_start_frame": 10},
+                }
+            ]
+        }
+        linked = event(2, "state.diff", boundary="commit", transaction_id="tx-move", diff=moved)
+        action = event(3, "action", action="clip.move", transaction_id="tx-move", timeline_id="timeline", parameters={})
+        unlinked = event(4, "state.diff", boundary="commit", transaction_id="tx-effect", diff=keyed)
+        command = event(5, "ui.command", interaction_id="i-1", command_id="c", label="l", source="menu", shortcuts=[])
+        events = [linked, action, unlinked, command]
+
+        coverage = attribution_coverage(validate_action_semantics(events, [linked, unlinked]), events)
+
+        self.assertEqual(coverage["total_transactions"], 2)
+        self.assertEqual(coverage["attributed_transactions"], 1)
+        self.assertEqual(coverage["attributed_ratio"], 0.5)
+        self.assertEqual(coverage["by_attribution"], {"state_only": 1, "transaction": 1})
+        self.assertEqual(
+            coverage["inferred_operations"],
+            {"clip.move": 1, "effect.keyframe_change": 1},
+        )
+        self.assertEqual(coverage["ui_commands"], 1)
+        self.assertEqual(coverage["distinct_interactions"], 1)
 
 
 if __name__ == "__main__":

@@ -111,6 +111,12 @@ def _event_operation(event: dict[str, Any], linked_diff: dict[str, Any] | None) 
         command_id = event.get("command_id")
         if isinstance(command_id, str) and command_id != "unmapped":
             return f"command.{command_id}"
+        # Qt actions without an objectName are recorded as "unmapped"
+        # (videopathrecorder.cpp:870). The visible label is the only remaining
+        # identity, but when the command is linked to the state it produced the
+        # diff says what it actually did, which is the more useful label.
+        if linked_diff is not None:
+            return operation_name(linked_diff.get("diff", {}))
         return f"command.{str(event.get('label') or 'unknown').lower().replace(' ', '_')}"
     if event_type == "ui.gesture":
         if linked_diff is not None:
@@ -156,6 +162,16 @@ def build_replay_moments(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
         for event in diffs
         if isinstance(event.get("interaction_id"), str)
     }
+    # The recorder only stamps interaction_id onto a diff when the edit landed
+    # within two seconds of the input (videopathrecorder.cpp:814), so that index
+    # silently thins out whenever the editor paused mid-gesture. transaction_id
+    # is written unconditionally, and recordCommand() stamps the same id onto the
+    # command, so joining on it links UI evidence to state regardless of timing.
+    by_transaction: dict[str, dict[str, Any]] = {}
+    for event in diffs:
+        transaction_id = event.get("transaction_id")
+        if isinstance(transaction_id, str):
+            by_transaction.setdefault(transaction_id, event)
     ordered = sorted(events, key=lambda value: event_sequence(value) or -1)
     empty = _empty_snapshot(events, state_reports)
     current_snapshot = copy.deepcopy(empty)
@@ -170,6 +186,8 @@ def build_replay_moments(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if event.get("event_type") not in REPLAY_EVENT_TYPES:
             continue
         linked_diff = by_interaction.get(event.get("interaction_id"))
+        if linked_diff is None and isinstance(event.get("transaction_id"), str):
+            linked_diff = by_transaction.get(event["transaction_id"])
         if linked_diff is None and event.get("event_type") in {"ui.gesture", "ui.shortcut"}:
             sequence = event_sequence(event) or -1
             linked_diff = next(

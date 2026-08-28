@@ -15,6 +15,7 @@ from .pipeline import (
     build_qa_queue,
     build_dataset_index,
     ingest_session,
+    attribution_coverage,
     process_next_queued,
     process_session,
     record_qa_review,
@@ -39,6 +40,7 @@ def command_inspect(args: argparse.Namespace) -> int:
     try:
         _, states = validate_state_transitions(events)
         branch = resolve_accepted_branch(events, require_targets=any(event.get("schema_version") == "0.3.0" for event in events))
+        actions = validate_action_semantics(events, branch.accepted)
         result.update({
             "state_transitions_valid": True,
             "state_events": len(states),
@@ -46,7 +48,8 @@ def command_inspect(args: argparse.Namespace) -> int:
             "baseline_hash": branch.baseline_hash,
             "final_hash": branch.final_hash,
             "semantic_activity": semantic_activity(branch.accepted),
-            "action_semantics": validate_action_semantics(events, branch.accepted),
+            "action_semantics": actions,
+            "attribution_coverage": attribution_coverage(actions, events),
         })
     except EditPathError as error:
         result.update({"state_transitions_valid": False, "state_error": str(error)})

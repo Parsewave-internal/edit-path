@@ -15,6 +15,7 @@ from job_pipeline import (canonical_hash, discover_rendered_video, embedded_proj
 from normalize_sample import accepted_commits, build_sample
 from sample_collector import bind_project_assets
 from validate_sample import validate_sample
+from validate_video_path import ALLOWED_ACTIONS
 from validate_video_path import validate as validate_raw
 
 HASH_B = "b" * 64
@@ -412,6 +413,24 @@ class MvpTests(unittest.TestCase):
             report = replay_report([path])
             self.assertEqual(report["canonical_state_replay"], "passed")
             self.assertEqual(report["reconstructed_render"], "not_implemented")
+
+
+class ActionVocabularyTests(unittest.TestCase):
+    def test_validator_and_schema_agree_on_the_action_vocabulary(self):
+        """Keep the two vocabularies in lockstep.
+
+        They are enforced independently, so a drift means instrumentation can
+        emit an action one accepts and the other rejects.
+        """
+        schema = json.loads((Path(__file__).parents[1] / "video-path.schema.json").read_text(encoding="utf-8"))
+        self.assertEqual(set(schema["properties"]["action"]["enum"]), ALLOWED_ACTIONS)
+
+    def test_effect_actions_are_accepted_by_the_raw_validator(self):
+        self.assertLessEqual(
+            {"effect.add", "effect.remove", "effect.reorder",
+             "effect.parameter_change", "effect.keyframe_change"},
+            ALLOWED_ACTIONS,
+        )
 
 
 if __name__ == "__main__":

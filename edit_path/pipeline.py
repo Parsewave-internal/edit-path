@@ -79,6 +79,50 @@ def validate_event_envelope(events: list[dict[str, Any]], *, require_complete: b
     return {"session_id": next(iter(session_ids)), "schema_version": next(iter(schema_versions)), "complete": complete, "events": len(events)}
 
 
+def attribution_coverage(actions: list[dict[str, Any]], events: list[dict[str, Any]]) -> dict[str, Any]:
+    """Summarise how much of the accepted edit has recorded intent behind it.
+
+    The reports already say how each transaction was attributed; nothing
+    aggregated them, so a session where almost every diff is ``state_only``
+    looked identical to a fully attributed one in the render report. Publishing
+    the ratio makes attribution a measurable dataset property instead of
+    something a consumer has to recompute from the raw reports.
+    """
+    reports = [report for report in actions if report.get("status") != "ignored"]
+    by_attribution: dict[str, int] = {}
+    for report in reports:
+        key = str(report.get("attribution"))
+        by_attribution[key] = by_attribution.get(key, 0) + 1
+    linked = sum(1 for report in reports if report.get("linked"))
+    operations: dict[str, int] = {}
+    for report in reports:
+        inferred = str(report.get("inferred"))
+        operations[inferred] = operations.get(inferred, 0) + 1
+    commands = [event for event in events if event.get("event_type") == "ui.command"]
+    # command_id is the literal string "unmapped" when the Qt action carried no
+    # objectName (videopathrecorder.cpp:870). Counting it separates a naming gap
+    # in the editor from a correlation failure in the pipeline; the two need
+    # different fixes and were previously indistinguishable in the report.
+    unmapped = sum(1 for event in commands if event.get("command_id") == "unmapped")
+    correlated = sum(1 for event in commands if isinstance(event.get("transaction_id"), str))
+    interactions = {
+        str(event.get("interaction_id"))
+        for event in events
+        if event.get("event_type") in {"ui.command", "ui.shortcut", "ui.gesture"} and event.get("interaction_id")
+    }
+    return {
+        "attributed_transactions": linked,
+        "total_transactions": len(reports),
+        "attributed_ratio": round(linked / len(reports), 4) if reports else 0.0,
+        "by_attribution": dict(sorted(by_attribution.items())),
+        "inferred_operations": dict(sorted(operations.items())),
+        "ui_commands": len(commands),
+        "unmapped_commands": unmapped,
+        "transaction_linked_commands": correlated,
+        "distinct_interactions": len(interactions),
+    }
+
+
 def semantic_activity(accepted: list[dict[str, Any]], *, minimum_commits: int = 1, minimum_changed_entities: int = 1) -> dict[str, Any]:
     commits = len(accepted)
     entity_keys: set[tuple[str, str]] = set()
@@ -762,6 +806,7 @@ def process_session(
                 "project_states": project_states,
                 "stable_entities_checked": stable_entities,
                 "action_semantics": actions,
+                "attribution_coverage": attribution_coverage(actions, events),
                 "semantic_activity": activity,
                 "assets_verified": len(verified_assets),
                 "checkpoint_results": checkpoint_results,

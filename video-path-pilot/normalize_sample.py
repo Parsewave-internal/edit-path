@@ -85,6 +85,30 @@ def event_operation_name(event: dict) -> str:
     return operation_name(event.get("diff", {}))
 
 
+def effect_intent(event: dict) -> dict | None:
+    """Extract a stable, human-readable intent from an effect state change."""
+    changes = event.get("diff", {}).get("changes", [])
+    for change in changes:
+        if change.get("entity") != "clip":
+            continue
+        before = change.get("before", {})
+        after = change.get("after", {})
+        before_effects = before.get("effects", [])
+        after_effects = after.get("effects", [])
+        if before_effects == after_effects:
+            continue
+        return {
+            "kind": "effect.change",
+            "clip_native_id": change.get("native_id"),
+            "before_effects": before_effects,
+            "after_effects": after_effects,
+            "transaction_id": event.get("transaction_id"),
+            "interaction_id": event.get("interaction_id") or event.get("transaction_id"),
+            "ambiguous": not bool(event.get("interaction_id")),
+        }
+    return None
+
+
 def normalized_change(change: dict, ids: dict[tuple[str, str], str], assets: dict[str, str]) -> dict:
     entity = str(change.get("entity"))
     native = str(change.get("native_id"))
@@ -201,14 +225,19 @@ def build_sample(root: Path, metadata: dict) -> dict:
     operations = []
     for index, event in enumerate(normalized_events, 1):
         diff = event.get("diff", {})
-        operations.append({
+        operation = {
             "operation_id": f"op_{index:04d}",
             "operation": event_operation_name(event),
             "changes": [normalized_change(change, ids, asset_refs) for change in diff.get("changes", [])],
             "resulting_state_hash": event.get("after_hash"),
             "evidence": {"raw_event_id": event.get("event_id"), "raw_sequence": event.get("sequence")},
             "extensions": {"kdenlive": {"command_label": event.get("label"), "boundary": event.get("boundary")}},
-        })
+        }
+        intent = effect_intent(event)
+        if intent:
+            operation["intent"] = intent
+            operation["interaction_id"] = intent["interaction_id"]
+        operations.append(operation)
     edit_path = {"time_unit": "frame", "operations": operations}
     if first_checkpoint:
         initial_native = copy.deepcopy(first_checkpoint["snapshot"])

@@ -45,7 +45,8 @@ class MvpTests(unittest.TestCase):
             self.assertTrue((root / "provenance/editor-project.kdenlive").is_file())
             self.assertIn(b"../inputs/assets/a.mp4", (root / "verification/reconstructed.kdenlive").read_bytes())
             bindings = json.loads((root / "provenance/asset-bindings.json").read_text())
-            self.assertEqual(bindings["bindings"], [{"asset_id": "asset_001", "bin_references": ["4"]}])
+            self.assertEqual(bindings["bindings"], [{"asset_id": "asset_001", "file": "assets/a.mp4",
+                                                       "sha256": "x", "bytes": 5, "bin_references": ["4"]}])
 
     def test_recorder_binds_delayed_actions_before_buffering(self):
         source = (Path(__file__).parents[2] / "src/videopath/videopathrecorder.cpp").read_text(encoding="utf-8")

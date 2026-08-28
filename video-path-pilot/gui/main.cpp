@@ -152,6 +152,10 @@ public:
         : m_repoRoot(repositoryRoot())
     {
         setWindowTitle(QStringLiteral("EditPath"));
+        // Keep the supervisor reachable while Kdenlive is in the foreground.
+        // On Windows the editor otherwise covers this window, making the
+        // Record/Stop Reasoning controls impossible to access.
+        setWindowFlag(Qt::WindowStaysOnTopHint, true);
         resize(760, 540);
         buildUi();
         restoreLastSession();
@@ -512,7 +516,7 @@ private:
         m_editor.setWorkingDirectory(m_repoRoot);
         m_editor.setProcessChannelMode(QProcess::MergedChannels);
         m_editor.setStandardOutputFile(console, QIODevice::Append);
-        setStatus(QStringLiteral("Please wait. This window will hide automatically when Kdenlive is ready."));
+        setStatus(QStringLiteral("Kdenlive is starting. EditPath stays available above it; use Record Reasoning and Stop Reasoning while you edit."));
         m_activity->appendPlainText(QStringLiteral("Starting recording segment %1…").arg(number));
         QString program;
         QStringList arguments;
@@ -526,6 +530,10 @@ private:
         if (QFileInfo::exists(project)) arguments.append(project);
 #endif
         m_editor.start(program, arguments);
+        // Reassert visibility after launching Kdenlive (particularly on
+        // Windows where starting a child can activate and cover the parent).
+        show();
+        raise();
     }
 
     void editorFinished(int exitCode, QProcess::ExitStatus exitStatus)

@@ -430,8 +430,13 @@ def organize_dataset_item(bundle: Path, output_suffix: str) -> None:
         manifest = json.loads(bindings_path.read_text(encoding="utf-8"))
         bindings = []
         for asset in manifest.get("assets", []):
+            # Keep the complete portable binding.  The native bin reference and
+            # asset ID are not sufficient to identify media outside the editor;
+            # consumers also need the shipped path, original name, and digest.
             binding = {"asset_id": asset.get("asset_id")}
-            for key in ("bin_reference", "bin_references", "license_status"):
+            for key in ("file", "original_filename", "original_path", "source",
+                        "sha256", "bytes", "bin_reference", "bin_references",
+                        "license_status"):
                 if key in asset:
                     binding[key] = asset[key]
             bindings.append(binding)
@@ -504,6 +509,13 @@ def finalize_session(session: Path, project: Path, output: Path, job: dict, *, s
     if result["status"] != "accepted":
         raise ValueError(f"production reconstruction rejected at {result.get('gate')}: {result.get('message')}")
     source_bundle = Path(result["path"])
+    # A 0.3 delivery is not portable unless the referenced state snapshots and
+    # asset bindings are physically present. Fail before publishing a partial
+    # completed-sample bundle.
+    if not (source_bundle / "states").is_dir() or not any((source_bundle / "states").glob("*.kdenlive.zst")):
+        raise ValueError("production bundle is missing state sidecars")
+    if not (source_bundle / "asset-manifest.json").is_file():
+        raise ValueError("production bundle is missing asset manifest")
     completed = session / "completed-sample"
     if completed.exists(): raise ValueError(f"completed sample already exists: {completed}")
     replace_with_retry(source_bundle, completed)

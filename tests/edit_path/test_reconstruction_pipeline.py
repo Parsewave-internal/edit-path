@@ -113,6 +113,30 @@ class BranchResolutionTests(unittest.TestCase):
         self.assertEqual(resolve_accepted_branch([checkpoint, first, merged, undo], require_targets=True).accepted, [])
         self.assertEqual(resolve_accepted_branch([checkpoint, first, merged, undo, redo], require_targets=True).accepted, [first, merged])
 
+    def test_undo_reserializing_the_project_still_has_to_restore_the_timeline(self) -> None:
+        """Observed on a real session: 6/6 undos restored the semantic snapshot
+        exactly while 3/6 rewrote incidental project XML. The gate has to accept
+        the reserialization and still reject a genuinely wrong restore."""
+        p0, p1, p0_rewritten = ("a" * 64, "b" * 64, "c" * 64)
+        s0, s1 = ("d" * 64, "e" * 64)
+        checkpoint = event(1, "state.checkpoint", state_hash=s0, snapshot={}, project_state={"sha256": p0})
+        commit = event(2, "state.diff", boundary="commit", transaction_id="tx", undo_entry_id="entry",
+                       project_before_hash=p0, project_after_hash=p1, before_hash=s0, after_hash=s1)
+
+        # Project bytes differ after the undo, timeline is restored: accepted.
+        undo = event(3, "state.diff", boundary="undo", transaction_id="undo", undo_entry_id="entry",
+                     target_transaction_id="tx", project_before_hash=p1, project_after_hash=p0_rewritten,
+                     before_hash=s1, after_hash=s0)
+        resolution = resolve_accepted_branch([checkpoint, commit, undo], require_targets=True)
+        self.assertEqual(resolution.accepted, [])
+
+        # Timeline not restored: still rejected, so the gate keeps its teeth.
+        wrong = event(3, "state.diff", boundary="undo", transaction_id="undo", undo_entry_id="entry",
+                      target_transaction_id="tx", project_before_hash=p1, project_after_hash=p0,
+                      before_hash=s1, after_hash="f" * 64)
+        with self.assertRaisesRegex(GateError, "undo should restore semantic state"):
+            resolve_accepted_branch([checkpoint, commit, wrong], require_targets=True)
+
     def test_wrong_undo_target_is_rejected(self) -> None:
         p0, p1, p0_again = (character * 64 for character in "aba")
         checkpoint = event(1, "state.checkpoint", state_hash="d" * 64, snapshot={}, project_state={"sha256": p0})

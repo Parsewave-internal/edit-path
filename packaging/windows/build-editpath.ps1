@@ -241,8 +241,19 @@ if ($blueprintText.Contains($oldFilter)) {
 } elseif ($blueprintText.Contains($editPathOnlyFilter)) {
     $blueprintText = $blueprintText.Replace($editPathOnlyFilter, $newFilter)
     [IO.File]::WriteAllText($blueprint.FullName, $blueprintText, $utf8NoBom)
-} elseif (-not $blueprintText.Contains($newFilter)) {
-    Stop-Build "the Craft Kdenlive executable filter changed; update this script before building."
+} else {
+    # Craft periodically reformats this regex (line wrapping, escaping, or
+    # additional retained runtime binaries).  Requiring one exact string
+    # makes otherwise compatible Craft releases fail before the build starts.
+    # Validate the safety properties instead: this must be a bin exclusion
+    # filter and it must retain the executables/data EditPath needs.
+    $hasBinFilter = $blueprintText -match 'bin/\(\?!'
+    $requiredFilterEntries = @('ff', 'kdenlive', 'EditPath', 'kioworker', 'melt', 'data/kdenlive', 'video-path-pilot')
+    $missingFilterEntries = @($requiredFilterEntries | Where-Object { $blueprintText -notmatch [regex]::Escape($_) })
+    if (-not $hasBinFilter -or $missingFilterEntries.Count -gt 0) {
+        $missing = if ($missingFilterEntries.Count) { $missingFilterEntries -join ', ' } else { 'bin exclusion filter' }
+        Stop-Build "the Craft Kdenlive executable filter is incompatible; missing: $missing"
+    }
 }
 
 Write-Host "Building EditPath and all required Kdenlive dependencies..."

@@ -3,6 +3,7 @@ param(
   [ValidateSet('turbo','small','medium')][string]$Model = 'turbo',
   [string]$InstallRoot = "$env:LOCALAPPDATA\EditPath",
   [string]$ReportPath = "",
+  [string]$MicrophoneDevice = "",
   [switch]$Offline
 )
 $ErrorActionPreference='Stop'; Set-StrictMode -Version Latest
@@ -53,9 +54,21 @@ $passed=(Check 'microphone_directshow' {
   $stderr = $process.StandardError.ReadToEnd()
   $process.WaitForExit()
   $devices = "$stdout`n$stderr"
-  $match = [regex]::Match($devices, '"([^"\r\n]+)" \(audio\)')
-  if (-not $match.Success) { throw "No DirectShow audio device was found. Device output: $($devices.Substring([Math]::Max(0, $devices.Length - 1000)))" }
-  $audioDevice = $match.Groups[1].Value
+  $matches = [regex]::Matches($devices, '"([^"\r\n]+)" \(audio\)')
+  if ($matches.Count -eq 0) { throw "No DirectShow audio device was found. Device output: $($devices.Substring([Math]::Max(0, $devices.Length - 1000)))" }
+  $choices = @($matches | ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique)
+  if ($MicrophoneDevice) {
+    if ($choices -notcontains $MicrophoneDevice) { throw "Requested microphone was not found: $MicrophoneDevice" }
+    $audioDevice = $MicrophoneDevice
+  } elseif ($choices.Count -eq 1) {
+    $audioDevice = $choices[0]
+  } else {
+    Write-Host "Available microphones:" -ForegroundColor Cyan
+    for ($index=0; $index -lt $choices.Count; $index++) { Write-Host ("  [{0}] {1}" -f ($index + 1), $choices[$index]) }
+    do { $selection = Read-Host "Enter microphone number"; $number = 0; $valid = [int]::TryParse($selection, [ref]$number) -and $number -ge 1 -and $number -le $choices.Count } while (-not $valid)
+    $audioDevice = $choices[$number - 1]
+  }
+  Log "Selected microphone: $audioDevice"
   $audioDevice
 }) -and $passed
 if ($passed -and $audioDevice) { Set-Content (Join-Path $InstallRoot 'microphone-device.txt') $audioDevice -Encoding UTF8 }
@@ -67,7 +80,7 @@ foreach ($name in $checks.Keys) {
 }
 Log "Dependency summary:"
 foreach ($name in $summary.Keys) { Log ("  {0}: {1}" -f $name, $summary[$name]) }
-$report=[ordered]@{schema='edit-path/dependency-installer@1'; generated_at_utc=[DateTime]::UtcNow.ToString('o'); model=$Model; install_root=$InstallRoot; offline=[bool]$Offline; passed=$passed; summary=$summary; checks=$checks}
+$report=[ordered]@{schema='edit-path/dependency-installer@1'; generated_at_utc=[DateTime]::UtcNow.ToString('o'); model=$Model; install_root=$InstallRoot; microphone_device=$audioDevice; offline=[bool]$Offline; passed=$passed; summary=$summary; checks=$checks}
 $report | ConvertTo-Json -Depth 8 | Set-Content -Encoding UTF8 $ReportPath
 Log "Installer finished: passed=$passed; report=$ReportPath"
 Write-Output ($report | ConvertTo-Json -Depth 8)

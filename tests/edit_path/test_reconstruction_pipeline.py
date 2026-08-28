@@ -16,9 +16,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from edit_path.io import replace_with_retry, sha256_file, write_json, write_jsonl
+from edit_path.io import read_jsonl, replace_with_retry, sha256_file, write_json, write_jsonl
 from edit_path.errors import EditPathError, GateError
 from edit_path.pipeline import (
+    _rehome_verbatim_state_references,
+    _verify_no_dangling_state_references,
     build_dataset_index,
     build_qa_queue,
     ingest_session,
@@ -348,6 +350,46 @@ class StateTests(unittest.TestCase):
             (root / "state.zst").write_bytes(encoded)
             reference = {"encoding": "zstd", "path": "state.zst", "sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw)}
             self.assertEqual(load_state_reference(reference, root), raw)
+
+    def test_verbatim_logs_get_their_undone_state_sidecars_copied(self) -> None:
+        """States of undone edits are only named by the verbatim logs.
+
+        _clean_events drops unaccepted diffs, so _make_state_references_portable
+        never sees their sidecars. Without rehoming, the delivered bundle names
+        states it does not carry -- the reported "references 2,373 states/*"
+        failure.
+        """
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            session, bundle = root / "session", root / "bundle"
+            (session / "states").mkdir(parents=True)
+            bundle.mkdir()
+            raw = b"<mlt/>"
+            digest = hashlib.sha256(raw).hexdigest()
+            (session / "states" / "undone.zst").write_bytes(raw)
+            log = bundle / "raw-trajectory.jsonl"
+            write_jsonl(log, [
+                {"event_type": "state.diff", "sequence": 1, "project_state": {
+                    "encoding": "zstd", "path": "states/undone.zst", "base": "session",
+                    "sha256": digest, "bytes": len(raw)}},
+                {"event_type": "state.diff", "sequence": 2, "project_state": {
+                    "encoding": "zstd", "path": "states/never-written.zst", "base": "session",
+                    "sha256": "c" * 64, "bytes": 10}},
+            ])
+            result = _rehome_verbatim_state_references(session, session / "trajectory.jsonl", bundle, log)
+            self.assertEqual(result, {"copied": 1, "unavailable": 1})
+            self.assertTrue((bundle / "states" / f"{digest}.zst").is_file())
+            events = read_jsonl(log)
+            self.assertEqual(events[0]["project_state"]["path"], f"states/{digest}.zst")
+            # A sidecar the recorder never durably wrote is marked, not left dangling.
+            self.assertIs(events[1]["project_state"]["available"], False)
+            # The gate tolerates the explicit marker and rejects a real dangle.
+            _verify_no_dangling_state_references(bundle, [log])
+            events[1]["project_state"].pop("available")
+            write_jsonl(log, events)
+            with self.assertRaises(GateError) as caught:
+                _verify_no_dangling_state_references(bundle, [log])
+            self.assertEqual(caught.exception.gate, "state_sidecars")
 
 
 class RuntimeTests(unittest.TestCase):
@@ -681,6 +723,88 @@ class PublicationTests(unittest.TestCase):
             published = json.loads((bundle / "asset-manifest.json").read_text(encoding="utf-8"))
             self.assertNotIn("source", published["assets"][0])
             self.assertNotIn("original_path", published["assets"][0])
+
+    def test_published_bundle_carries_every_state_it_references(self) -> None:
+        """End-to-end packaging of the reported failure.
+
+        The session has an accepted edit and an undone one. Only the verbatim
+        raw log names the undone edit's sidecar, so before the fix that state
+        was referenced but never shipped, and no file named the final state.
+        """
+        try:
+            import zstandard
+        except ImportError:
+            self.skipTest("zstandard is not installed")
+        with tempfile.TemporaryDirectory() as temporary:
+            root, work = Path(temporary) / "session", Path(temporary) / "work"
+            output = Path(temporary) / "dataset" / "accepted"
+            (root / "assets").mkdir(parents=True)
+            (root / "states").mkdir()
+            work.mkdir()
+            asset = root / "assets" / "source.mp4"
+            asset.write_bytes(b"asset")
+            manifest = {"schema": "video-path/assets@2", "assets": [{
+                "asset_id": "asset_001", "original_filename": "source.mp4",
+                "file": "assets/source.mp4", "sha256": sha256_file(asset),
+                "bytes": 5, "license_status": "pending"}]}
+            write_json(root / "asset-manifest.json", manifest)
+
+            def sidecar(raw: bytes) -> dict:
+                digest = hashlib.sha256(raw).hexdigest()
+                (root / "states" / f"{digest}.kdenlive.zst").write_bytes(zstandard.ZstdCompressor().compress(raw))
+                return {"encoding": "zstd", "path": f"states/{digest}.kdenlive.zst",
+                        "base": "session", "sha256": digest, "bytes": len(raw)}
+
+            kept, undone = sidecar(b"<mlt>kept</mlt>"), sidecar(b"<mlt>undone</mlt>")
+            accepted_diff = event(2, "state.diff", event_id="kept", boundary="commit",
+                                  transaction_id="t1", project_state=kept)
+            events = [
+                event(1, "session.start"),
+                accepted_diff,
+                # Undone: dropped by _clean_events, so only the raw log names it.
+                event(3, "state.diff", event_id="dropped", boundary="undo",
+                      transaction_id="t2", project_state=undone),
+                event(4, "session.end", state_sidecars_complete=True),
+            ]
+            raw = root / "trajectory.jsonl"
+            write_jsonl(raw, events)
+            project = work / "reconstructed.kdenlive"
+            project.write_text("<mlt/>", encoding="utf-8")
+            for name, data in (("final.mp4", b"v"), ("reconstructed-output.mp4", b"r")):
+                (work / name).write_bytes(data)
+            write_json(work / "report.json", {"ok": True})
+
+            bundle = publish_bundle(root, output, "session-test", {
+                "final_video": work / "final.mp4",
+                "reconstructed_video": work / "reconstructed-output.mp4",
+                "project": project, "report": work / "report.json", "raw_trajectory": raw,
+                "manifest_path": root / "asset-manifest.json",
+            }, events, [accepted_diff], manifest)
+
+            # Both states ship, including the one only the verbatim log names.
+            for reference in (kept, undone):
+                self.assertTrue((bundle / "states" / f"{reference['sha256']}.kdenlive.zst").is_file())
+            self.assertEqual(
+                read_jsonl(bundle / "raw-trajectory.jsonl")[2]["project_state"]["path"],
+                f"states/{undone['sha256']}.kdenlive.zst",
+            )
+            # The final project state is named explicitly, not just implied.
+            final_state = json.loads((bundle / "final-project-state.json").read_text(encoding="utf-8"))
+            self.assertEqual(final_state["sha256"], kept["sha256"])
+
+            # Surviving the role-oriented layout is part of the guarantee.
+            sys.path.insert(0, str(Path(__file__).parents[2] / "video-path-pilot"))
+            from job_pipeline import organize_dataset_item
+
+            organize_dataset_item(bundle, ".mp4")
+            organized = json.loads((bundle / "verification" / "final-project-state.json").read_text(encoding="utf-8"))
+            self.assertEqual(organized["path"], f"provenance/states/{kept['sha256']}.kdenlive.zst")
+            self.assertTrue((bundle / organized["path"]).is_file())
+            for log in ("edit-path/events.jsonl", "provenance/assembled-events.jsonl"):
+                for entry in read_jsonl(bundle / log):
+                    reference = entry.get("project_state")
+                    if isinstance(reference, dict) and reference.get("path"):
+                        self.assertTrue((bundle / reference["path"]).is_file(), reference["path"])
 
 
 class LongSessionLoadTests(unittest.TestCase):

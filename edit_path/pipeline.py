@@ -414,6 +414,81 @@ def _copy_if_present(source: Path, destination: Path) -> None:
         shutil.copy2(source, destination)
 
 
+def _rehome_verbatim_state_references(
+    session_dir: Path,
+    trajectory: Path,
+    bundle: Path,
+    path: Path,
+) -> dict[str, Any]:
+    """Make the sidecar paths inside a verbatim-copied event log resolvable.
+
+    ``trajectory.jsonl`` is rewritten by ``_make_state_references_portable``,
+    but ``raw-trajectory.jsonl`` and the per-segment evidence logs are copied
+    byte-for-byte and keep session-relative ``states/...`` paths. Those states
+    belong to undone or rejected edits, so nothing else copies them, and the
+    delivered bundle ends up naming thousands of sidecars it does not contain.
+
+    Every sidecar that still exists is copied under its content address and the
+    reference is repointed at it. A sidecar the recorder never durably wrote is
+    marked ``available: false`` instead of being left as a dangling path, so a
+    consumer can tell a missing file from a broken one.
+    """
+    if not path.is_file():
+        return {"copied": 0, "unavailable": 0}
+    events = read_jsonl(path)
+    copied: set[str] = set()
+    unavailable = 0
+    for event in events:
+        for reference, directory in ((state_reference(event), "states"),
+                                     (event.get("reference_proxy"), "checkpoint_refs")):
+            if not isinstance(reference, dict) or not reference.get("path"):
+                continue
+            relative = safe_relative(str(reference["path"]))
+            base = session_dir if reference.get("base") == "session" else trajectory.parent
+            source = base / relative
+            if not source.is_file() or source.is_symlink():
+                reference["available"] = False
+                unavailable += 1
+                continue
+            suffix = "".join(source.suffixes) or ".state"
+            digest = reference.get("sha256") or sha256_file(source)
+            name = f"{digest}{suffix}" if directory == "states" else f"{sha256_file(source)}{source.suffix}"
+            destination = bundle / directory / name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            if not destination.exists():
+                shutil.copy2(source, destination)
+            reference["base"] = "session"
+            reference["path"] = destination.relative_to(bundle).as_posix()
+            copied.add(reference["path"])
+    write_jsonl(path, events)
+    return {"copied": len(copied), "unavailable": unavailable}
+
+
+def _verify_no_dangling_state_references(bundle: Path, logs: list[Path]) -> None:
+    """Fail packaging if any delivered event names a sidecar that is absent.
+
+    This is the gate the reported deliveries needed. A bundle whose record
+    points at states it does not carry cannot be used to verify a
+    reconstruction, so it must not be publishable.
+    """
+    for path in logs:
+        if not path.is_file():
+            continue
+        for event in read_jsonl(path):
+            for reference in (state_reference(event), event.get("reference_proxy")):
+                if not isinstance(reference, dict) or not reference.get("path"):
+                    continue
+                if reference.get("available") is False:
+                    continue
+                target = bundle / safe_relative(str(reference["path"]))
+                if not target.is_file():
+                    raise GateError(
+                        "state_sidecars",
+                        f"published bundle references a missing state sidecar: {reference['path']} ({path.name})",
+                        event_sequence(event),
+                    )
+
+
 def _public_asset_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
     """Remove local source paths that are needed only during ingestion."""
     value = copy.deepcopy(manifest)
@@ -500,6 +575,25 @@ def publish_bundle(
         raw_path = artifacts["raw_trajectory"]
         shutil.copy2(raw_path, temporary / "raw-trajectory.jsonl")
         write_json(temporary / "asset-manifest.json", _public_asset_manifest(manifest))
+        # The final project state is the last exact state in the record. Name it
+        # explicitly so a consumer has a defined target to verify a
+        # reconstruction against instead of only the rendered MP4.
+        final_state = next(
+            (
+                reference
+                for event in reversed(cleaned_events)
+                if isinstance((reference := state_reference(event)), dict) and reference.get("path")
+            ),
+            None,
+        )
+        if final_state is not None:
+            write_json(temporary / "final-project-state.json", {
+                "schema": "video-path/final-project-state@1",
+                "path": final_state["path"],
+                "sha256": final_state.get("sha256"),
+                "bytes": final_state.get("bytes"),
+                "encoding": final_state.get("encoding"),
+            })
         for optional in (
             "sample.json",
             "session.json",
@@ -511,6 +605,13 @@ def publish_bundle(
             _copy_if_present(session_dir / optional, temporary / optional)
         for raw_segment in sorted((session_dir / "evidence").glob("raw-events-*.jsonl")) if (session_dir / "evidence").is_dir() else []:
             _copy_if_present(raw_segment, temporary / "evidence" / raw_segment.name)
+        # Verbatim event logs still name session-relative sidecar paths. Copy
+        # those states in and repoint them, then refuse to publish a bundle that
+        # still references a sidecar it does not carry.
+        verbatim_logs = [temporary / "raw-trajectory.jsonl", *sorted((temporary / "evidence").glob("raw-events-*.jsonl"))]
+        for log in verbatim_logs:
+            _rehome_verbatim_state_references(session_dir, raw_path, temporary, log)
+        _verify_no_dangling_state_references(temporary, [temporary / "trajectory.jsonl", *verbatim_logs])
         bundle_manifest = {
             "schema": "video-path/bundle@1",
             "session_id": session_id,

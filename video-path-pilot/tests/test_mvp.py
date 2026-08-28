@@ -9,9 +9,9 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
-from job_pipeline import (canonical_hash, discover_rendered_video, embedded_project_assets,
-                          organize_dataset_item, project_render_output, project_resources, replay_report,
-                          resolve_assets, used_asset_references)
+from job_pipeline import (asset_reference_index, canonical_hash, discover_rendered_video,
+                          embedded_project_assets, organize_dataset_item, project_render_output,
+                          project_resources, replay_report, resolve_assets, used_asset_references)
 from normalize_sample import accepted_commits, build_sample
 from sample_collector import bind_project_assets
 from validate_sample import validate_sample
@@ -45,7 +45,82 @@ class MvpTests(unittest.TestCase):
             self.assertTrue((root / "provenance/editor-project.kdenlive").is_file())
             self.assertIn(b"../inputs/assets/a.mp4", (root / "verification/reconstructed.kdenlive").read_bytes())
             bindings = json.loads((root / "provenance/asset-bindings.json").read_text())
-            self.assertEqual(bindings["bindings"], [{"asset_id": "asset_001", "bin_references": ["4"]}])
+            # The published index keeps enough identity to resolve a bin ID to
+            # an input file. It must not republish "file": sample.json owns the
+            # organized path and load_manifest() overlays these keys onto it.
+            self.assertEqual(bindings["bindings"], [{
+                "asset_id": "asset_001", "sha256": "x", "bytes": 5, "bin_references": ["4"],
+            }])
+            self.assertNotIn("file", bindings["bindings"][0])
+
+    def _reference_events(self, root: Path, changes: list[dict], *, baseline_clips: list[dict] | None = None) -> Path:
+        events = [{"event_type": "state.checkpoint", "sequence": 1,
+                   "snapshot": {"clips": baseline_clips or []}, "state_hash": HASH_B},
+                  {"event_type": "state.diff", "boundary": "commit", "sequence": 2,
+                   "event_id": "e2", "after_hash": HASH_B, "diff": {"changes": changes}}]
+        path = root / "raw-events-001.jsonl"
+        path.write_text("".join(json.dumps(event) + "\n" for event in events), encoding="utf-8")
+        return path
+
+    def test_asset_references_resolve_through_hash_bindings_not_recorder_uuids(self):
+        """The recorder's per-clip asset_id is a session UUID, not a manifest ID.
+
+        Resolution must go through the sha256-derived bindings, otherwise every
+        reference silently fails to resolve on real v0.3 recordings.
+        """
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            raw = self._reference_events(root, [
+                {"entity": "clip", "native_id": 8, "change": "added",
+                 "after": {"asset_reference": "4", "asset_id": "3f2c9b10-7a41-4d2e-9c55-8ab0d1e6f7a9"}},
+                {"entity": "clip", "native_id": 9, "change": "added",
+                 "after": {"asset_reference": "5", "asset_id": "b81de4aa-2c37-4f19-8d60-11c9e0a5f3b2"}},
+            ])
+            assets = [{"asset_id": "asset_001", "original_filename": "clip_a.mp4", "sha256": "a" * 64},
+                      {"asset_id": "asset_002", "original_filename": "clip_b.mp4", "sha256": "b" * 64}]
+            index = asset_reference_index([raw], {"4": "asset_001", "5": "asset_002"}, assets, {})
+            self.assertEqual(index["4"]["asset_id"], "asset_001")
+            self.assertEqual(index["4"]["original_filename"], "clip_a.mp4")
+            self.assertEqual(index["5"]["original_filename"], "clip_b.mp4")
+            # The recorder UUID is preserved, but in its own field.
+            self.assertEqual(index["4"]["recorder_asset_uuid"], "3f2c9b10-7a41-4d2e-9c55-8ab0d1e6f7a9")
+
+    def test_asset_references_survive_more_references_than_files(self):
+        """The reported failure: 45 references over 39 files, order unusable."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            # Two bin IDs share one input file (a reimport), and one reference is
+            # an embedded title with no input file at all.
+            raw = self._reference_events(root, [
+                {"entity": "clip", "native_id": 1, "change": "added", "after": {"asset_reference": "4"}},
+                {"entity": "clip", "native_id": 2, "change": "added", "after": {"asset_reference": "7"}},
+                {"entity": "clip", "native_id": 3, "change": "added", "after": {"asset_reference": "9"}},
+            ])
+            assets = [{"asset_id": "asset_001", "original_filename": "shared.mp4", "sha256": "a" * 64}]
+            index = asset_reference_index(
+                [raw], {"4": "asset_001", "7": "asset_001"}, assets,
+                {"9": {"kind": "generator", "service": "kdenlivetitle"}},
+            )
+            self.assertEqual(index["4"]["original_filename"], "shared.mp4")
+            self.assertEqual(index["7"]["original_filename"], "shared.mp4")
+            self.assertEqual(index["9"]["resolution"], "embedded")
+            self.assertEqual(index["9"]["kind"], "generator")
+            self.assertNotIn("original_filename", index["9"])
+
+    def test_asset_references_include_untouched_baseline_clips(self):
+        """Clips present at the baseline never appear in a diff."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            raw = self._reference_events(
+                root,
+                [{"entity": "clip", "native_id": 2, "change": "added", "after": {"asset_reference": "7"}}],
+                baseline_clips=[{"native_id": 1, "asset_reference": "4"}],
+            )
+            assets = [{"asset_id": "asset_001", "original_filename": "baseline.mp4", "sha256": "a" * 64},
+                      {"asset_id": "asset_002", "original_filename": "added.mp4", "sha256": "b" * 64}]
+            index = asset_reference_index([raw], {"4": "asset_001", "7": "asset_002"}, assets, {})
+            self.assertEqual(sorted(index), ["4", "7"])
+            self.assertEqual(index["4"]["original_filename"], "baseline.mp4")
 
     def test_recorder_binds_delayed_actions_before_buffering(self):
         source = (Path(__file__).parents[2] / "src/videopath/videopathrecorder.cpp").read_text(encoding="utf-8")

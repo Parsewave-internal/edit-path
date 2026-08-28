@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import urllib.parse
@@ -460,6 +461,28 @@ def organize_dataset_item(bundle: Path, output_suffix: str) -> None:
         write_jsonl(events_path, events)
 
 
+def burn_reasoning_captions(bundle: Path) -> bool:
+    """Burn literal WebVTT reasoning captions into the visual replay."""
+    replay = bundle / "edit-path" / "replay.mp4"
+    captions = bundle / "reasoning" / "captions.vtt"
+    if not replay.is_file() or not captions.is_file() or not captions.read_text(encoding="utf-8").strip():
+        return False
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        candidate = Path(sys.executable).with_name("ffmpeg.exe")
+        ffmpeg = str(candidate) if candidate.is_file() else None
+    if not ffmpeg:
+        raise GateError("reasoning", "captions were requested but ffmpeg is unavailable")
+    temporary = replay.with_suffix(".captioned.mp4")
+    subtitle_path = str(captions).replace("\\", "/").replace(":", "\\:")
+    command = [ffmpeg, "-y", "-i", str(replay), "-vf", f"subtitles='{subtitle_path}'", "-c:a", "copy", str(temporary)]
+    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    if result.returncode != 0 or not temporary.is_file():
+        raise GateError("reasoning", f"caption rendering failed: {result.stderr[-1000:]}")
+    os.replace(temporary, replay)
+    return True
+
+
 def finalize_session(session: Path, project: Path, output: Path, job: dict, *, source_root: Path | None = None) -> Path:
     raw_paths = discover_segments(session)
     for index, path in enumerate(raw_paths):
@@ -520,6 +543,8 @@ def finalize_session(session: Path, project: Path, output: Path, job: dict, *, s
     if completed.exists(): raise ValueError(f"completed sample already exists: {completed}")
     replace_with_retry(source_bundle, completed)
     organize_dataset_item(completed, output.suffix.lower())
+    if (completed / "reasoning" / "captions.vtt").is_file():
+        burn_reasoning_captions(completed)
     dump(completed / "delivery-status.json", {
         "schema": "video-path/delivery-status@1",
         "complete": not delivery_issues,

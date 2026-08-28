@@ -37,7 +37,27 @@ $bundleBin = Join-Path $PSScriptRoot 'bin\ffmpeg.exe'
 $ffmpeg = if (Test-Path $bundleBin) { $bundleBin } else { (Get-Command ffmpeg.exe -ErrorAction Stop).Source }
 $passed=(Check 'ffmpeg' { if (-not (Test-Path $ffmpeg)) { throw "FFmpeg not found: $ffmpeg" }; $ffmpeg }) -and $passed
 $audioDevice = $null
-$passed=(Check 'microphone_directshow' { $devices=& $ffmpeg -hide_banner -list_devices true -f dshow -i dummy 2>&1; $audioLine=$devices | Where-Object { $_ -match '"(.+)" \(audio\)' } | Select-Object -First 1; if (-not $audioLine) { throw 'No DirectShow audio device was found' }; $audioDevice=([regex]::Match([string]$audioLine, '"(.+)" \(audio\)')).Groups[1].Value; if (-not $audioDevice) { throw 'Could not parse DirectShow microphone name' }; $audioDevice }) -and $passed
+$passed=(Check 'microphone_directshow' {
+  # Device enumeration intentionally exits non-zero because "dummy" is not
+  # a real input. Capture the complete stderr stream without allowing
+  # PowerShell's native-command error promotion to stop on the first device.
+  $start = New-Object System.Diagnostics.ProcessStartInfo
+  $start.FileName = $ffmpeg
+  $start.Arguments = '-hide_banner -list_devices true -f dshow -i dummy'
+  $start.UseShellExecute = $false
+  $start.CreateNoWindow = $true
+  $start.RedirectStandardOutput = $true
+  $start.RedirectStandardError = $true
+  $process = [System.Diagnostics.Process]::Start($start)
+  $stdout = $process.StandardOutput.ReadToEnd()
+  $stderr = $process.StandardError.ReadToEnd()
+  $process.WaitForExit()
+  $devices = "$stdout`n$stderr"
+  $match = [regex]::Match($devices, '"([^"\r\n]+)" \(audio\)')
+  if (-not $match.Success) { throw "No DirectShow audio device was found. Device output: $($devices.Substring([Math]::Max(0, $devices.Length - 1000)))" }
+  $audioDevice = $match.Groups[1].Value
+  $audioDevice
+}) -and $passed
 if ($passed -and $audioDevice) { Set-Content (Join-Path $InstallRoot 'microphone-device.txt') $audioDevice -Encoding UTF8 }
 if ($passed -and -not $Offline) { $passed=(Check 'model_download_and_self_test' { $probe=Join-Path $InstallRoot 'whisper-self-test.wav'; & $ffmpeg -hide_banner -loglevel error -f lavfi -i 'sine=frequency=440:duration=1' -y $probe; & $python -m whisper $probe --model $Model --output_format json --output_dir $InstallRoot --verbose False; if ($LASTEXITCODE) { throw 'Whisper self-test failed' }; Remove-Item $probe -Force -ErrorAction SilentlyContinue; 'passed' }) -and $passed }
 $summary = [ordered]@{}

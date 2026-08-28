@@ -378,11 +378,10 @@ private:
     void stopReasoning()
     {
         if (m_audioCapture.state() == QProcess::NotRunning) return;
-        // FFmpeg flushes and finalizes FLAC when it receives `q`.  terminate()
-        // alone is unreliable on Windows and can leave the editor believing
-        // reasoning is still active (or produce an unusable/truncated file).
-        m_audioCapture.write("q\n");
-        m_audioCapture.closeWriteChannel();
+        // Stop the capture process after the editor finishes its continuous
+        // reasoning segment.  The editor controls the lifecycle explicitly;
+        // finalization/transcription happens only when requested below.
+        m_audioCapture.terminate();
         if (!m_audioCapture.waitForFinished(5000)) { m_audioCapture.kill(); m_audioCapture.waitForFinished(2000); }
         m_recordReasoning->setEnabled(true); m_stopReasoning->setEnabled(false);
         m_activity->appendPlainText(QStringLiteral("Reasoning audio saved: %1").arg(m_audioOutput));

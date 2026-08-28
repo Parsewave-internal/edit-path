@@ -802,7 +802,8 @@ void VideoPathRecorder::captureTimelineChange(const QString &label, const QStrin
     event.insert(QStringLiteral("timeline_id"), timelineId);
     event.insert(QStringLiteral("before_hash"), QString::fromLatin1(QCryptographicHash::hash(beforeJson, QCryptographicHash::Sha256).toHex()));
     event.insert(QStringLiteral("after_hash"), QString::fromLatin1(QCryptographicHash::hash(afterJson, QCryptographicHash::Sha256).toHex()));
-    event.insert(QStringLiteral("diff"), diffSnapshots(before, after));
+    const QJsonObject timelineDiff = diffSnapshots(before, after);
+    event.insert(QStringLiteral("diff"), timelineDiff);
     const QJsonObject projectState = projectStateReference();
     if (!projectState.isEmpty()) {
         event.insert(QStringLiteral("project_state"), projectState);
@@ -813,6 +814,35 @@ void VideoPathRecorder::captureTimelineChange(const QString &label, const QStrin
     flushPendingActions(true);
     if (m_lastInteraction.isValid() && m_lastInteraction.elapsed() < 2000 && !m_lastInputInteractionId.isEmpty()) {
         event.insert(QStringLiteral("interaction_id"), m_lastInputInteractionId);
+    }
+    // Effect-panel and curve-editor edits may not produce a QAction or recent
+    // pointer event. Still give the state mutation an explicit correlation
+    // identity so it cannot disappear into an unlinked raw diff.
+    bool effectChange = false;
+    bool keyframeChange = false;
+    const QJsonArray changes = timelineDiff.value(QStringLiteral("changes")).toArray();
+    for (const QJsonValue &value : changes) {
+        const QJsonObject change = value.toObject();
+        if (change.value(QStringLiteral("entity")).toString() != QStringLiteral("clip")) continue;
+        const QJsonObject beforeClip = change.value(QStringLiteral("before")).toObject();
+        const QJsonObject afterClip = change.value(QStringLiteral("after")).toObject();
+        if (beforeClip.value(QStringLiteral("effects")) != afterClip.value(QStringLiteral("effects"))) {
+            effectChange = true;
+            const QString serialized = QJsonDocument(afterClip.value(QStringLiteral("effects")).toArray()).toJson(QJsonDocument::Compact);
+            keyframeChange = serialized.contains('=');
+            break;
+        }
+    }
+    if (effectChange) {
+        QString interactionId = event.value(QStringLiteral("interaction_id")).toString();
+        const bool ambiguous = interactionId.isEmpty();
+        if (interactionId.isEmpty()) interactionId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        event.insert(QStringLiteral("interaction_id"), interactionId);
+        QJsonObject intent;
+        intent.insert(QStringLiteral("kind"), keyframeChange ? QStringLiteral("keyframe.update") : QStringLiteral("effect.change"));
+        intent.insert(QStringLiteral("interaction_id"), interactionId);
+        intent.insert(QStringLiteral("ambiguous"), ambiguous);
+        event.insert(QStringLiteral("intent"), intent);
     }
     writeEvent(event);
     if (!projectState.isEmpty()) {

@@ -521,6 +521,7 @@ def publish_bundle(
             _copy_if_present(session_dir / optional, temporary / optional)
         _copy_if_present(session_dir / "EDIT-PATH/reasoning/captions.vtt", temporary / "reasoning/captions.vtt")
         _copy_if_present(session_dir / "EDIT-PATH/reasoning-events.jsonl", temporary / "reasoning/reasoning-events.jsonl")
+        _copy_if_present(session_dir / "EDIT-PATH/reasoning/reasoning.json", temporary / "reasoning/reasoning.json")
         _copy_if_present(session_dir / "EDIT-PATH/diagnostics.jsonl", temporary / "diagnostics.jsonl")
         for raw_segment in sorted((session_dir / "evidence").glob("raw-events-*.jsonl")) if (session_dir / "evidence").is_dir() else []:
             _copy_if_present(raw_segment, temporary / "evidence" / raw_segment.name)

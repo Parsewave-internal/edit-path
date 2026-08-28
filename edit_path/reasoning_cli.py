@@ -16,9 +16,20 @@ def main() -> int:
         try: events.extend(read_jsonl(candidate))
         except Exception: pass
     result=transcribe_reasoning_segments(session,[audio],provider=lambda path: transcribe_with_whisper(path),metadata={"event_count":len(events)})
+    aligned_records = []
+    event_ids = {e.get("event_id") for e in events if e.get("event_id")}
     for record in result["records"]:
         aligned = align_reasoning(record, events)
+        referenced = [x for x in aligned.get("overlapping_event_ids", []) if x in event_ids]
+        aligned["overlapping_event_ids"] = referenced
         write_json(session / "EDIT-PATH" / "reasoning" / f"transcript-{record['reasoning_segment_id']}.json", aligned)
-        record.update(aligned)
+        aligned_records.append(aligned)
+    write_json(session / "EDIT-PATH" / "reasoning" / "reasoning.json", {
+        "schema_version": "edit-path/reasoning-bundle@1",
+        "session_id": next((e.get("session_id") for e in events if e.get("session_id")), str(session.name)),
+        "audio_file": str(audio.relative_to(session)).replace("\\", "/"),
+        "event_count": len(events),
+        "segments": aligned_records,
+    })
     print(json.dumps(result, ensure_ascii=False)); return 0
 if __name__ == "__main__": raise SystemExit(main())

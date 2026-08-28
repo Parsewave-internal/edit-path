@@ -272,6 +272,126 @@ def resolve_accepted_branch(events: list[dict[str, Any]], *, require_targets: bo
     return BranchResolution(accepted, baseline_hash, current_hash, state_events)
 
 
+KEYFRAMABLE_HINTS = ("keyframes", "kdenlive:kfrhidden")
+
+
+def _effect_properties(effect: dict[str, Any]) -> dict[str, str]:
+    """Flatten one canonical effect element into ``property name -> value``.
+
+    ``EffectStackModel::toXml`` writes every parameter as a ``<property
+    name="...">value</property>`` child, and ``canonicalXmlElement`` turns that
+    into ``{"name": "property", "attributes": {"name": ...}, "text": ...}``.
+    Reading the properties back out is therefore the only way to tell *which*
+    parameter of an effect moved, which is what distinguishes a parameter tweak
+    from a keyframe edit.
+    """
+    properties: dict[str, str] = {}
+    for child in effect.get("children", []):
+        if not isinstance(child, dict) or child.get("name") != "property":
+            continue
+        name = child.get("attributes", {}).get("name")
+        if isinstance(name, str):
+            properties[name] = str(child.get("text", ""))
+    return properties
+
+
+def _effect_index(effects: Any) -> dict[str, dict[str, Any]]:
+    """Index an effect stack by ``id`` plus stack position.
+
+    Kdenlive allows the same effect to appear twice on one clip, so the id alone
+    is not a key. Position is part of the identity, which also means a reorder
+    shows up as a set of changed keys rather than as a value change.
+    """
+    index: dict[str, dict[str, Any]] = {}
+    if not isinstance(effects, list):
+        return index
+    for position, effect in enumerate(effects):
+        if not isinstance(effect, dict):
+            continue
+        identifier = effect.get("attributes", {}).get("id", "unknown")
+        index[f"{position}:{identifier}"] = effect
+    return index
+
+
+def effect_operation_name(before: Any, after: Any) -> str | None:
+    """Name the effect-stack edit between two serialized effect stacks.
+
+    The recorder already embeds the whole effect stack in every snapshot, so the
+    intent behind an effect edit is recoverable from the diff itself without any
+    extra instrumentation. This resolves the three cases the client asked about:
+    stack membership changes, keyframe work, and plain parameter changes.
+
+    Returns ``None`` when the two stacks are equal, so callers can distinguish
+    "no effect work" from "effect work we could not classify".
+    """
+    previous, current = _effect_index(before), _effect_index(after)
+    if previous == current:
+        return None
+    added = set(current) - set(previous)
+    removed = set(previous) - set(current)
+    if added and removed:
+        # Identity includes stack position, so a reorder presents as a
+        # simultaneous add and remove with an unchanged multiset of ids.
+        def identifiers(index: dict[str, dict[str, Any]]) -> list[str]:
+            return sorted(key.split(":", 1)[1] for key in index)
+
+        if identifiers(previous) == identifiers(current):
+            return "effect.reorder"
+        return "effect.change"
+    if added:
+        return "effect.add"
+    if removed:
+        return "effect.remove"
+    keyframed = False
+    parameterized = False
+    for key, effect in current.items():
+        before_properties = _effect_properties(previous[key])
+        after_properties = _effect_properties(effect)
+        for name in set(before_properties) | set(after_properties):
+            if before_properties.get(name) == after_properties.get(name):
+                continue
+            value = after_properties.get(name, "") or before_properties.get(name, "")
+            if any(hint in name for hint in KEYFRAMABLE_HINTS) or "=" in value:
+                # MLT serializes animated parameters as "frame=value" pairs, so
+                # an "=" in the value is what separates a keyframed parameter
+                # from a static one regardless of the parameter's name.
+                keyframed = True
+            else:
+                parameterized = True
+    if keyframed:
+        return "effect.keyframe_change"
+    if parameterized:
+        return "effect.parameter_change"
+    return "effect.change"
+
+
+def _effect_change_name(changes: list[dict[str, Any]]) -> str | None:
+    """Classify effect work across every updated entity in one diff."""
+    names: set[str] = set()
+    for change in changes:
+        if change.get("change") != "updated":
+            continue
+        name = effect_operation_name(
+            change.get("before", {}).get("effects"),
+            change.get("after", {}).get("effects"),
+        )
+        if name is not None:
+            names.add(name)
+    if not names:
+        return None
+    return names.pop() if len(names) == 1 else "effect.change"
+
+
+def _changed_fields(changes: list[dict[str, Any]]) -> set[str]:
+    fields: set[str] = set()
+    for change in changes:
+        if change.get("change") != "updated":
+            continue
+        before, after = change.get("before", {}), change.get("after", {})
+        fields.update(key for key in set(before) | set(after) if before.get(key) != after.get(key))
+    return fields
+
+
 def operation_name(diff: dict[str, Any]) -> str:
     changes = diff.get("changes", [])
     entities = {change.get("entity") for change in changes}
@@ -284,10 +404,7 @@ def operation_name(diff: dict[str, Any]) -> str:
         if "removed" in kinds and "updated" in kinds:
             return "timeline.ripple_delete"
         updated = [change for change in changes if change.get("change") == "updated"]
-        fields: set[str] = set()
-        for change in updated:
-            before, after = change.get("before", {}), change.get("after", {})
-            fields.update(key for key in set(before) | set(after) if before.get(key) != after.get(key))
+        fields = _changed_fields(changes)
         if fields and fields <= {"timeline_start_frame", "track_native_id"}:
             return "clip.move"
         if "speed" in fields:
@@ -295,13 +412,21 @@ def operation_name(diff: dict[str, Any]) -> str:
         if fields & {"source_start_frame", "source_end_frame", "duration_frames"} or "added" in kinds:
             return "clip.trim_or_split"
         if fields == {"effects"}:
-            return "effect.change"
+            return _effect_change_name(changes) or "effect.change"
     if entities == {"track"}:
         if kinds == {"added"}:
             return "track.create"
         if "removed" in kinds:
             return "track.delete_or_reorder"
+        # Track effect stacks are serialized exactly like clip ones, so track
+        # effect work is classifiable and should not be flattened into a
+        # generic state change. Only claim effect intent when nothing else on
+        # the track moved, so a mute plus a tweak stays a state change.
+        if _changed_fields(changes) == {"effects"}:
+            return _effect_change_name(changes) or "track.set_state"
         return "track.set_state"
+    if entities == {"master_effect"}:
+        return _effect_change_name(changes) or "timeline.change"
     if entities and entities <= {"mix", "composition"}:
         if kinds == {"added"}:
             return "transition.add"
@@ -313,7 +438,15 @@ def operation_name(diff: dict[str, Any]) -> str:
 
 def validate_action_semantics(events: list[dict[str, Any]], accepted: list[dict[str, Any]]) -> list[dict[str, Any]]:
     def compatible(declared: str | None, inferred: str) -> bool:
-        return declared is None or declared == inferred or (declared in {"clip.trim", "clip.split"} and inferred == "clip.trim_or_split")
+        if declared is None or declared == inferred:
+            return True
+        if declared in {"clip.trim", "clip.split"} and inferred == "clip.trim_or_split":
+            return True
+        # "effect.change" is what the diff classifier falls back to when the
+        # stack moved in a way it cannot narrow down. Treating it as a
+        # contradiction of a specific declared effect action would degrade
+        # sessions over a limit of the inference, not a recorder disagreement.
+        return declared.startswith("effect.") and inferred == "effect.change"
 
     accepted_by_transaction: dict[str, list[dict[str, Any]]] = {}
     for state_event in accepted:

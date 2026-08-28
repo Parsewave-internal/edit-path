@@ -18,6 +18,11 @@ ALLOWED_ACTIONS = {
     "clip.trim",
     "clip.split",
     "clip.delete",
+    "effect.add",
+    "effect.remove",
+    "effect.reorder",
+    "effect.parameter_change",
+    "effect.keyframe_change",
     "history.undo",
     "history.redo",
 }

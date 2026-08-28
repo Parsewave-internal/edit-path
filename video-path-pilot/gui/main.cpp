@@ -314,6 +314,10 @@ private:
         connect(&m_worker, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this, &RecorderWindow::workerFinished);
         connect(&m_reasoningWorker, &QProcess::readyReadStandardOutput, this, [this] { m_activity->appendPlainText(QString::fromUtf8(m_reasoningWorker.readAllStandardOutput()).trimmed()); });
         connect(&m_reasoningWorker, &QProcess::readyReadStandardError, this, [this] { m_activity->appendPlainText(QString::fromUtf8(m_reasoningWorker.readAllStandardError()).trimmed()); });
+        connect(&m_audioCapture, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this, [this] {
+            m_recordReasoning->setEnabled(true);
+            m_stopReasoning->setEnabled(false);
+        });
         m_heartbeat.setInterval(60000);
         connect(&m_heartbeat, &QTimer::timeout, this, [this] {
             if (m_editor.state() != QProcess::NotRunning) writeManifest(QStringLiteral("recording"));
@@ -374,7 +378,11 @@ private:
     void stopReasoning()
     {
         if (m_audioCapture.state() == QProcess::NotRunning) return;
-        m_audioCapture.terminate();
+        // FFmpeg flushes and finalizes FLAC when it receives `q`.  terminate()
+        // alone is unreliable on Windows and can leave the editor believing
+        // reasoning is still active (or produce an unusable/truncated file).
+        m_audioCapture.write("q\n");
+        m_audioCapture.closeWriteChannel();
         if (!m_audioCapture.waitForFinished(5000)) { m_audioCapture.kill(); m_audioCapture.waitForFinished(2000); }
         m_recordReasoning->setEnabled(true); m_stopReasoning->setEnabled(false);
         m_activity->appendPlainText(QStringLiteral("Reasoning audio saved: %1").arg(m_audioOutput));

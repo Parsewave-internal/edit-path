@@ -85,6 +85,11 @@ class MvpTests(unittest.TestCase):
             "List available microphones",
             "Test microphone and play it back",
             "captureMicrophoneTest",
+            "QMediaDevices::audioInputs()",
+            "new QComboBox",
+            "device->currentText()",
+            "EditPathAudio.exe",
+            "native WASAPI",
             "m_micPlayer->play()",
             "m_audioCapture.write(\"q\\n\")",
             "GenericDataLocation",
@@ -106,6 +111,17 @@ class MvpTests(unittest.TestCase):
         self.assertIn('install-dependencies.bat', build)
         whisper = (root / "edit_path/whisper_provider.py").read_text(encoding="utf-8")
         self.assertIn('sys.executable, "-m", "whisper"', whisper)
+
+    def test_native_audio_helper_is_built_and_packaged(self):
+        root = Path(__file__).parents[2]
+        helper = (root / "video-path-pilot/gui/audio-helper.cpp").read_text(encoding="utf-8")
+        cmake = (root / "video-path-pilot/gui/CMakeLists.txt").read_text(encoding="utf-8")
+        build = (root / "packaging/windows/build-editpath.ps1").read_text(encoding="utf-8")
+        for marker in ("QMediaDevices::audioInputs", "QAudioSource", "WavWriter", "recording_started", "recording_stopped"):
+            self.assertIn(marker, helper)
+        self.assertIn("OUTPUT_NAME EditPathAudio", cmake)
+        self.assertIn("EditPathAudio.exe is missing", build)
+        self.assertIn("@($editPath, $audioHelper, $kdenlive)", build)
 
     def test_supervisor_hardening_contract(self):
         root = Path(__file__).parents[2]

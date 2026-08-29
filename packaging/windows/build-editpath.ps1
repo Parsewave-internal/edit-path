@@ -322,11 +322,13 @@ New-Item -ItemType Directory -Force $portable | Out-Null
 if ($LASTEXITCODE -ne 0) { Stop-Build "could not extract the Craft package." }
 
 $editPath = Get-ChildItem $portable -Recurse -File -Filter EditPath.exe | Select-Object -First 1
+$audioHelper = Get-ChildItem $portable -Recurse -File -Filter EditPathAudio.exe | Select-Object -First 1
 $kdenlive = Get-ChildItem $portable -Recurse -File -Filter kdenlive.exe | Select-Object -First 1
 if (-not $editPath) { Stop-Build "EditPath.exe is missing from the portable package." }
+if (-not $audioHelper) { Stop-Build "EditPathAudio.exe is missing from the portable package." }
 if (-not $kdenlive) { Stop-Build "kdenlive.exe is missing from the portable package." }
-if ($editPath.Directory.FullName -ne $kdenlive.Directory.FullName) {
-    Stop-Build "EditPath.exe and kdenlive.exe were not packaged together."
+if ($editPath.Directory.FullName -ne $kdenlive.Directory.FullName -or $editPath.Directory.FullName -ne $audioHelper.Directory.FullName) {
+    Stop-Build "EditPath.exe, EditPathAudio.exe, and kdenlive.exe were not packaged together."
 }
 
 # Guard against a successful-looking Craft package that silently contains an
@@ -371,7 +373,7 @@ if (-not (Test-Path (Join-Path $packagedEditPath "__main__.py"))) {
 
 $signedFiles = @()
 if ($signingCertificate) {
-    foreach ($binary in @($editPath, $kdenlive)) {
+    foreach ($binary in @($editPath, $audioHelper, $kdenlive)) {
         Sign-And-VerifyWindowsBinary $signToolPath $signingCertificate $binary.FullName
         $signedFiles += $binary.FullName.Substring($portable.Length + 1)
     }
@@ -394,7 +396,7 @@ if (-not $selfTest.passed) {
     Stop-Build "the packaged runtime reported a failed dependency check."
 }
 $portablePrefix = [IO.Path]::GetFullPath($portable).TrimEnd('\') + '\'
-foreach ($checkName in @('application_root', 'edit_path_module', 'ffmpeg', 'ffprobe', 'kdenlive', 'melt', 'pipeline', 'python', 'qt_multimedia_qml', 'validator')) {
+foreach ($checkName in @('application_root', 'audio_helper', 'edit_path_module', 'ffmpeg', 'ffprobe', 'kdenlive', 'melt', 'pipeline', 'python', 'qt_multimedia_qml', 'validator')) {
     $checkPath = [string]$selfTest.checks.$checkName.path
     if (-not $checkPath -or -not [IO.Path]::GetFullPath($checkPath).StartsWith($portablePrefix, [StringComparison]::OrdinalIgnoreCase)) {
         $env:PATH = $savedPath
@@ -502,6 +504,7 @@ $manifest = [ordered]@{
     source_commit = (& git -C $sourceRoot rev-parse HEAD).Trim()
     archive = $outputZip
     editpath_exe = $editPath.FullName.Substring($portable.Length + 1)
+    audio_helper_exe = $audioHelper.FullName.Substring($portable.Length + 1)
     kdenlive_exe = $kdenlive.FullName.Substring($portable.Length + 1)
     test_media_included = -not $SkipTestMedia
     code_signed = [bool]$signingCertificate

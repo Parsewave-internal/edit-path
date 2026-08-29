@@ -59,9 +59,9 @@ previews are skipped to keep a 2,728-moment finalization bounded.
 
 ## Think-aloud/audio proof
 
-The recorder captures reasoning only after the editor clicks **Record Reasoning**. Audio is stored as FLAC under `EDIT-PATH/reasoning/audio-*.flac`; stop timestamps use monotonic nanoseconds and are aligned to overlapping/nearest event IDs. Transcription is opt-in and literal: the pipeline writes a transcript JSON and WebVTT captions and never infers an editor's intent.
+The recorder captures reasoning only after the editor clicks **Record Reasoning**. On Windows, the bundled `EditPathAudio.exe` helper uses Qt Multimedia/WASAPI and stores native PCM WAV under `EDIT-PATH/reasoning/audio-*.wav`; stop timestamps use monotonic nanoseconds and are aligned to overlapping/nearest event IDs. Transcription is opt-in and literal: the pipeline writes a transcript JSON and WebVTT captions and never infers an editor's intent.
 
-The crash/resume path was also checked: both the Python capture helper and the Qt supervisor now choose the next unused `audio-NNN.flac` name, so restarting EditPath cannot overwrite an earlier think-aloud segment. The regression test pre-populates `audio-001.flac` and `audio-004.flac` and observes `audio-005.flac`.
+The crash/resume path was also checked: both the Python capture helper and the Qt supervisor choose the next unused numbered audio name, so restarting EditPath cannot overwrite an earlier think-aloud segment. Windows uses `.wav`; the legacy fallback uses `.flac`.
 
 Deterministic fixture output (FFmpeg-generated 2-second FLAC plus a fixed provider response) is under `/tmp/edit-path-reasoning-proof-20260829/`:
 

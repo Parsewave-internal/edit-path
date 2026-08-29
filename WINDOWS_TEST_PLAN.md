@@ -16,6 +16,8 @@ Perform the normal-session test before the crash-recovery test.
 1. Extract `EditPath-Windows-x64.zip` to a normal writable folder.
 2. Confirm `SELF-TEST.json` exists and contains `"passed": true`, then run
    `bin\EditPath.exe --self-test` from PowerShell and retain its complete output.
+   The same folder must contain `bin\EditPathAudio.exe`; this is the native
+   WASAPI microphone helper and does not require FFmpeg.
 3. Double-click `bin\EditPath.exe`. Do not open `kdenlive.exe`.
 4. Confirm Kdenlive opens directly with no terminal or initialization screen.
 5. Import all three files from `test-media`.
@@ -41,13 +43,14 @@ Perform the normal-session test before the crash-recovery test.
 2. Choose the microphone in **Configure microphone**. Use **List available
    microphones**, then click **Test microphone and play it back**. The
    **Start recording** button stays disabled until a three-second WAV test is
-   successfully written and played through Qt Multimedia.
+   successfully written and played through Qt Multimedia/WASAPI.
 3. Confirm the button changes to **Stop Reasoning (recording…)** and the status
    says **Recording in progress**.
-4. Click **Stop Reasoning** at any point. Confirm the FLAC appears under the
-   active session's `EDIT-PATH\reasoning\audio-###.flac` and the activity log
-   prints its path. The stop path sends FFmpeg `q`, waits for finalization, and
-   force-kills only if necessary; it must not leave an empty reasoning folder.
+4. Click **Stop Reasoning** at any point. Confirm the WAV appears under the
+   active session's `EDIT-PATH\reasoning\audio-###.wav` and the activity log
+   prints its path. The stop path sends a control command to the isolated
+   `EditPathAudio.exe` helper and waits for the RIFF/WAV header to finalize; it
+   must not leave an empty reasoning folder.
 5. Click **Create Dataset Sample**, answer **Yes** to transcription, and
    confirm `reasoning\transcript-audio-###.json`, `reasoning\reasoning.json`,
    and `reasoning\captions.vtt` are created. Whisper is installed into the

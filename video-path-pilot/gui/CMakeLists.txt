@@ -16,3 +16,8 @@ qt_add_executable(edit-path-recorder main.cpp)
 set_target_properties(edit-path-recorder PROPERTIES OUTPUT_NAME EditPath)
 target_link_libraries(edit-path-recorder PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Multimedia)
 install(TARGETS edit-path-recorder RUNTIME DESTINATION bin)
+
+qt_add_executable(edit-path-audio audio-helper.cpp)
+set_target_properties(edit-path-audio PROPERTIES OUTPUT_NAME EditPathAudio)
+target_link_libraries(edit-path-audio PRIVATE Qt6::Core Qt6::Multimedia)
+install(TARGETS edit-path-audio RUNTIME DESTINATION bin)

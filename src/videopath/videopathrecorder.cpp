@@ -897,8 +897,22 @@ void VideoPathRecorder::recordCommand(QAction *action, bool checked)
         interactionId = m_lastInputInteractionId;
     }
     QString commandId = action->objectName();
+    bool commandRegistered = !commandId.isEmpty();
     if (commandId.isEmpty()) {
-        commandId = QStringLiteral("unmapped");
+        // QAction object names are absent for several dynamically-created
+        // actions.  Keep a stable, reviewable ID instead of collapsing all of
+        // them into the misleading literal "unmapped".
+        QString scope;
+        for (QObject *owner = action->parent(); owner; owner = owner->parent()) {
+            if (!owner->objectName().isEmpty()) {
+                scope = owner->objectName() + QLatin1Char('/') + scope;
+            }
+        }
+        QString stableKey = scope + QLatin1Char('|') + action->text();
+        stableKey.remove(QLatin1Char('&'));
+        const QByteArray digest = QCryptographicHash::hash(stableKey.toUtf8(), QCryptographicHash::Sha256).toHex().left(16);
+        commandId = QStringLiteral("generated.%1").arg(QString::fromLatin1(digest));
+        commandRegistered = false;
     }
     QString label = action->text();
     label.remove(QLatin1Char('&'));
@@ -910,6 +924,7 @@ void VideoPathRecorder::recordCommand(QAction *action, bool checked)
     event.insert(QStringLiteral("event_type"), QStringLiteral("ui.command"));
     event.insert(QStringLiteral("interaction_id"), interactionId);
     event.insert(QStringLiteral("command_id"), commandId);
+    event.insert(QStringLiteral("command_registered"), commandRegistered);
     event.insert(QStringLiteral("label"), label);
     event.insert(QStringLiteral("source"), source);
     event.insert(QStringLiteral("checked"), checked);

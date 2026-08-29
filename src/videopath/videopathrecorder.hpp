@@ -112,6 +112,7 @@ private:
     QSet<QString> m_failedCheckpointHashes;
     QString m_lastProjectStateHash;
     QList<QJsonObject> m_pendingActions;
+    QList<QJsonObject> m_pendingCommands;
     mutable QHash<QString, QString> m_stableEntityIds;
     QHash<QString, QString> m_undoEntryIds;
     QHash<QString, QString> m_commitTransactions;

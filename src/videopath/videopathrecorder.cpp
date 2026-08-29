@@ -202,6 +202,15 @@ void VideoPathRecorder::beginTransaction(const QString &boundary, const QString 
     m_transactionBoundary = boundary;
     m_transactionLabel = label;
     bindTransactionUndoEntry(undoEntryKey);
+    // QAction is emitted before many Kdenlive undo commands are constructed.
+    // Bind the queued command to this exact transaction once its ID exists;
+    // never infer this relationship from elapsed time.
+    for (QJsonObject &command : m_pendingCommands) {
+        command.insert(QStringLiteral("transaction_id"), m_transactionId);
+        if (!m_undoEntryId.isEmpty()) command.insert(QStringLiteral("undo_entry_id"), m_undoEntryId);
+        writeEvent(command);
+    }
+    m_pendingCommands.clear();
 }
 
 void VideoPathRecorder::bindTransactionUndoEntry(const QString &undoEntryKey)
@@ -930,10 +939,19 @@ void VideoPathRecorder::recordCommand(QAction *action, bool checked)
     event.insert(QStringLiteral("checked"), checked);
     event.insert(QStringLiteral("shortcuts"), shortcuts);
     event.insert(QStringLiteral("focus"), describeObject(QApplication::focusWidget()));
-    addTransactionFields(event, true);
+    if (!m_transactionId.isEmpty()) {
+        addTransactionFields(event);
+        writeEvent(event);
+        m_lastInputInteractionId = interactionId;
+        m_lastInteraction.restart();
+        return;
+    }
     m_lastInputInteractionId = interactionId;
     m_lastInteraction.restart();
-    writeEvent(event);
+    // The undo transaction is created after QAction::triggered on several
+    // Kdenlive paths. Queue the command until beginTransaction() can bind it
+    // to the authoritative transaction ID.
+    m_pendingCommands.append(event);
 }
 
 void VideoPathRecorder::recordShortcut(const QKeySequence &sequence, bool ambiguous)

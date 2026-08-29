@@ -342,6 +342,11 @@ $editPathTextOdd = if ($editPathBytes.Length -gt 1) {
 } else {
     ""
 }
+$sourceRevision = (& git -C $sourceRoot rev-parse --short HEAD).Trim()
+if (-not $sourceRevision -or
+    (-not $editPathTextEven.Contains($sourceRevision) -and -not $editPathTextOdd.Contains($sourceRevision))) {
+    Stop-Build "the packaged EditPath.exe does not contain this checkout's source revision ($sourceRevision); refusing a stale binary."
+}
 foreach ($featureMarker in @(
     "Configure microphone",
     "Test microphone and play it back",

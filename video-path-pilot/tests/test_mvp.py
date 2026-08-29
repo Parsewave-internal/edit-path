@@ -109,6 +109,7 @@ class MvpTests(unittest.TestCase):
         self.assertIn("ExecutionPolicy bypass", launcher)
         build = (root / "packaging/windows/build-editpath.ps1").read_text(encoding="utf-8")
         self.assertIn('install-dependencies.bat', build)
+        self.assertIn('does not contain this checkout\'s source revision', build)
         self.assertIn('"effect.parameter.change"', build)
         self.assertIn('"keyframe.value.change"', build)
         self.assertIn('"command_registered"', build)

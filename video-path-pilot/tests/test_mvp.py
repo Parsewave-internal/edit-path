@@ -68,6 +68,15 @@ class MvpTests(unittest.TestCase):
         for stale in ("effect.change", "keyframe.update"):
             self.assertNotIn(f'QStringLiteral("{stale}")', source)
 
+    def test_recorder_effect_acceptance_has_stable_ids_and_property_scope(self):
+        source = (Path(__file__).parents[2] / "src/videopath/videopathrecorder.cpp").read_text(encoding="utf-8")
+        for marker in (
+            'QStringLiteral("effect_id")', 'QStringLiteral("parameter_id")',
+            'QStringLiteral("keyframe_id")', 'QStringLiteral("property_editor")',
+            'QStringLiteral("synthetic_state_correlation")',
+        ):
+            self.assertIn(marker, source)
+
     def test_supervisor_reasoning_capture_has_mic_test_playback_and_python_bridge(self):
         root = Path(__file__).parents[2]
         source = (root / "video-path-pilot/gui/main.cpp").read_text(encoding="utf-8")
@@ -172,7 +181,10 @@ class MvpTests(unittest.TestCase):
         self.assertIn('-version "[17.0,18.0)"', source)
         self.assertIn('$env:CRAFT_PYTHON', source)
         self.assertIn('"bin\\craft.py"', source)
-        self.assertIn('& $craftPython $craftScript --ci-mode --options "kde/kdemultimedia/kdenlive.srcDir=$sourceRoot"', source)
+        self.assertIn(
+            '& $craftPython $craftScript --ci-mode --no-cache --ignoreInstalled --options "kde/kdemultimedia/kdenlive.srcDir=$sourceRoot"',
+            source,
+        )
         self.assertIn('@("sh.exe", "gcc.exe", "g++.exe", "cpp.exe")', source)
 
     def test_project_asset_binding_requires_path_or_content_identity(self):

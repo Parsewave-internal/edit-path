@@ -22,7 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from edit_path.pipeline import process_session
+from edit_path.pipeline import preflight_session, process_session
 from edit_path.io import replace_with_retry, write_jsonl
 from edit_path.segments import assemble_segments, discover_segments
 from normalize_sample import accepted_commits, build_sample, read_jsonl
@@ -643,6 +643,22 @@ def attach_prompt(args: argparse.Namespace) -> int:
     return 0
 
 
+def coverage_command(args: argparse.Namespace) -> int:
+    """Emit the acceptance-phase mapped/ambiguous attribution report."""
+    preflight = preflight_session(
+        args.session_dir,
+        require_complete=not args.allow_incomplete,
+        require_stable_effect_ids=args.require_stable_effect_ids,
+    )
+    report = preflight["attribution_coverage"]
+    encoded = json.dumps(report, indent=2, ensure_ascii=False) + "\n"
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(encoded, encoding="utf-8")
+    print(encoded, end="")
+    return 0
+
+
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description=__doc__); sub = result.add_subparsers(dest="command", required=True)
     create = sub.add_parser("create-job"); create.add_argument("job_dir", type=Path); create.add_argument("--job-id", required=True)
@@ -656,6 +672,12 @@ def parser() -> argparse.ArgumentParser:
     freeform.add_argument("--project", type=Path); freeform.add_argument("--output", type=Path); freeform.set_defaults(function=finalize_freeform)
     prompt = sub.add_parser("attach-prompt"); prompt.add_argument("sample_dir", type=Path); prompt.add_argument("--prompt", required=True)
     prompt.set_defaults(function=attach_prompt)
+    coverage = sub.add_parser("coverage", help="report mapped versus ambiguous effect/keyframe attribution")
+    coverage.add_argument("session_dir", type=Path)
+    coverage.add_argument("--output", type=Path)
+    coverage.add_argument("--allow-incomplete", action="store_true")
+    coverage.add_argument("--require-stable-effect-ids", action="store_true")
+    coverage.set_defaults(function=coverage_command)
     return result
 
 

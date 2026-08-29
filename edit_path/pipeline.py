@@ -19,7 +19,7 @@ from .io import RAW_SCHEMA_VERSIONS, event_sequence, find_trajectory, read_jsonl
 from .process_video import render_edit_process
 from .reconstruct import render_event, render_project, render_session, state_reference
 from .runtime import runtime_fingerprint, verify_runtime_lock
-from .state import load_state_reference, resolve_accepted_branch, validate_action_semantics, validate_state_transitions
+from .state import load_state_reference, operation_name, resolve_accepted_branch, validate_action_semantics, validate_state_transitions
 from .validate import probe, validate_render
 
 
@@ -192,6 +192,233 @@ def validate_stable_entities(events: list[dict[str, Any]], *, required: bool) ->
                 raise GateError("stable_entities", "v0.3 clip is missing asset_id", sequence)
             checked += 1
     return checked
+
+
+def validate_effect_keyframe_ids(events: list[dict[str, Any]], *, required: bool) -> dict[str, int]:
+    """Check the recorder's optional effect/keyframe identity extension.
+
+    Existing v0.3 sessions remain readable when the extension is absent. The
+    acceptance run can set ``required`` to fail closed for any session that
+    contains an effect stack without complete stable IDs.
+    """
+    counts = {
+        "effects": 0,
+        "parameters": 0,
+        "keyframes": 0,
+        "missing_effect_ids": 0,
+        "missing_parameter_ids": 0,
+        "missing_keyframe_ids": 0,
+    }
+
+    def inspect(value: Any, sequence: int | None) -> None:
+        if not isinstance(value, dict):
+            return
+        effects = value.get("effects", [])
+        if not isinstance(effects, list):
+            return
+        for effect in effects:
+            if not isinstance(effect, dict):
+                continue
+            counts["effects"] += 1
+            if not isinstance(effect.get("effect_id"), str) or not effect["effect_id"]:
+                counts["missing_effect_ids"] += 1
+                if required:
+                    raise GateError("stable_effect_ids", "effect is missing effect_id", sequence)
+            parameters = effect.get("parameters", [])
+            if isinstance(parameters, list):
+                for parameter in parameters:
+                    if not isinstance(parameter, dict):
+                        continue
+                    counts["parameters"] += 1
+                    if not isinstance(parameter.get("parameter_id"), str) or not parameter["parameter_id"]:
+                        counts["missing_parameter_ids"] += 1
+                        if required:
+                            raise GateError("stable_effect_ids", "effect parameter is missing parameter_id", sequence)
+            keyframes = effect.get("keyframes", [])
+            if isinstance(keyframes, list):
+                for keyframe in keyframes:
+                    if not isinstance(keyframe, dict):
+                        continue
+                    counts["keyframes"] += 1
+                    if not isinstance(keyframe.get("keyframe_id"), str) or not keyframe["keyframe_id"]:
+                        counts["missing_keyframe_ids"] += 1
+                        if required:
+                            raise GateError("stable_effect_ids", "keyframe is missing keyframe_id", sequence)
+
+    for event in events:
+        sequence = event_sequence(event)
+        if event.get("event_type") == "state.checkpoint":
+            snapshot = event.get("snapshot", {})
+            if isinstance(snapshot, dict):
+                for plural in ("tracks", "clips", "master_effects"):
+                    for value in snapshot.get(plural, []):
+                        inspect(value, sequence)
+        elif event.get("event_type") == "state.diff":
+            for change in event.get("diff", {}).get("changes", []):
+                inspect(change.get("before"), sequence)
+                inspect(change.get("after"), sequence)
+    return counts
+
+
+def attribution_coverage(
+    events: list[dict[str, Any]],
+    accepted: list[dict[str, Any]],
+    action_reports: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Summarize recorder attribution without inventing editor intent.
+
+    A state change is *mapped* only when an accepted-branch action is linked
+    to its transaction and its declared operation agrees with the recorded
+    before/after state.  Effect-panel changes that have no direct interaction
+    evidence remain *ambiguous*, even when the deterministic state classifier
+    can name the resulting operation.
+    """
+
+    def percent(numerator: int, denominator: int) -> float:
+        return round((numerator / denominator) * 100.0, 2) if denominator else 0.0
+
+    reports_by_sequence = {
+        report.get("sequence"): report
+        for report in action_reports
+        if report.get("sequence") is not None
+    }
+    state_events = [event for event in accepted if event.get("event_type") == "state.diff"]
+    effect_states = []
+    mapped_state = ambiguous_state = state_only = 0
+    effect_ids: set[str] = set()
+    parameter_ids: set[str] = set()
+    keyframe_ids: set[str] = set()
+    missing_effect_ids = missing_parameter_ids = missing_keyframe_ids = 0
+
+    def inspect_effects(value: Any) -> None:
+        nonlocal missing_effect_ids, missing_parameter_ids, missing_keyframe_ids
+        if not isinstance(value, dict):
+            return
+        for effect in value.get("effects", []):
+            if not isinstance(effect, dict):
+                continue
+            effect_id = effect.get("effect_id")
+            if isinstance(effect_id, str) and effect_id:
+                effect_ids.add(effect_id)
+            else:
+                missing_effect_ids += 1
+            parameters = effect.get("parameters", [])
+            if isinstance(parameters, list):
+                for parameter in parameters:
+                    if not isinstance(parameter, dict):
+                        continue
+                    parameter_id = parameter.get("parameter_id")
+                    if isinstance(parameter_id, str) and parameter_id:
+                        parameter_ids.add(parameter_id)
+                    else:
+                        missing_parameter_ids += 1
+            keyframes = effect.get("keyframes", [])
+            if isinstance(keyframes, list):
+                for keyframe in keyframes:
+                    if not isinstance(keyframe, dict):
+                        continue
+                    keyframe_id = keyframe.get("keyframe_id")
+                    if isinstance(keyframe_id, str) and keyframe_id:
+                        keyframe_ids.add(keyframe_id)
+                    else:
+                        missing_keyframe_ids += 1
+
+    for event in events:
+        if event.get("event_type") != "state.checkpoint":
+            continue
+        snapshot = event.get("snapshot", {})
+        for plural in ("tracks", "clips", "master_effects"):
+            for value in snapshot.get(plural, []) if isinstance(snapshot, dict) else []:
+                inspect_effects(value)
+    for event in accepted:
+        if event.get("event_type") != "state.diff":
+            continue
+        diff = event.get("diff", {})
+        for change in diff.get("changes", []) if isinstance(diff, dict) else []:
+            if change.get("entity") in {"clip", "track", "master_effect"}:
+                inspect_effects(change.get("before"))
+                inspect_effects(change.get("after"))
+        inferred = operation_name(diff if isinstance(diff, dict) else {})
+        if inferred.startswith(("effect.", "keyframe.")):
+            report = reports_by_sequence.get(event.get("sequence"), {})
+            intent = event.get("intent") if isinstance(event.get("intent"), dict) else {}
+            ambiguous = bool(intent.get("ambiguous")) or not event.get("interaction_id")
+            if report.get("attribution") == "state_only":
+                state_only += 1
+            elif report.get("linked") and report.get("compatible") and not ambiguous:
+                mapped_state += 1
+            else:
+                ambiguous_state += 1
+            effect_states.append({
+                "sequence": event.get("sequence"),
+                "transaction_id": event.get("transaction_id"),
+                "operation": inferred,
+                "mapped": bool(report.get("linked") and report.get("compatible") and not ambiguous),
+                "ambiguous": ambiguous,
+                "attribution": report.get("attribution", "state_only"),
+                "interaction_id": event.get("interaction_id"),
+                "interaction_scope": event.get("interaction_scope") or intent.get("interaction_scope"),
+            })
+
+    ui_commands = [event for event in events if event.get("event_type") == "ui.command"]
+    property_interactions = [
+        event for event in events
+        if event.get("event_type") in {"ui.gesture", "ui.shortcut", "ui.command"}
+        and event.get("interaction_scope") == "property_editor"
+    ]
+    registered_commands = sum(event.get("command_registered") is True for event in ui_commands)
+    generated_commands = sum(
+        event.get("command_registered") is not True or str(event.get("command_id", "")).startswith("generated.")
+        for event in ui_commands
+    )
+    mapped_ui_commands = sum(
+        event.get("command_registered") is True and isinstance(event.get("transaction_id"), str)
+        for event in ui_commands
+    )
+    action_total = len([event for event in events if event.get("event_type") == "action"])
+    semantic_reports = [report for report in action_reports if report.get("declared") is not None]
+    mapped_actions = sum(bool(report.get("linked") and report.get("compatible")) for report in semantic_reports)
+    ambiguous_actions = sum(
+        report.get("attribution") in {"state_only", "inconsistent_transaction", "not_on_accepted_branch"}
+        or report.get("ambiguous") is True
+        for report in semantic_reports
+    )
+    return {
+        "schema": "video-path/attribution-coverage@1",
+        "state_diffs": {
+            "accepted": len(state_events),
+            "mapped": mapped_state,
+            "ambiguous": ambiguous_state,
+            "state_only": state_only,
+            "mapped_percent": percent(mapped_state, len(effect_states)),
+            "ambiguous_percent": percent(ambiguous_state, len(effect_states)),
+            "effect_or_keyframe": len(effect_states),
+        },
+        "actions": {
+            "semantic_total": action_total,
+            "mapped": mapped_actions,
+            "ambiguous_or_unlinked": ambiguous_actions,
+            "mapped_percent": percent(mapped_actions, action_total),
+            "ui_commands": len(ui_commands),
+            "registered_commands": registered_commands,
+            "generated_or_unregistered_commands": generated_commands,
+            "mapped_ui_commands": mapped_ui_commands,
+            "ambiguous_ui_commands": len(ui_commands) - mapped_ui_commands,
+        },
+        "property_editor": {
+            "interaction_events": len(property_interactions),
+            "interaction_ids": len({event.get("interaction_id") for event in property_interactions if event.get("interaction_id")}),
+        },
+        "stable_effects": {
+            "effect_ids": len(effect_ids),
+            "parameter_ids": len(parameter_ids),
+            "keyframe_ids": len(keyframe_ids),
+            "missing_effect_ids": missing_effect_ids,
+            "missing_parameter_ids": missing_parameter_ids,
+            "missing_keyframe_ids": missing_keyframe_ids,
+        },
+        "effect_keyframe_diffs": effect_states,
+    }
 
 
 def checkpoint_reference(session_dir: Path, event: dict[str, Any]) -> Path | None:
@@ -509,6 +736,9 @@ def publish_bundle(
             write_json(temporary / "render-report.json", report)
         else:
             shutil.copy2(artifacts["report"], temporary / "render-report.json")
+        coverage_report = artifacts.get("coverage_report")
+        if isinstance(coverage_report, Path) and coverage_report.is_file():
+            _copy_if_present(coverage_report, temporary / "verification" / "attribution-coverage.json")
         cleaned_events = _clean_events(events, accepted)
         _make_state_references_portable(session_dir, artifacts["raw_trajectory"], temporary, cleaned_events)
         write_jsonl(temporary / "trajectory.jsonl", cleaned_events)
@@ -620,6 +850,7 @@ def process_session(
     minimum_changed_entities: int = 1,
     require_license: bool = False,
     require_complete: bool = True,
+    require_stable_effect_ids: bool = False,
     melt_binary: str | None = None,
     runtime_lock: Path | None = None,
 ) -> dict[str, Any]:
@@ -634,6 +865,7 @@ def process_session(
             minimum_changed_entities=minimum_changed_entities,
             require_license=require_license,
             require_complete=require_complete,
+            require_stable_effect_ids=require_stable_effect_ids,
         )
         trajectory = preflight["trajectory"]
         events = preflight["events"]
@@ -647,8 +879,10 @@ def process_session(
         state_reports = preflight["state_reports"]
         project_states = preflight["project_states"]
         stable_entities = preflight["stable_entities"]
+        stable_effect_ids = preflight.get("stable_effect_ids", {})
         branch = preflight["branch"]
         actions = preflight["actions"]
+        coverage = preflight.get("attribution_coverage") or attribution_coverage(events, branch.accepted, actions)
         activity = preflight["activity"]
         manifest_path = preflight["manifest_path"]
         manifest = preflight["manifest"]
@@ -789,7 +1023,9 @@ def process_session(
                 "state_transitions": sum(event.get("event_type") == "state.diff" for event in events),
                 "project_states": project_states,
                 "stable_entities_checked": stable_entities,
+                "stable_effect_ids": stable_effect_ids,
                 "action_semantics": actions,
+                "attribution_coverage": coverage,
                 "semantic_activity": activity,
                 "assets_verified": len(verified_assets),
                 "checkpoint_results": checkpoint_results,
@@ -801,6 +1037,8 @@ def process_session(
             }
             report_path = work_dir / "render-report.json"
             write_json(report_path, report)
+            coverage_path = work_dir / "attribution-coverage.json"
+            write_json(coverage_path, coverage)
             accepted_path = publish_bundle(
                 session_dir,
                 output_root / "accepted",
@@ -813,6 +1051,7 @@ def process_session(
                     "report": report_path,
                     "raw_trajectory": trajectory,
                     "manifest_path": manifest_path,
+                    "coverage_report": coverage_path,
                 },
                 events,
                 branch.accepted,
@@ -837,6 +1076,7 @@ def preflight_session(
     minimum_changed_entities: int = 1,
     require_license: bool = False,
     require_complete: bool = True,
+    require_stable_effect_ids: bool = False,
 ) -> dict[str, Any]:
     session_dir = session_dir.expanduser().resolve()
     trajectory = find_trajectory(session_dir)
@@ -847,9 +1087,11 @@ def preflight_session(
     require_exact = any(event.get("schema_version") == "0.3.0" for event in events)
     _, state_reports = validate_state_transitions(events)
     stable_entities = validate_stable_entities(events, required=require_exact)
+    stable_effect_ids = validate_effect_keyframe_ids(events, required=require_stable_effect_ids)
     project_states = validate_project_state_sidecars(session_dir, trajectory, events, require_exact=require_exact)
     branch = resolve_accepted_branch(events, require_targets=require_exact)
     actions = validate_action_semantics(events, branch.accepted)
+    coverage = attribution_coverage(events, branch.accepted, actions)
     activity = semantic_activity(
         branch.accepted,
         minimum_commits=minimum_commits,
@@ -864,9 +1106,11 @@ def preflight_session(
         "require_exact": require_exact,
         "state_reports": state_reports,
         "stable_entities": stable_entities,
+        "stable_effect_ids": stable_effect_ids,
         "project_states": project_states,
         "branch": branch,
         "actions": actions,
+        "attribution_coverage": coverage,
         "activity": activity,
         "manifest_path": manifest_path,
         "manifest": manifest,

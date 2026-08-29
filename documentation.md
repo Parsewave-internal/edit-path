@@ -272,7 +272,9 @@ to the interactive Kdenlive trim path rather than JSON serialization.
 Version 3.1 extends the canonical snapshot instead of adding separate hooks for
 each editing tool. Clip effect stacks now include ordered effects and all
 serialized parameters, including animation/keyframe strings. Track and master
-effect stacks are represented in the same form. Compositions now include their
+effect stacks are represented in the same form. Each effect, serialized
+parameter, and keyframe point also carries a recorder-stable ID scoped to its
+owner. Compositions now include their
 software asset ID and complete parameter JSON in addition to placement and
 duration. XML-derived effect data is converted to deterministic JSON with
 sorted attribute names before hashing.
@@ -883,6 +885,36 @@ to `supervisor-activity.log`, and finalization failures show their concrete last
 error in the GUI. GUI-ready acknowledgment is also written beside each ready
 signal and the supervisor hides synchronously, making a missed hide observable
 and eliminating the delayed-hide race.
+
+## Effect and keyframe attribution acceptance phase
+
+The recorder's canonical effect snapshot now assigns a persistent `effect_id`
+scoped to the owning clip, track, or master effect. Each captured property has
+an `parameter_id`, and each animated point has a `keyframe_id` scoped to that
+parameter and frame. The IDs are persisted in `entity-map.json`; changing a
+value or reordering distinct effects therefore does not create a new identity.
+
+Property-panel pointer and keyboard evidence is emitted with
+`interaction_scope: "property_editor"`. A state change is marked mapped only
+when its accepted transaction has a compatible semantic action and direct
+interaction evidence. A deterministic operation label without that evidence
+is retained as `ambiguous`/`synthetic_state_correlation`; the recorder never
+claims to know the editor's unrecorded intent.
+
+Every processed bundle includes `verification/attribution-coverage.json` and
+the same object under `attribution_coverage` in `render-report.json`. It
+reports effect/keyframe mapped, ambiguous, and state-only diffs; registered
+versus generated UI commands; property-editor interaction IDs; and missing
+effect/parameter/keyframe IDs. A report can also be generated before rendering with:
+
+```text
+python video-path-pilot/job_pipeline.py coverage <session-directory> --require-stable-effect-ids --output verification/attribution-coverage.json
+```
+
+The acceptance fixture covers a mapped property edit and an intentionally
+ambiguous effect edit. Real acceptance still requires a fresh Kdenlive session
+that adds, reorders, edits, and removes effects and keyframes while the report
+is inspected for stable IDs and non-zero property-editor interactions.
 
 ## Historical Version 2 manual acceptance test
 

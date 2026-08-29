@@ -65,7 +65,7 @@ private:
     void scheduleActionDiscovery();
     void attachActions();
     void recordCommand(QAction *action, bool checked);
-    void recordShortcut(const QKeySequence &sequence, bool ambiguous);
+    void recordShortcut(const QKeySequence &sequence, bool ambiguous, const QString &interactionScope = {});
     QJsonObject currentTimelineSnapshot() const;
     QJsonObject projectStateReference(QByteArray *rawState = nullptr);
     QJsonObject scheduleCheckpointProxy(const QByteArray &projectState);
@@ -79,6 +79,7 @@ private:
     bool eventFilter(QObject *watched, QEvent *event) override;
     static QString describeObject(const QObject *object);
     static bool isTimelineCanvasTarget(const QObject *object);
+    static bool isPropertyEditorTarget(const QObject *object);
     static bool hasMenuAncestor(const QObject *object);
     static bool hasToolButtonAncestor(const QObject *object);
 
@@ -96,11 +97,15 @@ private:
     QElapsedTimer m_lastMenuClick;
     QElapsedTimer m_lastToolbarClick;
     QString m_lastInputInteractionId;
+    QString m_lastInputInteractionScope;
     QString m_lastShortcutSequence;
     QString m_pointerInteractionId;
     QPointF m_pointerStart;
     QString m_pointerTarget;
     int m_pointerButton{0};
+    QString m_propertyInteractionId;
+    QPointF m_propertyStart;
+    QString m_propertyTarget;
     QHash<QString, QJsonObject> m_lastSnapshots;
     std::function<QByteArray()> m_projectStateProvider;
     QList<PendingSidecarWrite> m_stateSidecarWrites;

@@ -61,7 +61,7 @@ def effect_intent(event: dict) -> dict | None:
     """Extract a stable, human-readable intent from an effect state change."""
     changes = event.get("diff", {}).get("changes", [])
     for change in changes:
-        if change.get("entity") != "clip":
+        if change.get("entity") not in {"clip", "track", "master_effect"}:
             continue
         before = change.get("before", {})
         after = change.get("after", {})
@@ -69,15 +69,22 @@ def effect_intent(event: dict) -> dict | None:
         after_effects = after.get("effects", [])
         if before_effects == after_effects:
             continue
-        return {
-            "kind": operation_name({"changes": [change]}),
-            "clip_native_id": change.get("native_id"),
+        recorded_intent = event.get("intent") if isinstance(event.get("intent"), dict) else {}
+        result = {
+            "kind": recorded_intent.get("kind") or operation_name({"changes": [change]}),
+            "owner_entity": change.get("entity"),
+            "owner_native_id": change.get("native_id"),
             "before_effects": before_effects,
             "after_effects": after_effects,
             "transaction_id": event.get("transaction_id"),
             "interaction_id": event.get("interaction_id") or event.get("transaction_id"),
-            "ambiguous": not bool(event.get("interaction_id")),
+            "ambiguous": bool(recorded_intent.get("ambiguous", not bool(event.get("interaction_id")))),
+            "attribution": recorded_intent.get("attribution") or ("direct_interaction" if event.get("interaction_id") else "synthetic_state_correlation"),
+            "interaction_scope": event.get("interaction_scope") or recorded_intent.get("interaction_scope"),
         }
+        if change.get("entity") == "clip":
+            result["clip_native_id"] = change.get("native_id")
+        return result
     return None
 
 

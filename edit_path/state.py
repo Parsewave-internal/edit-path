@@ -286,12 +286,12 @@ def operation_name(diff: dict[str, Any]) -> str:
     changes = diff.get("changes", [])
     entities = {change.get("entity") for change in changes}
     kinds = {change.get("change") for change in changes}
-    if entities == {"clip"}:
-        if kinds == {"added"}:
+    if entities <= {"clip", "track", "master_effect"} and entities:
+        if entities == {"clip"} and kinds == {"added"}:
             return "clip.insert"
-        if kinds == {"removed"}:
+        if entities == {"clip"} and kinds == {"removed"}:
             return "clip.delete"
-        if "removed" in kinds and "updated" in kinds:
+        if entities == {"clip"} and "removed" in kinds and "updated" in kinds:
             return "timeline.ripple_delete"
         updated = [change for change in changes if change.get("change") == "updated"]
         fields: set[str] = set()
@@ -317,20 +317,39 @@ def operation_name(diff: dict[str, Any]) -> str:
             def effect_identity(effect: dict[str, Any]) -> Any:
                 attributes = effect.get("attributes", {})
                 if isinstance(attributes, dict):
-                    return effect.get("id") or effect.get("asset_id") or attributes.get("id") or effect.get("name")
-                return effect.get("id") or effect.get("asset_id") or effect.get("name")
+                    return (
+                        effect.get("effect_id")
+                        or effect.get("id")
+                        or effect.get("asset_id")
+                        or attributes.get("id")
+                        or effect.get("name")
+                    )
+                return effect.get("effect_id") or effect.get("id") or effect.get("asset_id") or effect.get("name")
 
             before_order = [effect_identity(effect) for effect in before_effects]
             after_order = [effect_identity(effect) for effect in after_effects]
             if before_order != after_order:
                 return "effect.reorder"
 
-            def keyframes(values: list[dict[str, Any]]) -> list[tuple[Any, Any, Any]]:
-                result: list[tuple[Any, Any, Any]] = []
+            def keyframes(values: list[dict[str, Any]]) -> list[tuple[Any, Any, Any, Any]]:
+                result: list[tuple[Any, Any, Any, Any]] = []
                 for effect in values:
                     if not isinstance(effect, dict):
                         continue
                     effect_id = effect_identity(effect)
+                    structured_keyframes = effect.get("keyframes", [])
+                    if isinstance(structured_keyframes, list) and structured_keyframes:
+                        for keyframe in structured_keyframes:
+                            if isinstance(keyframe, dict):
+                                result.append(
+                                    (
+                                        keyframe.get("keyframe_id") or effect_id,
+                                        keyframe.get("parameter_id") or keyframe.get("parameter"),
+                                        str(keyframe.get("frame", "")),
+                                        str(keyframe.get("value", "")),
+                                    )
+                                )
+                        continue
                     parameters = list(effect.get("parameters", []))
                     for child in effect.get("children", []):
                         if not isinstance(child, dict):
@@ -345,12 +364,12 @@ def operation_name(diff: dict[str, Any]) -> str:
                         value = str(parameter.get("value", ""))
                         if "=" in value:
                             result.extend(
-                                (effect_id, name, point.strip())
+                                (effect_id, name, point.strip(), "")
                                 for point in value.split(";")
                                 if "=" in point
                             )
                         elif "keyframe" in str(name or "").lower():
-                            result.append((effect_id, name, value))
+                            result.append((effect_id, name, value, ""))
                 return result
 
             before_keyframes, after_keyframes = keyframes(before_effects), keyframes(after_effects)

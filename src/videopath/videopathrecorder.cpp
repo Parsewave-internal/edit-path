@@ -56,14 +56,25 @@ QString effectOperationName(const QJsonObject &beforeClip, const QJsonObject &af
         return QStringLiteral("effect.remove");
     }
 
-    auto effectOrder = [](const QJsonArray &effects) {
+    auto effectIdentity = [](const QJsonObject &effect) {
+        const QJsonObject attributes = effect.value(QStringLiteral("attributes")).toObject();
+        const QStringList candidates{
+            effect.value(QStringLiteral("effect_id")).toString(),
+            effect.value(QStringLiteral("id")).toString(),
+            effect.value(QStringLiteral("asset_id")).toString(),
+            attributes.value(QStringLiteral("id")).toString(),
+            effect.value(QStringLiteral("name")).toString()};
+        for (const QString &candidate : candidates) {
+            if (!candidate.isEmpty()) {
+                return candidate;
+            }
+        }
+        return QString();
+    };
+    auto effectOrder = [effectIdentity](const QJsonArray &effects) {
         QStringList result;
         for (const QJsonValue &value : effects) {
-            const QJsonObject effect = value.toObject();
-            const QJsonObject attributes = effect.value(QStringLiteral("attributes")).toObject();
-            const QString identity = effect.value(QStringLiteral("id")).toString(
-                effect.value(QStringLiteral("asset_id")).toString(attributes.value(QStringLiteral("id")).toString(effect.value(QStringLiteral("name")).toString())));
-            result.append(identity);
+            result.append(effectIdentity(value.toObject()));
         }
         return result;
     };
@@ -71,13 +82,21 @@ QString effectOperationName(const QJsonObject &beforeClip, const QJsonObject &af
         return QStringLiteral("effect.reorder");
     }
 
-    auto keyframeValues = [](const QJsonArray &effects) {
+    auto keyframeValues = [effectIdentity](const QJsonArray &effects) {
         QStringList result;
         for (const QJsonValue &value : effects) {
             const QJsonObject effect = value.toObject();
-            const QJsonObject attributes = effect.value(QStringLiteral("attributes")).toObject();
-            const QString effectId = effect.value(QStringLiteral("id")).toString(
-                effect.value(QStringLiteral("asset_id")).toString(attributes.value(QStringLiteral("id")).toString(effect.value(QStringLiteral("name")).toString())));
+            const QString effectId = effectIdentity(effect);
+            for (const QJsonValue &keyframeValue : effect.value(QStringLiteral("keyframes")).toArray()) {
+                const QJsonObject keyframe = keyframeValue.toObject();
+                const QString keyframeId = keyframe.value(QStringLiteral("keyframe_id")).toString();
+                if (!keyframeId.isEmpty()) {
+                    result.append(keyframeId + QLatin1Char('|') + keyframe.value(QStringLiteral("value")).toString());
+                }
+            }
+            if (!effect.value(QStringLiteral("keyframes")).toArray().isEmpty()) {
+                continue;
+            }
             QJsonArray parameters = effect.value(QStringLiteral("parameters")).toArray();
             for (const QJsonValue &childValue : effect.value(QStringLiteral("children")).toArray()) {
                 const QJsonObject child = childValue.toObject();
@@ -160,7 +179,96 @@ QJsonObject canonicalXmlElement(const QDomElement &element)
     return result;
 }
 
-QJsonArray canonicalEffectStack(const std::shared_ptr<EffectStackModel> &stack)
+QString effectSourceIdentity(const QDomElement &effect, int occurrence)
+{
+    const QStringList identityAttributes{QStringLiteral("id"), QStringLiteral("kdenlive_id"), QStringLiteral("asset_id"), QStringLiteral("tag"), QStringLiteral("name")};
+    for (const QString &attribute : identityAttributes) {
+        const QString value = effect.attribute(attribute).trimmed();
+        if (!value.isEmpty()) {
+            return value + (occurrence > 0 ? QStringLiteral("#%1").arg(occurrence) : QString());
+        }
+    }
+    return QStringLiteral("%1#%2").arg(effect.tagName()).arg(occurrence);
+}
+
+void collectEffectProperties(const QDomElement &element, QList<QDomElement> &properties)
+{
+    for (QDomElement child = element.firstChildElement(); !child.isNull(); child = child.nextSiblingElement()) {
+        if (child.hasAttribute(QStringLiteral("name")) || child.hasAttribute(QStringLiteral("parameter"))) {
+            properties.append(child);
+        }
+        collectEffectProperties(child, properties);
+    }
+}
+
+QJsonObject enrichCanonicalEffect(const QDomElement &effect, const QJsonObject &canonical, const QString &ownerId,
+                                  int occurrence, const std::function<QString(const QString &, const QString &)> &idProvider)
+{
+    QJsonObject result = canonical;
+    const QString sourceId = effectSourceIdentity(effect, occurrence);
+    const QString effectId = idProvider(QStringLiteral("effect"), ownerId + QLatin1Char('|') + sourceId);
+    result.insert(QStringLiteral("source_id"), sourceId);
+    result.insert(QStringLiteral("effect_id"), effectId);
+
+    QJsonArray parameters;
+    QJsonArray keyframes;
+    QList<QDomElement> properties;
+    collectEffectProperties(effect, properties);
+    QHash<QString, int> parameterOccurrences;
+    for (const QDomElement &property : properties) {
+        QString name = property.attribute(QStringLiteral("name"));
+        if (name.isEmpty()) {
+            name = property.attribute(QStringLiteral("parameter"));
+        }
+        if (name.isEmpty()) {
+            continue;
+        }
+        const int occurrenceForName = parameterOccurrences.value(name, 0);
+        parameterOccurrences.insert(name, occurrenceForName + 1);
+        const QString parameterKey = name + (occurrenceForName > 0 ? QStringLiteral("#%1").arg(occurrenceForName) : QString());
+        const QString parameterId = idProvider(QStringLiteral("effect_parameter"), effectId + QLatin1Char('|') + parameterKey);
+        const QString value = property.text();
+        parameters.append(QJsonObject{{QStringLiteral("parameter_id"), parameterId},
+                                      {QStringLiteral("name"), name},
+                                      {QStringLiteral("value"), value}});
+
+        const QStringList points = value.split(QLatin1Char(';'), Qt::SkipEmptyParts);
+        for (const QString &rawPoint : points) {
+            const int equals = rawPoint.indexOf(QLatin1Char('='));
+            if (equals < 0) {
+                continue;
+            }
+            const QString frame = rawPoint.left(equals).trimmed();
+            if (frame.isEmpty()) {
+                continue;
+            }
+            const QString keyframeId = idProvider(QStringLiteral("keyframe"), parameterId + QLatin1Char('|') + frame);
+            keyframes.append(QJsonObject{{QStringLiteral("keyframe_id"), keyframeId},
+                                         {QStringLiteral("parameter_id"), parameterId},
+                                         {QStringLiteral("parameter"), name},
+                                         {QStringLiteral("frame"), frame},
+                                         {QStringLiteral("value"), rawPoint.mid(equals + 1).trimmed()}});
+        }
+        if (value.contains(QLatin1Char('=')) == false && name.contains(QStringLiteral("keyframe"), Qt::CaseInsensitive)) {
+            const QString keyframeId = idProvider(QStringLiteral("keyframe"), parameterId + QStringLiteral("|single"));
+            keyframes.append(QJsonObject{{QStringLiteral("keyframe_id"), keyframeId},
+                                         {QStringLiteral("parameter_id"), parameterId},
+                                         {QStringLiteral("parameter"), name},
+                                         {QStringLiteral("frame"), QStringLiteral("single")},
+                                         {QStringLiteral("value"), value}});
+        }
+    }
+    if (!parameters.isEmpty()) {
+        result.insert(QStringLiteral("parameters"), parameters);
+    }
+    if (!keyframes.isEmpty()) {
+        result.insert(QStringLiteral("keyframes"), keyframes);
+    }
+    return result;
+}
+
+QJsonArray canonicalEffectStack(const std::shared_ptr<EffectStackModel> &stack, const QString &ownerId,
+                                const std::function<QString(const QString &, const QString &)> &idProvider)
 {
     QJsonArray effects;
     if (!stack) {
@@ -168,8 +276,12 @@ QJsonArray canonicalEffectStack(const std::shared_ptr<EffectStackModel> &stack)
     }
     QDomDocument document;
     const QDomElement root = stack->toXml(document);
+    QHash<QString, int> occurrences;
     for (QDomElement effect = root.firstChildElement(); !effect.isNull(); effect = effect.nextSiblingElement()) {
-        effects.append(canonicalXmlElement(effect));
+        QString source = effectSourceIdentity(effect, 0);
+        const int occurrence = occurrences.value(source, 0);
+        occurrences.insert(source, occurrence + 1);
+        effects.append(enrichCanonicalEffect(effect, canonicalXmlElement(effect), ownerId, occurrence, idProvider));
     }
     return effects;
 }
@@ -503,7 +615,9 @@ QJsonObject VideoPathRecorder::currentTimelineSnapshot() const
         track.insert(QStringLiteral("locked"), model->trackIsLocked(trackId));
         track.insert(QStringLiteral("muted"), model->trackIsMuted(trackId));
         track.insert(QStringLiteral("hidden"), model->trackIsHidden(trackId));
-        track.insert(QStringLiteral("effects"), canonicalEffectStack(model->getTrackEffectStackModel(trackId)));
+        const QString trackEntityId = stableEntityId(QStringLiteral("track"), QString::number(trackId));
+        track.insert(QStringLiteral("effects"), canonicalEffectStack(model->getTrackEffectStackModel(trackId), trackEntityId,
+                                                                      [this](const QString &kind, const QString &key) { return stableEntityId(kind, key); }));
         tracks.append(track);
     }
 
@@ -540,7 +654,9 @@ QJsonObject VideoPathRecorder::currentTimelineSnapshot() const
             clip.insert(QStringLiteral("speed"), model->getClipSpeed(itemId));
             clip.insert(QStringLiteral("clip_state"), int(state.first));
             clip.insert(QStringLiteral("clip_type"), int(state.second));
-            clip.insert(QStringLiteral("effects"), canonicalEffectStack(model->getClipEffectStackModel(itemId)));
+            const QString clipEntityId = stableEntityId(QStringLiteral("clip"), QString::number(itemId));
+            clip.insert(QStringLiteral("effects"), canonicalEffectStack(model->getClipEffectStackModel(itemId), clipEntityId,
+                                                                          [this](const QString &kind, const QString &key) { return stableEntityId(kind, key); }));
             clips.append(clip);
             if (model->getMixDuration(itemId) > 0) {
                 QDomDocument document;
@@ -580,7 +696,9 @@ QJsonObject VideoPathRecorder::currentTimelineSnapshot() const
     QJsonObject masterEffects;
     masterEffects.insert(QStringLiteral("native_id"), 0);
     masterEffects.insert(QStringLiteral("entity_id"), stableEntityId(QStringLiteral("master_effect"), QStringLiteral("0")));
-    masterEffects.insert(QStringLiteral("effects"), canonicalEffectStack(model->getMasterEffectStackModel()));
+    const QString masterEntityId = stableEntityId(QStringLiteral("master_effect"), QStringLiteral("0"));
+    masterEffects.insert(QStringLiteral("effects"), canonicalEffectStack(model->getMasterEffectStackModel(), masterEntityId,
+                                                                           [this](const QString &kind, const QString &key) { return stableEntityId(kind, key); }));
     snapshot.insert(QStringLiteral("master_effects"), QJsonArray{masterEffects});
     return snapshot;
 }
@@ -904,6 +1022,9 @@ void VideoPathRecorder::captureTimelineChange(const QString &label, const QStrin
     flushPendingActions(true);
     if (m_lastInteraction.isValid() && m_lastInteraction.elapsed() < 2000 && !m_lastInputInteractionId.isEmpty()) {
         event.insert(QStringLiteral("interaction_id"), m_lastInputInteractionId);
+        if (!m_lastInputInteractionScope.isEmpty()) {
+            event.insert(QStringLiteral("interaction_scope"), m_lastInputInteractionScope);
+        }
     }
     // Effect-panel and curve-editor edits may not produce a QAction or recent
     // pointer event. Still give the state mutation an explicit correlation
@@ -913,7 +1034,8 @@ void VideoPathRecorder::captureTimelineChange(const QString &label, const QStrin
     const QJsonArray changes = timelineDiff.value(QStringLiteral("changes")).toArray();
     for (const QJsonValue &value : changes) {
         const QJsonObject change = value.toObject();
-        if (change.value(QStringLiteral("entity")).toString() != QStringLiteral("clip")) continue;
+        const QString entity = change.value(QStringLiteral("entity")).toString();
+        if (entity != QLatin1String("clip") && entity != QLatin1String("track") && entity != QLatin1String("master_effect")) continue;
         const QJsonObject beforeClip = change.value(QStringLiteral("before")).toObject();
         const QJsonObject afterClip = change.value(QStringLiteral("after")).toObject();
         if (beforeClip.value(QStringLiteral("effects")) != afterClip.value(QStringLiteral("effects"))) {
@@ -924,13 +1046,17 @@ void VideoPathRecorder::captureTimelineChange(const QString &label, const QStrin
     }
     if (effectChange) {
         QString interactionId = event.value(QStringLiteral("interaction_id")).toString();
-        const bool ambiguous = interactionId.isEmpty();
+        const bool ambiguous = interactionId.isEmpty() || m_lastInputInteractionScope == QLatin1String("timeline");
         if (interactionId.isEmpty()) interactionId = QUuid::createUuid().toString(QUuid::WithoutBraces);
         event.insert(QStringLiteral("interaction_id"), interactionId);
         QJsonObject intent;
         intent.insert(QStringLiteral("kind"), effectOperation);
         intent.insert(QStringLiteral("interaction_id"), interactionId);
         intent.insert(QStringLiteral("ambiguous"), ambiguous);
+        intent.insert(QStringLiteral("attribution"), ambiguous ? QStringLiteral("synthetic_state_correlation") : QStringLiteral("direct_interaction"));
+        if (!ambiguous && !m_lastInputInteractionScope.isEmpty()) {
+            intent.insert(QStringLiteral("interaction_scope"), m_lastInputInteractionScope);
+        }
         event.insert(QStringLiteral("intent"), intent);
     }
     writeEvent(event);
@@ -984,6 +1110,8 @@ void VideoPathRecorder::recordCommand(QAction *action, bool checked)
     } else if (m_lastToolbarClick.isValid() && m_lastToolbarClick.elapsed() < 500) {
         source = QStringLiteral("toolbar");
         interactionId = m_lastInputInteractionId;
+    } else {
+        m_lastInputInteractionScope = isPropertyEditorTarget(QApplication::focusWidget()) ? QStringLiteral("property_editor") : QString();
     }
     QString commandId = action->objectName();
     bool commandRegistered = !commandId.isEmpty();
@@ -1019,6 +1147,9 @@ void VideoPathRecorder::recordCommand(QAction *action, bool checked)
     event.insert(QStringLiteral("checked"), checked);
     event.insert(QStringLiteral("shortcuts"), shortcuts);
     event.insert(QStringLiteral("focus"), describeObject(QApplication::focusWidget()));
+    if (!m_lastInputInteractionScope.isEmpty()) {
+        event.insert(QStringLiteral("interaction_scope"), m_lastInputInteractionScope);
+    }
     if (!m_transactionId.isEmpty()) {
         addTransactionFields(event);
         writeEvent(event);
@@ -1034,7 +1165,7 @@ void VideoPathRecorder::recordCommand(QAction *action, bool checked)
     m_pendingCommands.append(event);
 }
 
-void VideoPathRecorder::recordShortcut(const QKeySequence &sequence, bool ambiguous)
+void VideoPathRecorder::recordShortcut(const QKeySequence &sequence, bool ambiguous, const QString &interactionScope)
 {
     const QString portableSequence = sequence.toString(QKeySequence::PortableText);
     if (portableSequence.isEmpty()) {
@@ -1046,6 +1177,7 @@ void VideoPathRecorder::recordShortcut(const QKeySequence &sequence, bool ambigu
     m_lastShortcut.restart();
     m_lastShortcutSequence = portableSequence;
     m_lastInputInteractionId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    m_lastInputInteractionScope = interactionScope;
     m_lastInteraction.restart();
     QJsonObject shortcutEvent;
     shortcutEvent.insert(QStringLiteral("event_type"), QStringLiteral("ui.shortcut"));
@@ -1053,6 +1185,9 @@ void VideoPathRecorder::recordShortcut(const QKeySequence &sequence, bool ambigu
     shortcutEvent.insert(QStringLiteral("key_sequence"), portableSequence);
     shortcutEvent.insert(QStringLiteral("ambiguous"), ambiguous);
     shortcutEvent.insert(QStringLiteral("focus"), describeObject(QApplication::focusWidget()));
+    if (!interactionScope.isEmpty()) {
+        shortcutEvent.insert(QStringLiteral("interaction_scope"), interactionScope);
+    }
     writeEvent(shortcutEvent);
 }
 
@@ -1074,6 +1209,25 @@ bool VideoPathRecorder::isTimelineCanvasTarget(const QObject *object)
     for (const QObject *current = object; current; current = current->parent()) {
         if (describeObject(current).contains(QStringLiteral("timeline"), Qt::CaseInsensitive)) {
             return true;
+        }
+    }
+    return false;
+}
+
+bool VideoPathRecorder::isPropertyEditorTarget(const QObject *object)
+{
+    if (!object || isTimelineCanvasTarget(object)) {
+        return false;
+    }
+    static const QStringList markers{
+        QStringLiteral("effect"), QStringLiteral("property"), QStringLiteral("parameter"),
+        QStringLiteral("keyframe"), QStringLiteral("curve"), QStringLiteral("filter")};
+    for (const QObject *current = object; current; current = current->parent()) {
+        const QString descriptor = describeObject(current).toLower();
+        for (const QString &marker : markers) {
+            if (descriptor.contains(marker)) {
+                return true;
+            }
         }
     }
     return false;
@@ -1109,23 +1263,60 @@ bool VideoPathRecorder::eventFilter(QObject *watched, QEvent *event)
         const bool hasShortcutModifier = key->modifiers().testAnyFlags(Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier);
         const bool isFunctionKey = key->key() >= Qt::Key_F1 && key->key() <= Qt::Key_F35;
         if (!key->isAutoRepeat() && !isModifierOnly && (hasShortcutModifier || isFunctionKey)) {
-            recordShortcut(QKeySequence(QKeyCombination(key->modifiers(), Qt::Key(key->key()))), false);
+            recordShortcut(QKeySequence(QKeyCombination(key->modifiers(), Qt::Key(key->key()))), false,
+                           isPropertyEditorTarget(watched) ? QStringLiteral("property_editor") : QString());
         }
     } else if (event->type() == QEvent::Shortcut) {
         const auto *shortcut = static_cast<QShortcutEvent *>(event);
-        recordShortcut(shortcut->key(), shortcut->isAmbiguous());
+        recordShortcut(shortcut->key(), shortcut->isAmbiguous(), isPropertyEditorTarget(watched) ? QStringLiteral("property_editor") : QString());
     } else if (event->type() == QEvent::MouseButtonPress && hasMenuAncestor(watched)) {
         m_lastMenuClick.restart();
         m_lastInputInteractionId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        m_lastInputInteractionScope = QStringLiteral("menu");
     } else if (event->type() == QEvent::MouseButtonPress && hasToolButtonAncestor(watched)) {
         m_lastToolbarClick.restart();
         m_lastInputInteractionId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        m_lastInputInteractionScope = QStringLiteral("toolbar");
+    }
+
+    if (isPropertyEditorTarget(watched) && event->type() == QEvent::KeyPress) {
+        const auto *key = static_cast<QKeyEvent *>(event);
+        if (!key->isAutoRepeat() && !key->text().isEmpty()) {
+            recordShortcut(QKeySequence(key->text()), false, QStringLiteral("property_editor"));
+        }
+    }
+
+    if (isPropertyEditorTarget(watched) && (event->type() == QEvent::MouseButtonPress || event->type() == QEvent::MouseButtonRelease)) {
+        const auto *mouse = static_cast<QMouseEvent *>(event);
+        if (event->type() == QEvent::MouseButtonPress) {
+            m_propertyInteractionId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+            m_propertyStart = mouse->globalPosition();
+            m_propertyTarget = describeObject(watched);
+        } else if (!m_propertyInteractionId.isEmpty()) {
+            QJsonObject gesture;
+            gesture.insert(QStringLiteral("event_type"), QStringLiteral("ui.gesture"));
+            gesture.insert(QStringLiteral("interaction_id"), m_propertyInteractionId);
+            gesture.insert(QStringLiteral("interaction_scope"), QStringLiteral("property_editor"));
+            gesture.insert(QStringLiteral("interaction_kind"), QStringLiteral("property_editor"));
+            gesture.insert(QStringLiteral("gesture"), m_propertyStart == mouse->globalPosition() ? QStringLiteral("click") : QStringLiteral("drag"));
+            gesture.insert(QStringLiteral("target"), m_propertyTarget);
+            gesture.insert(QStringLiteral("button"), int(mouse->button()));
+            gesture.insert(QStringLiteral("start_global"), QJsonObject{{QStringLiteral("x"), m_propertyStart.x()}, {QStringLiteral("y"), m_propertyStart.y()}});
+            gesture.insert(QStringLiteral("end_global"), QJsonObject{{QStringLiteral("x"), mouse->globalPosition().x()}, {QStringLiteral("y"), mouse->globalPosition().y()}});
+            gesture.insert(QStringLiteral("modifiers"), int(mouse->modifiers()));
+            m_lastInputInteractionId = m_propertyInteractionId;
+            m_lastInputInteractionScope = QStringLiteral("property_editor");
+            m_lastInteraction.restart();
+            writeEvent(gesture);
+            m_propertyInteractionId.clear();
+        }
     }
 
     if (isTimelineCanvasTarget(watched) && (event->type() == QEvent::MouseButtonPress || event->type() == QEvent::MouseButtonRelease)) {
         const auto *mouse = static_cast<QMouseEvent *>(event);
         if (event->type() == QEvent::MouseButtonPress) {
             m_pointerInteractionId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+            m_lastInputInteractionScope = QStringLiteral("timeline");
             m_pointerStart = mouse->globalPosition();
             m_pointerTarget = describeObject(watched);
             m_pointerButton = int(mouse->button());
@@ -1135,6 +1326,7 @@ bool VideoPathRecorder::eventFilter(QObject *watched, QEvent *event)
             QJsonObject gesture;
             gesture.insert(QStringLiteral("event_type"), QStringLiteral("ui.gesture"));
             gesture.insert(QStringLiteral("interaction_id"), m_pointerInteractionId);
+            gesture.insert(QStringLiteral("interaction_scope"), QStringLiteral("timeline"));
             gesture.insert(QStringLiteral("gesture"), m_pointerStart == mouse->globalPosition() ? QStringLiteral("click") : QStringLiteral("drag"));
             gesture.insert(QStringLiteral("target"), m_pointerTarget);
             gesture.insert(QStringLiteral("button"), m_pointerButton);

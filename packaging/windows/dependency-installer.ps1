@@ -32,7 +32,7 @@ $passed = (Check 'disk_space' { $drive=(Get-Item $InstallRoot).PSDrive; $free=(G
 $passed = (Check 'python' { $py=Get-Command py.exe -ErrorAction Stop; $py.Source }) -and $passed
 $venv=Join-Path $InstallRoot 'python'; $python=Join-Path $venv 'Scripts\python.exe'
 if ($passed) { $passed=(Check 'python_environment' { if (-not (Test-Path $python)) { & py.exe -3.11 -m venv $venv }; if (-not (Test-Path $python)) { throw 'venv creation failed' }; $python }) -and $passed }
-if ($passed -and -not $Offline) { $passed=(Check 'whisper_install' { & $python -m pip install --disable-pip-version-check -U openai-whisper; if ($LASTEXITCODE) { throw 'pip install openai-whisper failed' }; 'installed' }) -and $passed }
+if ($passed -and -not $Offline) { $passed=(Check 'whisper_install' { & $python -m pip install --disable-pip-version-check -U openai-whisper; if ($LASTEXITCODE) { throw 'pip install openai-whisper failed' }; 'installed into EditPath venv' }) -and $passed }
 $passed=(Check 'whisper_import' { & $python -c 'import whisper; print(whisper.__file__)'; if ($LASTEXITCODE) { throw 'Whisper import failed' } }) -and $passed
 $bundleBin = Join-Path $PSScriptRoot 'bin\ffmpeg.exe'
 $ffmpeg = if (Test-Path $bundleBin) { $bundleBin } else { (Get-Command ffmpeg.exe -ErrorAction Stop).Source }

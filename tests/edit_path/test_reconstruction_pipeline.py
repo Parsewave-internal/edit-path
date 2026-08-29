@@ -41,10 +41,11 @@ from edit_path.process_video import (
 )
 from edit_path.reconstruct import render_project, select_video_encoder
 from edit_path.runtime import runtime_fingerprint
-from edit_path.state import canonical_hash, load_state_reference, resolve_accepted_branch, validate_action_semantics
+from edit_path.state import canonical_hash, load_state_reference, operation_name, resolve_accepted_branch, validate_action_semantics
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "video-path-pilot"))
 from job_pipeline import finalize_session
+from normalize_sample import operation_name as normalized_operation_name
 
 
 def event(sequence: int, event_type: str, **values: object) -> dict:
@@ -162,6 +163,81 @@ class BranchResolutionTests(unittest.TestCase):
         self.assertEqual(reports[0]["declared"], "clip.insert")
         self.assertEqual(reports[0]["attribution"], "recovered_post_push")
         self.assertIsNone(reports[1]["declared"])
+
+
+class OperationTaxonomyTests(unittest.TestCase):
+    def test_all_consumers_use_the_new_canonical_taxonomy(self) -> None:
+        def diff(*changes: dict) -> dict:
+            return {"changes": list(changes)}
+
+        effect = {"id": "effect", "index": 0, "parameters": []}
+        keyframe_one = {"id": "effect", "index": 0, "parameters": [{"name": "level", "value": "0=0"}]}
+        keyframe = {"id": "effect", "index": 0, "parameters": [{"name": "level", "value": "0=0;10=1"}]}
+        cases = {
+            "clip.insert": {"entity": "clip", "change": "added", "native_id": 1, "after": {}},
+            "clip.delete": {"entity": "clip", "change": "removed", "native_id": 1, "before": {}},
+            "clip.move": {"entity": "clip", "change": "updated", "native_id": 1,
+                           "before": {"timeline_start_frame": 0}, "after": {"timeline_start_frame": 10}},
+            "clip.speed.change": {"entity": "clip", "change": "updated", "native_id": 1,
+                                   "before": {"speed": 1}, "after": {"speed": 2}},
+            "clip.trim.in": {"entity": "clip", "change": "updated", "native_id": 1,
+                              "before": {"source_start_frame": 0}, "after": {"source_start_frame": 10}},
+            "clip.trim.out": {"entity": "clip", "change": "updated", "native_id": 1,
+                               "before": {"source_end_frame": 20}, "after": {"source_end_frame": 10}},
+            "effect.add": {"entity": "clip", "change": "updated", "native_id": 1,
+                            "before": {"effects": []}, "after": {"effects": [effect]}},
+            "effect.remove": {"entity": "clip", "change": "updated", "native_id": 1,
+                               "before": {"effects": [effect]}, "after": {"effects": []}},
+            "effect.reorder": {"entity": "clip", "change": "updated", "native_id": 1,
+                                "before": {"effects": [{**effect, "index": 0}, {"id": "other", "index": 1, "parameters": []}]},
+                                "after": {"effects": [{"id": "other", "index": 0, "parameters": []}, {**effect, "index": 1}]}},
+            "effect.parameter.change": {"entity": "clip", "change": "updated", "native_id": 1,
+                                         "before": {"effects": [{**effect, "parameters": [{"name": "level", "value": "1"}]}]},
+                                         "after": {"effects": [{**effect, "parameters": [{"name": "level", "value": "2"}]}]}},
+            "keyframe.value.change": {"entity": "clip", "change": "updated", "native_id": 1,
+                                       "before": {"effects": [{**keyframe, "parameters": [{"name": "level", "value": "0=0;10=1"}]}]},
+                                       "after": {"effects": [{**keyframe, "parameters": [{"name": "level", "value": "0=0;10=2"}]}]}},
+            "keyframe.add": {"entity": "clip", "change": "updated", "native_id": 1,
+                              "before": {"effects": [{**effect, "parameters": []}]},
+                              "after": {"effects": [{**keyframe_one}]}},
+            "keyframe.remove": {"entity": "clip", "change": "updated", "native_id": 1,
+                                 "before": {"effects": [{**keyframe_one}]}, "after": {"effects": [{**effect, "parameters": []}]}},
+            "keyframe.multi_edit": {"entity": "clip", "change": "updated", "native_id": 1,
+                                    "before": {"effects": [{**effect, "parameters": []}]},
+                                    "after": {"effects": [{"id": "effect", "index": 0, "parameters": [
+                                        {"name": "a", "value": "0=0"}, {"name": "b", "value": "0=1"}]}]}},
+            "track.add": {"entity": "track", "change": "added", "native_id": 1, "after": {}},
+            "track.remove": {"entity": "track", "change": "removed", "native_id": 1, "before": {}},
+            "track.rename": {"entity": "track", "change": "updated", "native_id": 1,
+                              "before": {"name": "A"}, "after": {"name": "B"}},
+            "track.mute": {"entity": "track", "change": "updated", "native_id": 1,
+                            "before": {"muted": False}, "after": {"muted": True}},
+            "track.lock": {"entity": "track", "change": "updated", "native_id": 1,
+                            "before": {"locked": False}, "after": {"locked": True}},
+            "track.set_state": {"entity": "track", "change": "updated", "native_id": 1,
+                                 "before": {"hidden": False}, "after": {"hidden": True}},
+            "transition.add": {"entity": "composition", "change": "added", "native_id": 1, "after": {}},
+            "transition.remove": {"entity": "mix", "change": "removed", "native_id": 1, "before": {}},
+            "transition.parameter.change": {"entity": "composition", "change": "updated", "native_id": 1,
+                                              "before": {"x": 1}, "after": {"x": 2}},
+            "timeline.change": {"entity": "unknown", "change": "updated", "native_id": 1,
+                                 "before": {"x": 1}, "after": {"x": 2}},
+        }
+        for expected, change in cases.items():
+            with self.subTest(expected=expected):
+                value = diff(change)
+                self.assertEqual(operation_name(value), expected)
+                self.assertEqual(normalized_operation_name(value), expected)
+
+    def test_replay_event_endpoint_uses_the_same_classifier(self) -> None:
+        from edit_path.process_video import _event_operation
+
+        event = {
+            "event_type": "state.diff",
+            "diff": {"changes": [{"entity": "clip", "change": "updated", "native_id": 1,
+                                   "before": {"speed": 1}, "after": {"speed": 2}}]},
+        }
+        self.assertEqual(_event_operation(event, None), "clip.speed.change")
 
 
 class StateTests(unittest.TestCase):

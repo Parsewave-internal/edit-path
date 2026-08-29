@@ -34,6 +34,30 @@ Perform the normal-session test before the crash-recovery test.
 14. Open the generated sample and confirm `sample.json`, assets, final video,
     raw events, native project, and validation reports exist.
 
+### Reasoning audio acceptance (normal session)
+
+1. While Kdenlive is open, click **Record Reasoning** in the always-on-top
+   EditPath window.
+2. Choose the microphone in **Configure microphone**. Use **List available
+   microphones**, then click **Test microphone and play it back**. The
+   **Start recording** button stays disabled until a three-second WAV test is
+   successfully written and played through Qt Multimedia.
+3. Confirm the button changes to **Stop Reasoning (recording…)** and the status
+   says **Recording in progress**.
+4. Click **Stop Reasoning** at any point. Confirm the FLAC appears under the
+   active session's `EDIT-PATH\reasoning\audio-###.flac` and the activity log
+   prints its path. The stop path sends FFmpeg `q`, waits for finalization, and
+   force-kills only if necessary; it must not leave an empty reasoning folder.
+5. Click **Create Dataset Sample**, answer **Yes** to transcription, and
+   confirm `reasoning\transcript-audio-###.json`, `reasoning\reasoning.json`,
+   and `reasoning\captions.vtt` are created. Whisper is installed into the
+   reusable `%LOCALAPPDATA%\EditPath\python` environment by the dependency
+   installer and is invoked with that interpreter even though the portable
+   editor's embedded Python has no pip.
+
+If the microphone test fails, retain the device listing and EditPath activity
+log. Do not report the reasoning test as passed merely because Kdenlive opened.
+
 Record PASS/FAIL and notes for every check:
 
 - Kdenlive opened directly.

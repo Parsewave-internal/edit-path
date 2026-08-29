@@ -35,6 +35,7 @@
 #include <QSysInfo>
 #include <QTimer>
 #include <QToolButton>
+#include <QStringList>
 #include <QUuid>
 #include <QWidget>
 #include <QtConcurrent/QtConcurrentRun>
@@ -44,6 +45,86 @@
 #endif
 
 namespace {
+QString effectOperationName(const QJsonObject &beforeClip, const QJsonObject &afterClip)
+{
+    const QJsonArray beforeEffects = beforeClip.value(QStringLiteral("effects")).toArray();
+    const QJsonArray afterEffects = afterClip.value(QStringLiteral("effects")).toArray();
+    if (afterEffects.size() > beforeEffects.size()) {
+        return QStringLiteral("effect.add");
+    }
+    if (afterEffects.size() < beforeEffects.size()) {
+        return QStringLiteral("effect.remove");
+    }
+
+    auto effectOrder = [](const QJsonArray &effects) {
+        QStringList result;
+        for (const QJsonValue &value : effects) {
+            const QJsonObject effect = value.toObject();
+            const QJsonObject attributes = effect.value(QStringLiteral("attributes")).toObject();
+            const QString identity = effect.value(QStringLiteral("id")).toString(
+                effect.value(QStringLiteral("asset_id")).toString(attributes.value(QStringLiteral("id")).toString(effect.value(QStringLiteral("name")).toString())));
+            result.append(identity);
+        }
+        return result;
+    };
+    if (effectOrder(beforeEffects) != effectOrder(afterEffects)) {
+        return QStringLiteral("effect.reorder");
+    }
+
+    auto keyframeValues = [](const QJsonArray &effects) {
+        QStringList result;
+        for (const QJsonValue &value : effects) {
+            const QJsonObject effect = value.toObject();
+            const QJsonObject attributes = effect.value(QStringLiteral("attributes")).toObject();
+            const QString effectId = effect.value(QStringLiteral("id")).toString(
+                effect.value(QStringLiteral("asset_id")).toString(attributes.value(QStringLiteral("id")).toString(effect.value(QStringLiteral("name")).toString())));
+            QJsonArray parameters = effect.value(QStringLiteral("parameters")).toArray();
+            for (const QJsonValue &childValue : effect.value(QStringLiteral("children")).toArray()) {
+                const QJsonObject child = childValue.toObject();
+                const QJsonObject childAttributes = child.value(QStringLiteral("attributes")).toObject();
+                if (!childAttributes.isEmpty()) {
+                    parameters.append(QJsonObject{{QStringLiteral("name"), childAttributes.value(QStringLiteral("name"))},
+                                                  {QStringLiteral("value"), child.value(QStringLiteral("text"))}});
+                }
+            }
+            for (const QJsonValue &parameterValue : parameters) {
+                const QJsonObject parameter = parameterValue.toObject();
+                const QString name = parameter.value(QStringLiteral("name")).toString();
+                const QString parameterValueText = parameter.value(QStringLiteral("value")).toString();
+                if (parameterValueText.contains(QLatin1Char('=')) || name.contains(QStringLiteral("keyframe"), Qt::CaseInsensitive)) {
+                    if (parameterValueText.contains(QLatin1Char('='))) {
+                        const auto points = parameterValueText.split(QLatin1Char(';'), Qt::SkipEmptyParts);
+                        for (const QString &point : points) {
+                            if (point.contains(QLatin1Char('='))) {
+                                result.append(effectId + QLatin1Char('|') + name + QLatin1Char('|') + point.trimmed());
+                            }
+                        }
+                    } else {
+                        result.append(effectId + QLatin1Char('|') + name + QLatin1Char('|') + parameterValueText);
+                    }
+                }
+            }
+        }
+        return result;
+    };
+    const QStringList beforeKeyframes = keyframeValues(beforeEffects);
+    const QStringList afterKeyframes = keyframeValues(afterEffects);
+    if (beforeKeyframes != afterKeyframes) {
+        const int delta = afterKeyframes.size() - beforeKeyframes.size();
+        if (qAbs(delta) > 1) {
+            return QStringLiteral("keyframe.multi_edit");
+        }
+        if (delta > 0) {
+            return QStringLiteral("keyframe.add");
+        }
+        if (delta < 0) {
+            return QStringLiteral("keyframe.remove");
+        }
+        return QStringLiteral("keyframe.value.change");
+    }
+    return QStringLiteral("effect.parameter.change");
+}
+
 QJsonObject canonicalXmlElement(const QDomElement &element)
 {
     QJsonObject result;
@@ -828,7 +909,7 @@ void VideoPathRecorder::captureTimelineChange(const QString &label, const QStrin
     // pointer event. Still give the state mutation an explicit correlation
     // identity so it cannot disappear into an unlinked raw diff.
     bool effectChange = false;
-    bool keyframeChange = false;
+    QString effectOperation;
     const QJsonArray changes = timelineDiff.value(QStringLiteral("changes")).toArray();
     for (const QJsonValue &value : changes) {
         const QJsonObject change = value.toObject();
@@ -837,8 +918,7 @@ void VideoPathRecorder::captureTimelineChange(const QString &label, const QStrin
         const QJsonObject afterClip = change.value(QStringLiteral("after")).toObject();
         if (beforeClip.value(QStringLiteral("effects")) != afterClip.value(QStringLiteral("effects"))) {
             effectChange = true;
-            const QString serialized = QJsonDocument(afterClip.value(QStringLiteral("effects")).toArray()).toJson(QJsonDocument::Compact);
-            keyframeChange = serialized.contains('=');
+            effectOperation = effectOperationName(beforeClip, afterClip);
             break;
         }
     }
@@ -848,7 +928,7 @@ void VideoPathRecorder::captureTimelineChange(const QString &label, const QStrin
         if (interactionId.isEmpty()) interactionId = QUuid::createUuid().toString(QUuid::WithoutBraces);
         event.insert(QStringLiteral("interaction_id"), interactionId);
         QJsonObject intent;
-        intent.insert(QStringLiteral("kind"), keyframeChange ? QStringLiteral("keyframe.update") : QStringLiteral("effect.change"));
+        intent.insert(QStringLiteral("kind"), effectOperation);
         intent.insert(QStringLiteral("interaction_id"), interactionId);
         intent.insert(QStringLiteral("ambiguous"), ambiguous);
         event.insert(QStringLiteral("intent"), intent);

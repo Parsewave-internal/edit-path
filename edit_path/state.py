@@ -276,6 +276,13 @@ def resolve_accepted_branch(events: list[dict[str, Any]], *, require_targets: bo
 
 
 def operation_name(diff: dict[str, Any]) -> str:
+    """Return the canonical software-independent operation for a state diff.
+
+    This is the single classifier used by both sample normalization and replay
+    rendering.  Keep the names here deliberately stable: raw recorder events
+    retain the complete before/after diff, while this function supplies the
+    reviewable semantic label consumed by every downstream endpoint.
+    """
     changes = diff.get("changes", [])
     entities = {change.get("entity") for change in changes}
     kinds = {change.get("change") for change in changes}
@@ -294,29 +301,98 @@ def operation_name(diff: dict[str, Any]) -> str:
         if fields and fields <= {"timeline_start_frame", "track_native_id"}:
             return "clip.move"
         if "speed" in fields:
-            return "clip.set_speed"
-        if fields & {"source_start_frame", "source_end_frame", "duration_frames"} or "added" in kinds:
-            return "clip.trim_or_split"
+            return "clip.speed.change"
+        if "source_start_frame" in fields:
+            return "clip.trim.in"
+        if fields & {"source_end_frame", "duration_frames"}:
+            return "clip.trim.out"
         if fields == {"effects"}:
-            return "effect.change"
+            before_effects = [effect for change in updated for effect in change.get("before", {}).get("effects", [])]
+            after_effects = [effect for change in updated for effect in change.get("after", {}).get("effects", [])]
+            if len(after_effects) > len(before_effects):
+                return "effect.add"
+            if len(after_effects) < len(before_effects):
+                return "effect.remove"
+
+            def effect_identity(effect: dict[str, Any]) -> Any:
+                attributes = effect.get("attributes", {})
+                if isinstance(attributes, dict):
+                    return effect.get("id") or effect.get("asset_id") or attributes.get("id") or effect.get("name")
+                return effect.get("id") or effect.get("asset_id") or effect.get("name")
+
+            before_order = [effect_identity(effect) for effect in before_effects]
+            after_order = [effect_identity(effect) for effect in after_effects]
+            if before_order != after_order:
+                return "effect.reorder"
+
+            def keyframes(values: list[dict[str, Any]]) -> list[tuple[Any, Any, Any]]:
+                result: list[tuple[Any, Any, Any]] = []
+                for effect in values:
+                    if not isinstance(effect, dict):
+                        continue
+                    effect_id = effect_identity(effect)
+                    parameters = list(effect.get("parameters", []))
+                    for child in effect.get("children", []):
+                        if not isinstance(child, dict):
+                            continue
+                        attributes = child.get("attributes", {})
+                        if isinstance(attributes, dict):
+                            parameters.append({"name": attributes.get("name"), "value": child.get("text", "")})
+                    for parameter in parameters:
+                        if not isinstance(parameter, dict):
+                            continue
+                        name = parameter.get("name")
+                        value = str(parameter.get("value", ""))
+                        if "=" in value:
+                            result.extend(
+                                (effect_id, name, point.strip())
+                                for point in value.split(";")
+                                if "=" in point
+                            )
+                        elif "keyframe" in str(name or "").lower():
+                            result.append((effect_id, name, value))
+                return result
+
+            before_keyframes, after_keyframes = keyframes(before_effects), keyframes(after_effects)
+            if before_keyframes != after_keyframes:
+                if len(after_keyframes) != len(before_keyframes):
+                    delta = len(after_keyframes) - len(before_keyframes)
+                    if abs(delta) > 1:
+                        return "keyframe.multi_edit"
+                    return "keyframe.add" if delta > 0 else "keyframe.remove"
+                return "keyframe.value.change"
+            return "effect.parameter.change"
     if entities == {"track"}:
         if kinds == {"added"}:
-            return "track.create"
+            return "track.add"
         if "removed" in kinds:
-            return "track.delete_or_reorder"
+            return "track.remove"
+        changed_fields: set[str] = set()
+        for change in changes:
+            before, after = change.get("before", {}), change.get("after", {})
+            changed_fields.update(key for key in set(before) | set(after) if before.get(key) != after.get(key))
+        if changed_fields & {"name", "tag"}:
+            return "track.rename"
+        if changed_fields & {"mute", "muted"}:
+            return "track.mute"
+        if changed_fields & {"lock", "locked"}:
+            return "track.lock"
         return "track.set_state"
     if entities and entities <= {"mix", "composition"}:
         if kinds == {"added"}:
             return "transition.add"
         if kinds == {"removed"}:
             return "transition.remove"
-        return "transition.change"
+        return "transition.parameter.change"
     return "timeline.change"
 
 
 def validate_action_semantics(events: list[dict[str, Any]], accepted: list[dict[str, Any]]) -> list[dict[str, Any]]:
     def compatible(declared: str | None, inferred: str) -> bool:
-        return declared is None or declared == inferred or (declared in {"clip.trim", "clip.split"} and inferred == "clip.trim_or_split")
+        return declared is None or declared == inferred or (
+            declared in {"clip.trim", "clip.split"}
+            and inferred in {"clip.trim.in", "clip.trim.out"}
+        )
 
     accepted_by_transaction: dict[str, list[dict[str, Any]]] = {}
     for state_event in accepted:

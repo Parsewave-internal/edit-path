@@ -58,6 +58,37 @@ class MvpTests(unittest.TestCase):
             record_action.index("m_pendingActions.append(event)"),
         )
 
+    def test_recorder_effect_intent_uses_canonical_taxonomy(self):
+        source = (Path(__file__).parents[2] / "src/videopath/videopathrecorder.cpp").read_text(encoding="utf-8")
+        for label in (
+            "effect.add", "effect.remove", "effect.reorder", "effect.parameter.change",
+            "keyframe.add", "keyframe.remove", "keyframe.multi_edit", "keyframe.value.change",
+        ):
+            self.assertIn(f'QStringLiteral("{label}")', source)
+        for stale in ("effect.change", "keyframe.update"):
+            self.assertNotIn(f'QStringLiteral("{stale}")', source)
+
+    def test_supervisor_reasoning_capture_has_mic_test_playback_and_python_bridge(self):
+        root = Path(__file__).parents[2]
+        source = (root / "video-path-pilot/gui/main.cpp").read_text(encoding="utf-8")
+        for marker in (
+            "Configure microphone",
+            "List available microphones",
+            "Test microphone and play it back",
+            "captureMicrophoneTest",
+            "m_micPlayer->play()",
+            "m_audioCapture.write(\"q\\n\")",
+            "GenericDataLocation",
+            "whisperPythonExecutable",
+            "startWorker(whisperPythonExecutable()",
+        ):
+            self.assertIn(marker, source)
+        installer = (root / "packaging/windows/dependency-installer.ps1").read_text(encoding="utf-8")
+        self.assertIn("installed into EditPath venv", installer)
+        self.assertNotIn("pip install --disable-pip-version-check -U openai-whisper --user", installer)
+        whisper = (root / "edit_path/whisper_provider.py").read_text(encoding="utf-8")
+        self.assertIn('sys.executable, "-m", "whisper"', whisper)
+
     def test_supervisor_hardening_contract(self):
         root = Path(__file__).parents[2]
         source = (root / "video-path-pilot/gui/main.cpp").read_text(encoding="utf-8")

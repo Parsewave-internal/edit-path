@@ -2,18 +2,24 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 #include <QApplication>
+#include <QAudioOutput>
 #include <QClipboard>
 #include <QCloseEvent>
 #include <QDateTime>
 #include <QDesktopServices>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QFormLayout>
 #include <QHBoxLayout>
+#include <QLineEdit>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLabel>
 #include <QLibraryInfo>
+#include <QMediaPlayer>
 #include <QMainWindow>
 #include <QMessageBox>
 #include <QPlainTextEdit>
@@ -21,6 +27,7 @@
 #include <QProcessEnvironment>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QSaveFile>
 #include <QSettings>
 #include <QStandardPaths>
@@ -55,6 +62,29 @@ QString pythonExecutable()
 #else
     return QStringLiteral("python3");
 #endif
+}
+
+QString whisperPythonExecutable()
+{
+#ifdef Q_OS_WIN
+    // dependency-installer.ps1 deliberately keeps the large Whisper install
+    // outside the portable ZIP. Prefer that venv when it exists; the bundled
+    // embedded interpreter remains the fallback for builds that package
+    // Whisper directly.
+    const QString localAppData = qEnvironmentVariable("LOCALAPPDATA");
+    const QString genericData = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation);
+    const QString appData = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
+    const QStringList candidates{
+        localAppData.isEmpty() ? QString() : QDir(localAppData).filePath(QStringLiteral("EditPath/python/Scripts/python.exe")),
+        genericData.isEmpty() ? QString() : QDir(genericData).filePath(QStringLiteral("EditPath/python/Scripts/python.exe")),
+        appData.isEmpty() ? QString() : QDir(appData).filePath(QStringLiteral("EditPath/python/Scripts/python.exe")),
+        QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("python/python.exe")),
+    };
+    for (const QString &candidate : candidates) {
+        if (QFileInfo::isFile(candidate)) return candidate;
+    }
+#endif
+    return pythonExecutable();
 }
 
 QString sessionsRoot()
@@ -103,6 +133,110 @@ QString qtMultimediaQmlPath()
         if (QFileInfo(qmldir).isReadable()) return qmldir;
     }
     return {};
+}
+
+QString configuredMicrophoneDevice()
+{
+    // The dependency installer deliberately keeps its settings outside the
+    // portable ZIP (`%LOCALAPPDATA%\EditPath`).  AppLocalDataLocation is
+    // application/organisation scoped on Windows (for this binary it is
+    // normally `%LOCALAPPDATA%\Parsewave\EditPathRecorder`), so reading only
+    // that location made a successfully selected microphone look like the
+    // literal DirectShow device named "default".  Accept the installer path,
+    // the old application-scoped path, and a portable sidecar for offline
+    // deployments.  An environment override makes support diagnostics and
+    // scripted test machines deterministic.
+    QStringList candidates;
+    const QString override = qEnvironmentVariable("EDIT_PATH_MICROPHONE_DEVICE").trimmed();
+    if (!override.isEmpty()) return override;
+    const QString localAppData = qEnvironmentVariable("LOCALAPPDATA");
+    if (!localAppData.isEmpty()) candidates.append(QDir(localAppData).filePath(QStringLiteral("EditPath/microphone-device.txt")));
+    const QString genericData = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation);
+    if (!genericData.isEmpty()) candidates.append(QDir(genericData).filePath(QStringLiteral("EditPath/microphone-device.txt")));
+    const QString appData = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
+    if (!appData.isEmpty()) {
+        candidates.append(QDir(appData).filePath(QStringLiteral("microphone-device.txt")));
+        candidates.append(QDir(appData).filePath(QStringLiteral("EditPath/microphone-device.txt")));
+    }
+    const QString applicationDir = QCoreApplication::applicationDirPath();
+    candidates.append(QDir(applicationDir).filePath(QStringLiteral("microphone-device.txt")));
+    candidates.append(QDir(applicationDir).filePath(QStringLiteral("../microphone-device.txt")));
+    for (const QString &candidate : std::as_const(candidates)) {
+        QFile file(candidate);
+        if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) continue;
+        QString value = QString::fromUtf8(file.readAll()).trimmed();
+        if (value.startsWith(QChar(0xFEFF))) value.remove(0, 1);
+        if (!value.isEmpty()) return value;
+    }
+    return QStringLiteral("default");
+}
+
+QString ffmpegExecutable()
+{
+    QString ffmpeg = QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("ffmpeg.exe"));
+    if (QFileInfo::exists(ffmpeg)) return ffmpeg;
+    ffmpeg = QStandardPaths::findExecutable(QStringLiteral("ffmpeg"));
+    return ffmpeg;
+}
+
+QString microphoneDeviceListing(const QString &ffmpeg)
+{
+    if (ffmpeg.isEmpty()) return QStringLiteral("FFmpeg was not found.");
+    QProcess process;
+    process.setProcessChannelMode(QProcess::MergedChannels);
+#ifdef Q_OS_WIN
+    process.start(ffmpeg, {QStringLiteral("-hide_banner"), QStringLiteral("-list_devices"), QStringLiteral("true"),
+                           QStringLiteral("-f"), QStringLiteral("dshow"), QStringLiteral("-i"), QStringLiteral("dummy")});
+#else
+    process.start(ffmpeg, {QStringLiteral("-hide_banner"), QStringLiteral("-sources"), QStringLiteral("pulse")});
+#endif
+    if (!process.waitForStarted(3000)) return QStringLiteral("Could not start FFmpeg: %1").arg(process.errorString());
+    process.waitForFinished(7000);
+    return QString::fromUtf8(process.readAll()).trimmed();
+}
+
+bool captureMicrophoneTest(const QString &ffmpeg, const QString &microphone, const QString &output, QString *details)
+{
+    if (ffmpeg.isEmpty()) {
+        if (details) *details = QStringLiteral("FFmpeg was not found in the portable package or PATH.");
+        return false;
+    }
+    QStringList arguments{QStringLiteral("-hide_banner"), QStringLiteral("-loglevel"), QStringLiteral("error")};
+#ifdef Q_OS_WIN
+    QString device = microphone.trimmed();
+    if (!device.startsWith(QStringLiteral("audio="), Qt::CaseInsensitive)) device.prepend(QStringLiteral("audio="));
+    arguments << QStringLiteral("-f") << QStringLiteral("dshow") << QStringLiteral("-i") << device;
+#elif defined(Q_OS_MACOS)
+    arguments << QStringLiteral("-f") << QStringLiteral("avfoundation") << QStringLiteral("-i") << QStringLiteral(":0");
+#else
+    arguments << QStringLiteral("-f") << QStringLiteral("pulse") << QStringLiteral("-i") << (microphone.isEmpty() ? QStringLiteral("default") : microphone);
+#endif
+    // A short PCM/WAV probe is deliberately separate from the FLAC reasoning
+    // capture.  WAV is playable by every Qt Multimedia backend and lets the
+    // editor hear the exact microphone input before committing to a segment.
+    arguments << QStringLiteral("-t") << QStringLiteral("3") << QStringLiteral("-c:a") << QStringLiteral("pcm_s16le")
+              << QStringLiteral("-y") << output;
+    QProcess process;
+    process.setProcessChannelMode(QProcess::MergedChannels);
+    process.start(ffmpeg, arguments);
+    if (!process.waitForStarted(3000)) {
+        if (details) *details = QStringLiteral("Could not start FFmpeg: %1").arg(process.errorString());
+        return false;
+    }
+    if (!process.waitForFinished(12000)) {
+        process.kill();
+        process.waitForFinished(3000);
+        if (details) *details = QStringLiteral("Microphone test timed out.");
+        return false;
+    }
+    const QString outputText = QString::fromUtf8(process.readAll()).trimmed();
+    const QFileInfo recording(output);
+    if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0 || !recording.isFile() || recording.size() < 128) {
+        if (details) *details = outputText.isEmpty() ? QStringLiteral("FFmpeg did not produce a microphone test file.") : outputText;
+        return false;
+    }
+    if (details) *details = outputText;
+    return true;
 }
 
 QString guiRuntimeProblem()
@@ -266,6 +400,9 @@ private:
         m_activity->setVisible(false);
         layout->addWidget(m_activity, 1);
         setCentralWidget(central);
+        m_micAudioOutput = new QAudioOutput(this);
+        m_micPlayer = new QMediaPlayer(this);
+        m_micPlayer->setAudioOutput(m_micAudioOutput);
         connect(m_toggleDetails, &QPushButton::clicked, this, [this] {
             const bool show = !m_activity->isVisible();
             m_activity->setVisible(show);
@@ -317,6 +454,18 @@ private:
         connect(&m_audioCapture, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this, [this] {
             m_recordReasoning->setEnabled(true);
             m_stopReasoning->setEnabled(false);
+            m_stopReasoning->setText(QStringLiteral("Stop Reasoning"));
+            m_audioCaptureError = QString::fromUtf8(m_audioCapture.readAllStandardError()).trimmed();
+            if (m_audioStopRequested) return;
+            const QFileInfo recording(m_audioOutput);
+            if (!recording.isFile() || recording.size() < 128) {
+                setStatus(QStringLiteral("Microphone capture stopped without producing audio. Open technical details to check the device."), true);
+                if (!m_audioCaptureError.isEmpty()) m_activity->appendPlainText(m_audioCaptureError);
+                writeReasoningCaptureError(m_audioCaptureError.isEmpty() ? QStringLiteral("capture_process_exited_without_audio") : m_audioCaptureError);
+            } else {
+                setStatus(QStringLiteral("Microphone capture stopped unexpectedly; the recorded segment was saved."), true);
+                m_activity->appendPlainText(QStringLiteral("Reasoning audio saved: %1").arg(m_audioOutput));
+            }
         });
         m_heartbeat.setInterval(60000);
         connect(&m_heartbeat, &QTimer::timeout, this, [this] {
@@ -350,11 +499,152 @@ private:
                                       : QStringLiteral("padding:10px;background:#e2f2e5;color:#164d24;border-radius:4px;"));
     }
 
+    void writeReasoningCaptureError(const QString &error)
+    {
+        if (m_session.isEmpty()) return;
+        const QString path = QDir(m_session).filePath(QStringLiteral("EDIT-PATH/reasoning/capture-error.json"));
+        QDir().mkpath(QFileInfo(path).absolutePath());
+        QSaveFile file(path);
+        const QJsonObject payload{{QStringLiteral("schema_version"), QStringLiteral("edit-path/reasoning-capture@1")},
+                                  {QStringLiteral("audio_file"), m_audioOutput},
+                                  {QStringLiteral("error"), error},
+                                  {QStringLiteral("recording_in_progress"), m_audioCapture.state() != QProcess::NotRunning},
+                                  {QStringLiteral("timestamp_utc"), QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)}};
+        const QByteArray encoded = QJsonDocument(payload).toJson(QJsonDocument::Indented);
+        if (file.open(QIODevice::WriteOnly | QIODevice::Text) && file.write(encoded) == encoded.size()) file.commit();
+    }
+
+    void startWorker(const QString &program, const QStringList &arguments)
+    {
+        QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
+        const QString separator =
+#ifdef Q_OS_WIN
+            QStringLiteral(";");
+#else
+            QStringLiteral(":");
+#endif
+        const QString existingPythonPath = environment.value(QStringLiteral("PYTHONPATH"));
+        QString pythonPath = m_repoRoot;
+        if (!existingPythonPath.isEmpty()) pythonPath += separator + existingPythonPath;
+        environment.insert(QStringLiteral("PYTHONPATH"), pythonPath);
+        m_worker.setProcessEnvironment(environment);
+        m_worker.setWorkingDirectory(m_repoRoot);
+        m_worker.start(program, arguments);
+    }
+
+    bool configureMicrophone(QString *selected)
+    {
+        const QString ffmpeg = ffmpegExecutable();
+        if (ffmpeg.isEmpty()) {
+            setStatus(QStringLiteral("FFmpeg was not found; microphone setup cannot start."), true);
+            return false;
+        }
+        QDialog dialog(this);
+        dialog.setWindowTitle(QStringLiteral("Configure microphone"));
+        dialog.setMinimumWidth(620);
+        auto *layout = new QVBoxLayout(&dialog);
+        auto *instructions = new QLabel(QStringLiteral(
+            "Choose the Windows microphone, run a three-second test, and listen to the playback. "
+            "Recording starts only after the test succeeds."), &dialog);
+        instructions->setWordWrap(true);
+        layout->addWidget(instructions);
+        auto *form = new QFormLayout;
+        auto *device = new QLineEdit(configuredMicrophoneDevice(), &dialog);
+        device->setPlaceholderText(QStringLiteral("Microphone name (for example, Microphone Array)"));
+        form->addRow(QStringLiteral("Device"), device);
+        layout->addLayout(form);
+        auto *list = new QPushButton(QStringLiteral("List available microphones"), &dialog);
+        layout->addWidget(list);
+        auto *listing = new QPlainTextEdit(&dialog);
+        listing->setReadOnly(true);
+        listing->setMaximumHeight(130);
+        listing->setPlaceholderText(QStringLiteral("Device listing will appear here."));
+        layout->addWidget(listing);
+        auto *test = new QPushButton(QStringLiteral("Test microphone and play it back"), &dialog);
+        layout->addWidget(test);
+        auto *status = new QLabel(QStringLiteral("A successful test is required before recording."), &dialog);
+        status->setWordWrap(true);
+        layout->addWidget(status);
+        auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+        buttons->button(QDialogButtonBox::Ok)->setText(QStringLiteral("Start recording"));
+        buttons->button(QDialogButtonBox::Ok)->setEnabled(false);
+        layout->addWidget(buttons);
+        bool tested = false;
+        connect(list, &QPushButton::clicked, &dialog, [&, ffmpeg] {
+            const QString output = microphoneDeviceListing(ffmpeg);
+            listing->setPlainText(output);
+#ifdef Q_OS_WIN
+            QRegularExpression expression(QStringLiteral("\\\"([^\\\"\\r\\n]+)\\\"\\s+\\(audio\\)"));
+            auto matches = expression.globalMatch(output);
+            if (device->text().trimmed().isEmpty() || device->text().trimmed() == QStringLiteral("default")) {
+                if (matches.hasNext()) device->setText(matches.next().captured(1));
+            }
+#endif
+            status->setText(output.isEmpty() ? QStringLiteral("No microphone devices were reported; enter a device name manually.")
+                                              : QStringLiteral("Select or enter a device, then run the test."));
+        });
+        connect(test, &QPushButton::clicked, &dialog, [&, ffmpeg] {
+            const QString microphone = device->text().trimmed();
+            if (microphone.isEmpty()) {
+                status->setText(QStringLiteral("Enter a microphone device name first."));
+                return;
+            }
+            test->setEnabled(false);
+            status->setText(QStringLiteral("Recording a three-second microphone test…"));
+            const QString output = QDir(QDir::tempPath()).filePath(QStringLiteral("editpath-microphone-test-%1.wav").arg(QUuid::createUuid().toString(QUuid::WithoutBraces)));
+            QString details;
+            const bool passed = captureMicrophoneTest(ffmpeg, microphone, output, &details);
+            test->setEnabled(true);
+            if (!passed) {
+                tested = false;
+                buttons->button(QDialogButtonBox::Ok)->setEnabled(false);
+                status->setText(QStringLiteral("Microphone test failed: %1").arg(details));
+                return;
+            }
+            m_micPlayer->stop();
+            m_micPlayer->setSource(QUrl::fromLocalFile(output));
+            m_micPlayer->play();
+            m_micTestFile = output;
+            tested = true;
+            buttons->button(QDialogButtonBox::Ok)->setEnabled(true);
+            status->setText(QStringLiteral("Microphone test passed. Playback is running; click Start recording when you can hear yourself."));
+        });
+        connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
+            if (!tested) return;
+            const QString value = device->text().trimmed();
+            QString path;
+            const QString localAppData = qEnvironmentVariable("LOCALAPPDATA");
+            if (!localAppData.isEmpty()) path = QDir(localAppData).filePath(QStringLiteral("EditPath/microphone-device.txt"));
+            if (path.isEmpty()) {
+                const QString genericData = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation);
+                if (!genericData.isEmpty()) path = QDir(genericData).filePath(QStringLiteral("EditPath/microphone-device.txt"));
+            }
+            if (!path.isEmpty()) {
+                QDir().mkpath(QFileInfo(path).absolutePath());
+                QSaveFile file(path);
+                if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+                    const QByteArray encoded = value.toUtf8();
+                    if (file.write(encoded) == encoded.size()) file.commit();
+                }
+            }
+            if (selected) *selected = value;
+            dialog.accept();
+        });
+        connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+        if (dialog.exec() != QDialog::Accepted) return false;
+        return selected && !selected->isEmpty();
+    }
+
     void startReasoning()
     {
         if (m_session.isEmpty() || m_audioCapture.state() != QProcess::NotRunning) return;
+        QString microphone;
+        if (!configureMicrophone(&microphone)) return;
         const QString reasoningDir = QDir(m_session).filePath(QStringLiteral("EDIT-PATH/reasoning"));
-        QDir().mkpath(reasoningDir);
+        if (!QDir().mkpath(reasoningDir)) {
+            setStatus(QStringLiteral("Could not create the reasoning folder; recording did not start."), true);
+            return;
+        }
         // The supervisor can be restarted while resuming a session.  Pick an
         // unused name so a fresh in-memory counter never overwrites an earlier
         // think-aloud segment.
@@ -362,46 +652,66 @@ private:
         do {
             output = QDir(reasoningDir).filePath(QStringLiteral("audio-%1.flac").arg(++m_audioIndex, 3, 10, QLatin1Char('0')));
         } while (QFileInfo::exists(output));
-        QString ffmpeg = QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("ffmpeg.exe"));
-        if (!QFileInfo::exists(ffmpeg)) ffmpeg = QStandardPaths::findExecutable(QStringLiteral("ffmpeg"));
+        const QString ffmpeg = ffmpegExecutable();
         if (ffmpeg.isEmpty()) { setStatus(QStringLiteral("FFmpeg was not found; reasoning audio was not started."), true); return; }
         m_audioOutput = output;
-        QString microphone = QStringLiteral("default");
-        const QString configured = QDir(QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation)).filePath(QStringLiteral("EditPath/microphone-device.txt"));
-        QFile microphoneFile(configured);
-        if (microphoneFile.open(QIODevice::ReadOnly | QIODevice::Text)) microphone = QString::fromUtf8(microphoneFile.readAll()).trimmed();
+        m_audioCaptureError.clear();
+        m_audioStopRequested = false;
         QStringList captureArgs{QStringLiteral("-hide_banner"), QStringLiteral("-loglevel"), QStringLiteral("error")};
 #ifdef Q_OS_WIN
-        captureArgs << QStringLiteral("-f") << QStringLiteral("dshow") << QStringLiteral("-i") << (QStringLiteral("audio=") + microphone);
+        QString device = microphone;
+        if (!device.startsWith(QStringLiteral("audio="), Qt::CaseInsensitive)) device.prepend(QStringLiteral("audio="));
+        captureArgs << QStringLiteral("-f") << QStringLiteral("dshow") << QStringLiteral("-i") << device;
 #else
         captureArgs << QStringLiteral("-f") << QStringLiteral("pulse") << QStringLiteral("-i") << microphone;
 #endif
         captureArgs << QStringLiteral("-c:a") << QStringLiteral("flac") << QStringLiteral("-y") << output;
         m_audioCapture.start(ffmpeg, captureArgs);
-        if (m_audioCapture.waitForStarted(3000)) { m_recordReasoning->setEnabled(false); m_stopReasoning->setEnabled(true); setStatus(QStringLiteral("Reasoning audio recording is active.")); }
-        else setStatus(QStringLiteral("Could not start microphone capture. Show technical details."), true);
+        if (m_audioCapture.waitForStarted(3000)) {
+            m_recordReasoning->setEnabled(false);
+            m_stopReasoning->setEnabled(true);
+            m_stopReasoning->setText(QStringLiteral("Stop Reasoning (recording…)") );
+            setStatus(QStringLiteral("Recording in progress. The segment is being saved to the session reasoning folder."));
+        }
+        else {
+            const QString error = m_audioCapture.errorString().isEmpty() ? QStringLiteral("capture_process_failed_to_start") : m_audioCapture.errorString();
+            writeReasoningCaptureError(error);
+            setStatus(QStringLiteral("Could not start microphone capture. Show technical details."), true);
+            m_activity->appendPlainText(error);
+        }
     }
 
     void stopReasoning()
     {
-        if (m_audioCapture.state() == QProcess::NotRunning) return;
+        if (m_audioCapture.state() == QProcess::NotRunning) {
+            const QFileInfo recording(m_audioOutput);
+            if (!recording.isFile() || recording.size() < 128) {
+                setStatus(QStringLiteral("No active microphone capture was available to stop."), true);
+                writeReasoningCaptureError(QStringLiteral("stop_requested_without_active_capture"));
+            }
+            return;
+        }
         // Stop the capture process after the editor finishes its continuous
         // reasoning segment.  The editor controls the lifecycle explicitly;
         // finalization/transcription happens only when requested below.
+        m_audioStopRequested = true;
+        m_audioCapture.write("q\n");
+        m_audioCapture.closeWriteChannel();
         m_audioCapture.terminate();
         bool forced = false;
-        if (!m_audioCapture.waitForFinished(1500)) {
+        if (!m_audioCapture.waitForFinished(5000)) {
             // Windows console capture processes do not always honor the
             // graceful terminate request.  Stop must be definitive.
             m_audioCapture.kill();
             forced = true;
             m_audioCapture.waitForFinished(3000);
         }
-        m_recordReasoning->setEnabled(true); m_stopReasoning->setEnabled(false);
+        m_recordReasoning->setEnabled(true); m_stopReasoning->setEnabled(false); m_stopReasoning->setText(QStringLiteral("Stop Reasoning"));
         const QFileInfo recording(m_audioOutput);
         if (!recording.isFile() || recording.size() < 128) {
             setStatus(QStringLiteral("Reasoning audio could not be finalized; continuing without transcription."), true);
-            m_activity->appendPlainText(QStringLiteral("No usable reasoning audio was produced (%1 stop).").arg(forced ? QStringLiteral("forced") : QStringLiteral("normal")));
+            m_activity->appendPlainText(QStringLiteral("No usable reasoning audio was produced (%1 stop). %2").arg(forced ? QStringLiteral("forced") : QStringLiteral("normal"), m_audioCaptureError));
+            writeReasoningCaptureError(m_audioCaptureError.isEmpty() ? QStringLiteral("capture_output_too_small") : m_audioCaptureError);
             return;
         }
         m_activity->appendPlainText(QStringLiteral("Reasoning audio saved: %1").arg(m_audioOutput));
@@ -581,7 +891,7 @@ private:
                                         : QStringLiteral("Kdenlive exited with code %1; checking the recording…").arg(exitCode));
         m_workerPurpose = QStringLiteral("validate");
         const QString raw = QDir(m_session).filePath(QStringLiteral("EDIT-PATH/events-%1.jsonl").arg(m_segment, 3, 10, QLatin1Char('0')));
-        m_worker.start(pythonExecutable(), {m_repoRoot + QStringLiteral("/video-path-pilot/validate_video_path.py"), raw});
+        startWorker(pythonExecutable(), {m_repoRoot + QStringLiteral("/video-path-pilot/validate_video_path.py"), raw});
     }
 
     void finishSession()
@@ -605,12 +915,12 @@ private:
                 m_reasoningRequested = false;
             } else {
                 m_workerPurpose = QStringLiteral("transcribe");
-                m_worker.start(pythonExecutable(), {QStringLiteral("-m"), QStringLiteral("edit_path.reasoning_cli"), m_session,
-                                                     reasoningDir.filePath(recordings.constLast()), QStringLiteral("--install")});
+                startWorker(whisperPythonExecutable(), {QStringLiteral("-m"), QStringLiteral("edit_path.reasoning_cli"), m_session,
+                                                        reasoningDir.filePath(recordings.constLast()), QStringLiteral("--install")});
                 return;
             }
         }
-        m_worker.start(pythonExecutable(), {m_repoRoot + QStringLiteral("/video-path-pilot/job_pipeline.py"), QStringLiteral("finalize-freeform"), m_session});
+        startWorker(pythonExecutable(), {m_repoRoot + QStringLiteral("/video-path-pilot/job_pipeline.py"), QStringLiteral("finalize-freeform"), m_session});
     }
 
     void readWorker()
@@ -637,7 +947,7 @@ private:
                 setStatus(QStringLiteral("Reasoning transcription failed; continuing without audio reasoning."), true);
             }
             m_workerPurpose = QStringLiteral("finalize");
-            m_worker.start(pythonExecutable(), {m_repoRoot + QStringLiteral("/video-path-pilot/job_pipeline.py"), QStringLiteral("finalize-freeform"), m_session});
+            startWorker(pythonExecutable(), {m_repoRoot + QStringLiteral("/video-path-pilot/job_pipeline.py"), QStringLiteral("finalize-freeform"), m_session});
             return;
         }
         const bool success = status == QProcess::NormalExit && exitCode == 0;
@@ -741,14 +1051,17 @@ private:
     int m_segment{0};
     int m_lastEditorExitCode{0};
     QProcess m_editor, m_worker, m_audioCapture, m_reasoningWorker;
+    QMediaPlayer *m_micPlayer{};
+    QAudioOutput *m_micAudioOutput{};
     QTimer m_heartbeat, m_readyPoll;
     bool m_showExistingCompletion{false}, m_lastEditorExitCrashed{false}, m_confirmNewSession{false};
     QLabel *m_title{}, *m_instructions{}, *m_status{}, *m_sessionLabel{};
     QPushButton *m_start{}, *m_recover{}, *m_finish{}, *m_recordReasoning{}, *m_stopReasoning{}, *m_openSession{}, *m_openCompleted{}, *m_toggleDetails{};
     QPlainTextEdit *m_activity{};
     QProgressBar *m_launchProgress{};
-    QString m_audioOutput;
+    QString m_audioOutput, m_audioCaptureError, m_micTestFile;
     int m_audioIndex{0};
+    bool m_audioStopRequested{false};
 };
 
 int runSelfTest()

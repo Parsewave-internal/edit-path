@@ -9,6 +9,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -31,12 +32,27 @@ def transcribe_with_whisper(audio_file: Path, *, model: str | None = None,
         log_event(session, "transcription_rejected", reason="audio_missing")
         raise FileNotFoundError(audio_file)
     binary = whisper_binary or os.environ.get("EDIT_PATH_WHISPER_BIN") or shutil.which("whisper")
-    if not binary:
-        log_event(session, "transcription_unavailable", reason="whisper_not_on_path")
-        raise RuntimeError("offline Whisper is not installed; install openai-whisper and expose whisper on PATH")
+    if binary:
+        command_prefix = [binary]
+    else:
+        # The Windows portable dependency installer places Whisper in its
+        # dedicated Python environment.  Its `whisper.exe` Scripts shim is
+        # not necessarily on the supervisor's PATH, so invoke the module with
+        # the interpreter that launched reasoning_cli instead of rejecting an
+        # otherwise valid installation.
+        module_probe = subprocess.run(
+            [sys.executable, "-m", "whisper", "--help"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        if module_probe.returncode != 0:
+            log_event(session, "transcription_unavailable", reason="whisper_not_on_path_or_python")
+            raise RuntimeError("offline Whisper is not installed; run the Windows dependency installer before transcribing")
+        command_prefix = [sys.executable, "-m", "whisper"]
     selected_model = model or os.environ.get("EDIT_PATH_WHISPER_MODEL", "turbo")
     with tempfile.TemporaryDirectory(prefix="edit-path-whisper-") as directory:
-        command = [binary, str(audio_file), "--model", selected_model,
+        command = [*command_prefix, str(audio_file), "--model", selected_model,
                    "--output_format", "json", "--output_dir", directory,
                    "--verbose", "False"]
         if language:

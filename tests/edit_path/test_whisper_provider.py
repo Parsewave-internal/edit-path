@@ -52,3 +52,26 @@ class WhisperProviderTests(unittest.TestCase):
             with mock.patch("edit_path.whisper_provider.subprocess.run", return_value=mock.Mock(returncode=0, stdout="", stderr="")):
                 with self.assertRaisesRegex(RuntimeError, "without producing"):
                     transcribe_with_whisper(audio, whisper_binary="whisper")
+
+    def test_python_module_fallback_runs_when_cli_is_not_on_path(self):
+        with tempfile.TemporaryDirectory() as td:
+            audio = Path(td) / "reasoning.flac"
+            audio.touch()
+            calls = []
+
+            def fake_run(command, **_):
+                calls.append(command)
+                if command[-2:] == ["whisper", "--help"]:
+                    return mock.Mock(returncode=0, stdout="", stderr="")
+                out = Path(command[command.index("--output_dir") + 1]) / "reasoning.json"
+                out.write_text(json.dumps({"text": "module fallback transcript"}), encoding="utf-8")
+                return mock.Mock(returncode=0, stdout="", stderr="")
+
+            with (
+                mock.patch("edit_path.whisper_provider.shutil.which", return_value=None),
+                mock.patch("edit_path.whisper_provider.subprocess.run", side_effect=fake_run),
+            ):
+                result = transcribe_with_whisper(audio)
+            self.assertEqual(result["text"], "module fallback transcript")
+            self.assertEqual(calls[0][-2:], ["whisper", "--help"])
+            self.assertIn("-m", calls[1])

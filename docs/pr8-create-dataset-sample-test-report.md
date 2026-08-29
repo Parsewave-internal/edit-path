@@ -1,6 +1,6 @@
 # PR 8: Create Dataset Sample and replay stress-test report
 
-Test window: 2026-08-29 (UTC). The checks below use the historical sessions that previously failed and a deterministic reasoning fixture. This report records observed output; it does not treat a generated label as evidence that was not present in the recording.
+Test window: 2026-08-29 (UTC). The checks below use the historical sessions that previously failed, a deterministic reasoning fixture, and a fresh full July 24 replay after the canonical taxonomy fix. This report records observed output; it does not treat a generated label as evidence that was not present in the recording.
 
 ## Historical failure reproduction
 
@@ -45,6 +45,18 @@ Final replay probe: `duration=1167.800000`, `nb_frames=11678`, `r_frame_rate=10/
 
 The committed visual smoke sample is [edit-replay-demo-preview.png](../live-example/edit-replay-demo-preview.png), generated from [edit-replay-demo.mp4](../live-example/edit-replay-demo.mp4). Its report contains 7 moments, 2 exact states, and an accepted training UI replay.
 
+The post-taxonomy July 24 integration replay was independently rendered to
+`/tmp/edit-path-real-replay-taxonomy/`. It accepted the same 2,728 moments,
+377 states, and 340 accepted edits, and produced a 515,117,641-byte H.264
+MP4 (`1920×1080`, `10 fps`, `1167.8 s`) with SHA-256
+`0396e3dec60bad1c331825c1fa8520fd53921ac42cb9b775729c84cea1420fee`. The
+report contained no stale operation labels; the canonical operation counts
+included `clip.speed.change`, `clip.trim.in`, `clip.trim.out`, the four
+effect branches, `keyframe.value.change`, the track branches, and the
+transition branches. Long replay mode remains explicitly marked
+`compact_semantic`; the only state-preview warning is that exact monitor
+previews are skipped to keep a 2,728-moment finalization bounded.
+
 ## Think-aloud/audio proof
 
 The recorder captures reasoning only after the editor clicks **Record Reasoning**. Audio is stored as FLAC under `EDIT-PATH/reasoning/audio-*.flac`; stop timestamps use monotonic nanoseconds and are aligned to overlapping/nearest event IDs. Transcription is opt-in and literal: the pipeline writes a transcript JSON and WebVTT captions and never infers an editor's intent.
@@ -61,21 +73,50 @@ aligned-proof.json sha256=9d221ecf6a72951255ea41a6f030023d043147df3b44096f1a14c4
 
 The aligned record references the event occurring during the spoken interval (`cut-1`) plus `previous_event_id=before` and `next_event_id=after`. Whisper is not installed in this environment, so no fabricated Whisper result is reported; the GUI continues safely without transcription when the optional provider is unavailable.
 
+The Windows reasoning failure reported during acceptance testing was traced to
+two packaging mismatches: the selected DirectShow device was written by the
+dependency installer under `%LOCALAPPDATA%\\EditPath` but the GUI read only an
+application-scoped path, and the installer attempted `pip --user` against the
+portable embedded interpreter. The supervisor now offers microphone listing,
+a three-second capture/playback test, an explicit **Recording in progress**
+state, and a definitive stop that sends FFmpeg `q` before a bounded forced
+stop. It reads/writes the installer path (plus portable and override paths),
+and the transcription bridge uses the reusable `%LOCALAPPDATA%\\EditPath\\python`
+venv where Whisper is installed. `WINDOWS_TEST_PLAN.md` contains the manual
+acceptance steps and expected reasoning artifacts.
+
+Recovery remains session-owned: the supervisor writes `recovery_available`
+when Kdenlive exits abnormally, keeps the saved `edit.kdenlive`, and offers
+**Resume Editing**. Resuming increments the journal segment and relaunches
+Kdenlive against that same project and session state, so the last saved edit is
+restored rather than starting from a blank timeline. The existing recovery
+contract tests still pass in the 76-test matrix; a real Windows crash test is
+still a manual acceptance step in `WINDOWS_TEST_PLAN.md`.
+
 ## Client response model
 
 1. **Per-action reasoning:** supported when the editor opts in. Capture and stop are tied to the same monotonic event clock as the raw journal; optional literal transcription produces time-aligned JSON/VTT. Existing historical sessions contain no reasoning audio, so their “why” cannot be recovered retroactively.
 2. **Sidecars and manifest:** valid sessions publish verified state sidecars, the final project, and asset bindings by digest/original filename. Missing sidecars, an incomplete `session.end`, a broken hash chain, or ambiguous project files are rejected instead of guessed. The July 25 delivery is therefore not a reconstructable sample.
-3. **Effects/keyframes:** raw recorder evidence remains broad (`state.diff`/`keyframe.update`). Python normalization derives labels such as `keyframe.value.change` from before/after state and reports unmapped commands/ambiguous attribution. PR 8 preserves those diagnostics and transaction/interaction IDs; it does not claim source-level detailed Kdenlive intent that the recorder did not emit.
+3. **Effects/keyframes:** raw recorder evidence remains lossless in `state.diff`; the recorder and Python normalizer now use the same canonical labels (`effect.add`, `effect.remove`, `effect.reorder`, `effect.parameter.change`, and `keyframe.*`) for derived intent. Unmapped commands and ambiguous attribution remain explicit diagnostics. PR 8 preserves those diagnostics and transaction/interaction IDs; it does not claim source-level intent that the recorder did not emit.
 
 ## Verification matrix
 
 ```text
 python -m pytest -q tests/edit_path video-path-pilot/tests
-cmake -S video-path-pilot/gui -B /tmp/edit-path-gui-build -G Ninja && cmake --build /tmp/edit-path-gui-build -j2
+cmake -S video-path-pilot/gui -B /tmp/edit-path-gui-build -G Ninja && cmake --build /tmp/edit-path-gui-build --clean-first -j2
 ```
 
-The GUI build completed (`[2/2] Linking CXX executable EditPath`). No C++ recorder behavior was changed in this stress pass; changes are limited to bounded replay finalization, correct transcription-session diagnostics, and tests for both regressions.
+The GUI build completed cleanly (`[2/2] Linking CXX executable EditPath`).
+The recorder's derived effect/keyframe intent and the Python replay/sample
+normalizers now share one classifier; the C++ recorder source cannot be built
+against this Linux checkout's full Kdenlive tree because that tree requires
+Qt 6.10 while the installed development Qt is 6.4.2. The static recorder
+taxonomy contract and the Windows Craft build remain covered by source/tests.
 
-Observed Python matrix result: `71 passed, 2 skipped in 14.74s`.
+Observed Python matrix result after the Windows reasoning guard coverage:
+`76 passed, 2 skipped, 24 subtests passed`. A separate 1,800-second stability
+loop completed 60 consecutive cycles; every cycle reran the matrix, checked
+the fresh replay and raw-session taxonomy for stale labels, and rebuilt the
+GUI target.
 
 For this bounded test window, a temporary user cron entry (`*/5 * * * * /tmp/edit-path-test-window-reminder.sh`) wrote UTC reminders to `/tmp/edit-path-test-window-reminder.log`; observed entries were at 08:25, 08:30, 08:35, and 08:40 with the remaining-minute count. The entry is removed after the window so it cannot become a permanent background job.

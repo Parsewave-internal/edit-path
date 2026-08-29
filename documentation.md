@@ -472,8 +472,9 @@ the MVP favors retaining more training information. Operations use integer frame
 software-independent entity names, sample-local canonical IDs, before/after
 changes, resulting state hashes, and pointers to raw events. Kdenlive labels
 are isolated under `extensions.kdenlive`. Ambiguous outcomes deliberately use
-reviewable terms such as `clip.trim_or_split`, `effect.change`, or
-`timeline.change` until two real samples show which distinctions are reliable.
+reviewable terms such as `clip.trim.in`, `clip.trim.out`,
+`effect.parameter.change`, or `timeline.change` until two real samples show
+which distinctions are reliable.
 
 The controlled MVP's former first-use asset-binding compromise has been
 removed. Finalization reads native bin references from the saved project,

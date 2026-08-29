@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from edit_path.state import resolve_accepted_branch
+from edit_path.state import operation_name, resolve_accepted_branch
 
 
 ENTITY_PREFIX = {"clip": "clip", "track": "track", "composition": "transition", "mix": "transition", "master_effect": "master"}
@@ -47,52 +47,6 @@ def accepted_commits(events: list[dict]) -> list[dict]:
     return stack
 
 
-def operation_name(diff: dict) -> str:
-    changes = diff.get("changes", [])
-    entities = {c.get("entity") for c in changes}
-    kinds = {c.get("change") for c in changes}
-    if entities == {"clip"}:
-        if kinds == {"added"}: return "clip.insert"
-        if kinds == {"removed"}: return "clip.delete"
-        if "removed" in kinds and "updated" in kinds: return "timeline.ripple_delete"
-        updated = [c for c in changes if c.get("change") == "updated"]
-        fields = set()
-        for change in updated:
-            before, after = change.get("before", {}), change.get("after", {})
-            fields.update(key for key in set(before) | set(after) if before.get(key) != after.get(key))
-        if fields <= {"timeline_start_frame", "track_native_id"}: return "clip.move"
-        if "speed" in fields: return "clip.speed.change"
-        if fields & {"source_start_frame"}: return "clip.trim.in"
-        if fields & {"source_end_frame", "duration_frames"}: return "clip.trim.out"
-        if fields == {"effects"}:
-            before = [e for c in updated for e in c.get("before", {}).get("effects", [])]
-            after = [e for c in updated for e in c.get("after", {}).get("effects", [])]
-            if len(after) > len(before): return "effect.add"
-            if len(after) < len(before): return "effect.remove"
-            if {e.get("index") for e in before} != {e.get("index") for e in after}: return "effect.reorder"
-            def keyframes(values):
-                return [(e.get("id") or e.get("asset_id"), p.get("name"), p.get("value"))
-                        for e in values if isinstance(e, dict) for p in e.get("parameters", []) if isinstance(p, dict) and ("=" in str(p.get("value", "")) or "keyframe" in str(p.get("name", "")).lower())]
-            bk, ak = keyframes(before), keyframes(after)
-            if bk != ak:
-                if len(ak) != len(bk): return "keyframe.multi_edit" if abs(len(ak)-len(bk)) > 1 else ("keyframe.add" if len(ak) > len(bk) else "keyframe.remove")
-                return "keyframe.value.change"
-            return "effect.parameter.change"
-    if entities == {"track"}:
-        if kinds == {"added"}: return "track.add"
-        if "removed" in kinds: return "track.remove"
-        fields = {k for c in changes for side in ("before", "after") for k in c.get(side, {})}
-        if "name" in fields: return "track.rename"
-        if "mute" in fields: return "track.mute"
-        if "lock" in fields: return "track.lock"
-        return "track.set_state"
-    if entities <= {"mix", "composition"}:
-        if kinds == {"added"}: return "transition.add"
-        if kinds == {"removed"}: return "transition.remove"
-        return "transition.parameter.change"
-    return "timeline.change"
-
-
 def event_operation_name(event: dict) -> str:
     """Name every state-changing event without discarding editing history."""
     boundary = event.get("boundary")
@@ -116,7 +70,7 @@ def effect_intent(event: dict) -> dict | None:
         if before_effects == after_effects:
             continue
         return {
-            "kind": "effect.change",
+            "kind": operation_name({"changes": [change]}),
             "clip_native_id": change.get("native_id"),
             "before_effects": before_effects,
             "after_effects": after_effects,

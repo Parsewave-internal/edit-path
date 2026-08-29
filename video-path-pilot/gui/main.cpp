@@ -83,7 +83,7 @@ QString whisperPythonExecutable()
         QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("python/python.exe")),
     };
     for (const QString &candidate : candidates) {
-        if (QFileInfo::isFile(candidate)) return candidate;
+        if (QFileInfo(candidate).isFile()) return candidate;
     }
 #endif
     return pythonExecutable();

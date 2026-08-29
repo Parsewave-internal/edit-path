@@ -101,6 +101,7 @@ class MvpTests(unittest.TestCase):
             "QApplication::processEvents(QEventLoop::ExcludeUserInputEvents)",
         ):
             self.assertIn(marker, source)
+        self.assertNotIn("QFileInfo::isFile(", source)
         installer = (root / "packaging/windows/dependency-installer.ps1").read_text(encoding="utf-8")
         self.assertIn("installed into EditPath venv", installer)
         self.assertNotIn("pip install --disable-pip-version-check -U openai-whisper --user", installer)

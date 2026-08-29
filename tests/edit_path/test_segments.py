@@ -124,6 +124,7 @@ class SegmentAssemblyTests(unittest.TestCase):
                         reference["path"] = "../" + reference["path"]
             events.append(envelope(len(events) + 1, "session.end", "segment-a", state_sidecars_complete=True))
             write_events(edit_path / "events-001.jsonl", events)
+            write_events(root / "trajectory.jsonl", events)
             (root / "raw-events-001.jsonl").unlink()
             (root / "raw-events-002.jsonl").unlink()
 

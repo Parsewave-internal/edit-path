@@ -257,11 +257,16 @@ if ($blueprintText.Contains($oldFilter)) {
 }
 
 Write-Host "Building EditPath and all required Kdenlive dependencies..."
-& $craftPython $craftScript --ci-mode --options "kde/kdemultimedia/kdenlive.srcDir=$sourceRoot" kde/kdemultimedia/kdenlive
+# This repository supplies a local Kdenlive/EditPath source tree.  A Craft
+# binary cache can satisfy the package with an older EditPath.exe even though
+# the local source contains newer supervisor UI.  Dependencies remain cached
+# by Craft, but the direct application target must always be compiled from the
+# source checkout passed above.
+& $craftPython $craftScript --ci-mode --no-cache --options "kde/kdemultimedia/kdenlive.srcDir=$sourceRoot" kde/kdemultimedia/kdenlive
 if ($LASTEXITCODE -ne 0) { Stop-Build "Craft compilation failed." }
 
 Write-Host "Creating dependency-complete portable package..."
-& $craftPython $craftScript --ci-mode --options "kde/kdemultimedia/kdenlive.srcDir=$sourceRoot" --package kde/kdemultimedia/kdenlive
+& $craftPython $craftScript --ci-mode --no-cache --options "kde/kdemultimedia/kdenlive.srcDir=$sourceRoot" --package kde/kdemultimedia/kdenlive
 if ($LASTEXITCODE -ne 0) { Stop-Build "Craft packaging failed." }
 
 $archive = Get-ChildItem $CraftRoot -Recurse -File -Filter '*kdenlive*.7z' |
@@ -308,6 +313,27 @@ if (-not $editPath) { Stop-Build "EditPath.exe is missing from the portable pack
 if (-not $kdenlive) { Stop-Build "kdenlive.exe is missing from the portable package." }
 if ($editPath.Directory.FullName -ne $kdenlive.Directory.FullName) {
     Stop-Build "EditPath.exe and kdenlive.exe were not packaged together."
+}
+
+# Guard against a successful-looking Craft package that silently contains an
+# executable from an earlier cache/image.  QStringLiteral text is embedded as
+# UTF-16; decode both byte alignments so this check is independent of the PE
+# section offset.
+$editPathBytes = [IO.File]::ReadAllBytes($editPath.FullName)
+$editPathTextEven = [Text.Encoding]::Unicode.GetString($editPathBytes)
+$editPathTextOdd = if ($editPathBytes.Length -gt 1) {
+    [Text.Encoding]::Unicode.GetString($editPathBytes, 1, $editPathBytes.Length - 1)
+} else {
+    ""
+}
+foreach ($featureMarker in @(
+    "Configure microphone",
+    "Test microphone and play it back",
+    "Stop Reasoning (recording"
+)) {
+    if (-not $editPathTextEven.Contains($featureMarker) -and -not $editPathTextOdd.Contains($featureMarker)) {
+        Stop-Build "the packaged EditPath.exe is stale; required recorder UI marker is missing: $featureMarker"
+    }
 }
 
 $bin = $editPath.Directory.FullName

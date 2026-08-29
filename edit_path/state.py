@@ -483,7 +483,7 @@ def load_state_reference(reference: dict[str, Any], base_dir: Path) -> bytes:
     except ValueError:
         raise EditPathError(f"unsafe bundle path: {raw_path!s}")
     if not path.is_file() or path.is_symlink():
-        raise EditPathError(f"project state sidecar is missing: {relative}")
+        raise EditPathError(f"project state sidecar is missing: {raw_path!s}")
     encoded = path.read_bytes()
     if encoding == "raw":
         raw = encoded

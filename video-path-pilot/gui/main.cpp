@@ -316,8 +316,10 @@ protected:
     void closeEvent(QCloseEvent *event) override
     {
         if (m_audioCapture.state() != QProcess::NotRunning) {
-            m_audioCapture.terminate();
-            if (!m_audioCapture.waitForFinished(3000)) m_audioCapture.kill();
+            // Closing the supervisor is also a valid end to a think-aloud
+            // segment.  Use the same graceful FFmpeg finalization path as
+            // Stop Reasoning so a window close cannot discard the FLAC file.
+            stopReasoning();
         }
         if (m_editor.state() != QProcess::NotRunning || m_worker.state() != QProcess::NotRunning) {
             QMessageBox::warning(this, QStringLiteral("Please wait"),
@@ -574,6 +576,7 @@ private:
         }
         QDialog dialog(this);
         dialog.setWindowTitle(QStringLiteral("Configure microphone"));
+        dialog.setWindowFlag(Qt::WindowStaysOnTopHint, true);
         dialog.setMinimumWidth(620);
         auto *layout = new QVBoxLayout(&dialog);
         auto *instructions = new QLabel(QStringLiteral(
@@ -664,13 +667,23 @@ private:
             dialog.accept();
         });
         connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-        if (dialog.exec() != QDialog::Accepted) return false;
+        if (dialog.exec() != QDialog::Accepted) {
+            setStatus(QStringLiteral("Microphone setup was canceled; reasoning recording did not start."), true);
+            return false;
+        }
         return selected && !selected->isEmpty();
     }
 
     void startReasoning()
     {
-        if (m_session.isEmpty() || m_audioCapture.state() != QProcess::NotRunning) return;
+        if (m_session.isEmpty()) {
+            setStatus(QStringLiteral("Start an edit before recording reasoning."), true);
+            return;
+        }
+        if (m_audioCapture.state() != QProcess::NotRunning) {
+            setStatus(QStringLiteral("Reasoning recording is already in progress; use Stop Reasoning when finished."));
+            return;
+        }
         QString microphone;
         if (!configureMicrophone(&microphone)) return;
         const QString reasoningDir = QDir(m_session).filePath(QStringLiteral("EDIT-PATH/reasoning"));
@@ -730,14 +743,23 @@ private:
         m_audioStopRequested = true;
         m_audioCapture.write("q\n");
         m_audioCapture.closeWriteChannel();
-        m_audioCapture.terminate();
         bool forced = false;
+        // Let FFmpeg consume the quit command and finalize the FLAC stream
+        // first.  Terminating immediately after writing ``q`` can interrupt
+        // the encoder before it writes the container footer, leaving no
+        // usable recording on Windows.  Escalate only when the graceful path
+        // does not complete within the bounded wait.
         if (!m_audioCapture.waitForFinished(5000)) {
-            // Windows console capture processes do not always honor the
-            // graceful terminate request.  Stop must be definitive.
-            m_audioCapture.kill();
-            forced = true;
-            m_audioCapture.waitForFinished(3000);
+            m_audioCapture.terminate();
+            if (m_audioCapture.waitForFinished(3000)) {
+                forced = true;
+            } else {
+                // Windows console capture processes do not always honor the
+                // graceful terminate request.  Stop must still be definitive.
+                m_audioCapture.kill();
+                forced = true;
+                m_audioCapture.waitForFinished(3000);
+            }
         }
         m_recordReasoning->setEnabled(true); m_stopReasoning->setEnabled(false); m_stopReasoning->setText(QStringLiteral("Stop Reasoning"));
         const QFileInfo recording(m_audioOutput);

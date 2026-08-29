@@ -131,7 +131,12 @@ def validate_project_state_sidecars(
                 raise GateError("state_sidecars", "v0.3 state event has no exact project_state", sequence)
             continue
         base = session_dir if reference.get("base") == "session" else trajectory.parent
-        load_state_reference(reference, base)
+        try:
+            load_state_reference(reference, base)
+        except EditPathError as error:
+            # Keep malformed or stale recorder paths attributable to the
+            # sidecar gate instead of reporting an opaque ``internal`` error.
+            raise GateError("state_sidecars", str(error), sequence) from error
         digest = reference.get("sha256")
         if event.get("event_type") == "state.checkpoint":
             if current_hash is not None and digest != current_hash:

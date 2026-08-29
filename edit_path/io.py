@@ -120,14 +120,10 @@ def find_trajectory(session_dir: Path) -> Path:
     if numbered:
         from .segments import assemble_segments
         assembled = session_dir / "trajectory.jsonl"
-        # The assembler accepts the session root convention; mirror the
-        # durable EDIT-PATH journal into its expected names when necessary.
-        if numbered[0].parent.name == "EDIT-PATH":
-            import shutil
-            for source in numbered:
-                target = session_dir / source.name.replace("events-", "raw-events-")
-                if not target.exists():
-                    shutil.copyfile(source, target)
+        # assemble_segments understands both the legacy root-level journals
+        # and the recorder's durable EDIT-PATH layout.  Do not mirror
+        # EDIT-PATH files into the root: doing so changes the reference base
+        # before assembly and turns valid ``../states`` paths into stale ones.
         assemble_segments(session_dir, assembled)
         return assembled
     raise EditPathError(f"no trajectory JSONL found under {session_dir}")

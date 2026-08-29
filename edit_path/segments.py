@@ -15,6 +15,38 @@ from .pipeline import validate_event_envelope
 from .state import validate_state_transitions
 
 
+def _rebase_event_file_reference(
+    event: dict[str, Any],
+    field: str,
+    source_parent: Path,
+    session_dir: Path,
+) -> None:
+    """Rebase recorder paths when a segment is assembled at session root.
+
+    Recorder journals are written under ``<session>/EDIT-PATH`` while the
+    canonical trajectory is written at ``<session>/trajectory.jsonl``.  A
+    relative sidecar path such as ``../states/checkpoint.kdenlive.zst`` is
+    valid in the former location but would escape the session when interpreted
+    from the latter.  Store the resolved, session-relative path in the
+    assembled event and make its base explicit so every downstream consumer
+    has one stable interpretation.
+    """
+    reference = event.get(field)
+    if not isinstance(reference, dict) or not isinstance(reference.get("path"), str) or not reference["path"]:
+        return
+    raw_path = Path(reference["path"])
+    if raw_path.is_absolute():
+        raise GateError("segment_assembly", f"absolute {field} path is not allowed: {raw_path}")
+    base = session_dir if reference.get("base") == "session" else source_parent
+    resolved = (base / raw_path).resolve()
+    try:
+        relative = resolved.relative_to(session_dir.resolve())
+    except ValueError as exc:
+        raise GateError("segment_assembly", f"{field} path escapes session: {raw_path}") from exc
+    reference["base"] = "session"
+    reference["path"] = relative.as_posix()
+
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -96,6 +128,12 @@ def assemble_segments(
                 project_context_seen = True
             value = copy.deepcopy(event)
             value["session_id"] = canonical_session_id
+            # The event was authored beside ``path``.  Rebase file references
+            # before the event is moved into the root-level trajectory.
+            _rebase_event_file_reference(value, "project_state", path.parent, session_dir)
+            _rebase_event_file_reference(value, "state_ref", path.parent, session_dir)
+            _rebase_event_file_reference(value, "state", path.parent, session_dir)
+            _rebase_event_file_reference(value, "reference_proxy", path.parent, session_dir)
             assembled.append(value)
 
     for sequence, event in enumerate(assembled, 1):

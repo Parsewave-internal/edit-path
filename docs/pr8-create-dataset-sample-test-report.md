@@ -13,6 +13,8 @@ Test window: 2026-08-29 (UTC). The checks below use the historical sessions that
 
 The July 24 session's previous exact replay attempt rendered a full Kdenlive/Melt monitor for each state and then one FFmpeg process per event. It was still rendering after several minutes and produced no published replay when interrupted. That is the reproduced “hung” user experience.
 
+The stress window exercised the real replay renderer and the publication path through the existing integration tests; it did not claim a fresh `completed-sample` from the historical July 24 folder because that would repeat the unbounded full-job render. The July 25 folder remains intentionally rejected by the strict gates above.
+
 ## Bounded replay fix and proof
 
 For trajectories over 500 moments, `render_edit_process` now uses `compact_semantic` mode: it preserves every event and operation in the report, skips the expensive exact monitor render for each state, renders 10 fps semantic UI scenes in parallel (up to four workers), and records the degradation explicitly in `state_preview_warnings`. Short trajectories retain the full exact-monitor path.

@@ -260,7 +260,9 @@ QString friendlyFinalizationError(const QString &details)
     if (value.contains(QStringLiteral("contains no resolvable media")) || value.contains(QStringLiteral("no resolvable media resources"))) {
         return QStringLiteral("The saved project does not contain usable media yet. Return to Kdenlive, add your clips to the project, save, and try again.");
     }
-    if (value.contains(QStringLiteral("checkpoint")) || value.contains(QStringLiteral("hash_chain")) || value.contains(QStringLiteral("branch_resolution"))) {
+    if (value.contains(QStringLiteral("checkpoint")) || value.contains(QStringLiteral("state_sidecars")) ||
+        value.contains(QStringLiteral("unsafe bundle path")) || value.contains(QStringLiteral("hash_chain")) ||
+        value.contains(QStringLiteral("branch_resolution"))) {
         return QStringLiteral("We could not verify every recorded editing step. Your project and render are safe, but this session needs technical review "
                               "before it can become a dataset sample.");
     }

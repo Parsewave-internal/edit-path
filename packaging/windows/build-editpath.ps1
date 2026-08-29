@@ -225,6 +225,20 @@ if (-not $craftPython -or -not (Test-Path $craftPython) -or -not (Test-Path $cra
     Stop-Build "the Craft Python launcher is incomplete."
 }
 
+# Do not continue if Craft ignored the local source override and resolved its
+# own cached Kdenlive checkout.  That produces a valid-looking package whose
+# EditPath supervisor predates the source tree being tested.
+$craftSource = (& $craftPython $craftScript -q --ci-mode --options "kde/kdemultimedia/kdenlive.srcDir=$sourceRoot" --get "sourceDir()" "kde/kdemultimedia/kdenlive" | Out-String).Trim()
+if ($LASTEXITCODE -ne 0 -or -not $craftSource) {
+    Stop-Build "could not query Craft's resolved Kdenlive source directory."
+}
+$resolvedCraftSource = [IO.Path]::GetFullPath($craftSource).TrimEnd('\')
+$resolvedLocalSource = [IO.Path]::GetFullPath($sourceRoot).TrimEnd('\')
+if (-not [String]::Equals($resolvedCraftSource, $resolvedLocalSource, [StringComparison]::OrdinalIgnoreCase)) {
+    Stop-Build "Craft resolved Kdenlive source to '$resolvedCraftSource' instead of the requested local checkout '$resolvedLocalSource'."
+}
+Write-Host "Craft source verified: $resolvedCraftSource"
+
 $blueprint = Get-ChildItem $CraftRoot -Recurse -Filter kdenlive.py |
     Where-Object { $_.FullName -match 'craft-blueprints-kde.*kdenlive' } |
     Select-Object -First 1
@@ -262,11 +276,11 @@ Write-Host "Building EditPath and all required Kdenlive dependencies..."
 # the local source contains newer supervisor UI.  Dependencies remain cached
 # by Craft, but the direct application target must always be compiled from the
 # source checkout passed above.
-& $craftPython $craftScript --ci-mode --no-cache --options "kde/kdemultimedia/kdenlive.srcDir=$sourceRoot" kde/kdemultimedia/kdenlive
+& $craftPython $craftScript --ci-mode --no-cache --ignoreInstalled --options "kde/kdemultimedia/kdenlive.srcDir=$sourceRoot" kde/kdemultimedia/kdenlive
 if ($LASTEXITCODE -ne 0) { Stop-Build "Craft compilation failed." }
 
 Write-Host "Creating dependency-complete portable package..."
-& $craftPython $craftScript --ci-mode --no-cache --options "kde/kdemultimedia/kdenlive.srcDir=$sourceRoot" --package kde/kdemultimedia/kdenlive
+& $craftPython $craftScript --ci-mode --no-cache --ignoreInstalled --options "kde/kdemultimedia/kdenlive.srcDir=$sourceRoot" --package kde/kdemultimedia/kdenlive
 if ($LASTEXITCODE -ne 0) { Stop-Build "Craft packaging failed." }
 
 $archive = Get-ChildItem $CraftRoot -Recurse -File -Filter '*kdenlive*.7z' |

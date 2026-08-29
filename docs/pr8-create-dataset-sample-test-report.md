@@ -75,3 +75,5 @@ cmake -S video-path-pilot/gui -B /tmp/edit-path-gui-build -G Ninja && cmake --bu
 The GUI build completed (`[2/2] Linking CXX executable EditPath`). No C++ recorder behavior was changed in this stress pass; changes are limited to bounded replay finalization, correct transcription-session diagnostics, and tests for both regressions.
 
 Observed Python matrix result: `71 passed, 2 skipped in 14.74s`.
+
+For this bounded test window, a temporary user cron entry (`*/5 * * * * /tmp/edit-path-test-window-reminder.sh`) wrote UTC reminders to `/tmp/edit-path-test-window-reminder.log`; observed entries were at 08:25, 08:30, 08:35, and 08:40 with the remaining-minute count. The entry is removed after the window so it cannot become a permanent background job.

@@ -343,6 +343,7 @@ $editPathTextOdd = if ($editPathBytes.Length -gt 1) {
     ""
 }
 $kdenliveBytes = [IO.File]::ReadAllBytes($kdenlive.FullName)
+$kdenliveTextAscii = [Text.Encoding]::ASCII.GetString($kdenliveBytes)
 $kdenliveTextEven = [Text.Encoding]::Unicode.GetString($kdenliveBytes)
 $kdenliveTextOdd = if ($kdenliveBytes.Length -gt 1) {
     [Text.Encoding]::Unicode.GetString($kdenliveBytes, 1, $kdenliveBytes.Length - 1)
@@ -351,7 +352,9 @@ $kdenliveTextOdd = if ($kdenliveBytes.Length -gt 1) {
 }
 $sourceRevision = (& git -C $sourceRoot rev-parse --short HEAD).Trim()
 if (-not $sourceRevision -or
-    (-not $kdenliveTextEven.Contains($sourceRevision) -and -not $kdenliveTextOdd.Contains($sourceRevision))) {
+    (-not $kdenliveTextAscii.Contains($sourceRevision) -and
+     -not $kdenliveTextEven.Contains($sourceRevision) -and
+     -not $kdenliveTextOdd.Contains($sourceRevision))) {
     Stop-Build "the packaged kdenlive.exe does not contain this checkout's source revision ($sourceRevision); refusing a stale recorder binary."
 }
 foreach ($featureMarker in @(

@@ -112,6 +112,7 @@ class MvpTests(unittest.TestCase):
         self.assertIn('install-dependencies.bat', build)
         self.assertIn('does not contain this checkout\'s source revision', build)
         self.assertIn('$kdenliveTextEven.Contains($sourceRevision)', build)
+        self.assertIn('$kdenliveTextAscii.Contains($sourceRevision)', build)
         self.assertIn('$editPathTextEven.Contains($featureMarker)', build)
         self.assertIn('$kdenliveTextEven.Contains($featureMarker)', build)
         self.assertIn('"effect.parameter.change"', build)

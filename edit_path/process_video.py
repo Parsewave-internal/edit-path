@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import copy
+import concurrent.futures
+import math
 import os
 import re
 import shutil
@@ -205,7 +207,18 @@ def _font_option() -> str:
     candidates = (
         Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
         Path("/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf"),
+        Path("/System/Library/Fonts/Supplemental/Arial.ttf"),
+        Path("/System/Library/Fonts/Helvetica.ttc"),
     )
+    fc_match = shutil.which("fc-match")
+    if fc_match:
+        try:
+            resolved = subprocess.run([fc_match, "-f", "%{file}", "sans-serif"], text=True,
+                                      capture_output=True, check=False, timeout=3).stdout.strip()
+            if resolved and Path(resolved).is_file():
+                candidates = (Path(resolved),) + candidates
+        except (OSError, subprocess.SubprocessError):
+            pass
     font = next((path for path in candidates if path.is_file()), None)
     return f"fontfile={font}:" if font else "font=Sans:"
 
@@ -237,9 +250,9 @@ def _clip_color(asset_id: object) -> str:
     return palette[sum(str(asset_id).encode("utf-8")) % len(palette)]
 
 
-def _encoder_arguments(encoder: str) -> list[str]:
+def _encoder_arguments(encoder: str, *, fast: bool = False) -> list[str]:
     if encoder == "libx264":
-        return ["-c:v", encoder, "-preset", "veryfast", "-crf", "20"]
+        return ["-c:v", encoder, "-preset", "ultrafast" if fast else "veryfast", "-crf", "22" if fast else "20"]
     if encoder == "libopenh264":
         return ["-c:v", encoder, "-b:v", "8M", "-g", "60"]
     if encoder == "mpeg4":
@@ -396,8 +409,14 @@ def _write_ass_labels(path: Path, labels: list[dict[str, Any]], duration: float)
     path.write_text(content, encoding="utf-8")
 
 
-def _scene_duration(moment: dict[str, Any]) -> float:
+def _scene_duration(moment: dict[str, Any], *, compact: bool = False) -> float:
     event_type = moment["event_type"]
+    if compact:
+        if event_type in {"session.start", "session.end"}:
+            return 1.0
+        if event_type in {"state.diff", "state.checkpoint"}:
+            return 0.6
+        return 0.35
     if event_type in {"session.start", "session.end"}:
         return 2.0
     if event_type == "state.diff":
@@ -771,8 +790,11 @@ def _render_scene(
     fps: float,
     moment_count: int,
     text_renderer: str,
+    scene_duration: float | None = None,
+    output_fps: int = PROCESS_FPS,
+    fast: bool = False,
 ) -> int:
-    duration = _scene_duration(moment)
+    duration = scene_duration if scene_duration is not None else _scene_duration(moment)
     command = [
         ffmpeg,
         "-y",
@@ -781,7 +803,7 @@ def _render_scene(
         "-f",
         "lavfi",
         "-i",
-        f"color=c=0x111318:s={PROCESS_WIDTH}x{PROCESS_HEIGHT}:r={PROCESS_FPS}:d={duration:.3f}",
+        f"color=c=0x111318:s={PROCESS_WIDTH}x{PROCESS_HEIGHT}:r={output_fps}:d={duration:.3f}",
     ]
     preview_index: int | None = None
     asset_index: int | None = None
@@ -803,7 +825,7 @@ def _render_scene(
     label_index = 1
     if preview_index is not None:
         graph.append(
-            f"[{preview_index}:v]fps={PROCESS_FPS},scale=900:450:force_original_aspect_ratio=decrease,"
+            f"[{preview_index}:v]fps={output_fps},scale=900:450:force_original_aspect_ratio=decrease,"
             f"pad=900:450:(ow-iw)/2:(oh-ih)/2:color=black,trim=duration={duration:.3f},setpts=PTS-STARTPTS[monitor]"
         )
         graph.append(f"[{current}][monitor]overlay=480:118:eof_action=pass:shortest=0[ui{label_index}]")
@@ -811,7 +833,7 @@ def _render_scene(
         label_index += 1
     if asset_index is not None:
         graph.append(
-            f"[{asset_index}:v]fps={PROCESS_FPS},scale=180:112:force_original_aspect_ratio=decrease,"
+            f"[{asset_index}:v]fps={output_fps},scale=180:112:force_original_aspect_ratio=decrease,"
             f"pad=180:112:(ow-iw)/2:(oh-ih)/2:color=0x111318,trim=duration={duration:.3f},setpts=PTS-STARTPTS[thumb]"
         )
         graph.append(f"[{current}][thumb]overlay=20:135:eof_action=pass:shortest=0[ui{label_index}]")
@@ -850,10 +872,10 @@ def _render_scene(
             "[video]",
             "-an",
             "-r",
-            str(PROCESS_FPS),
+            str(output_fps),
             "-pix_fmt",
             "yuv420p",
-            *_encoder_arguments(encoder),
+            *_encoder_arguments(encoder, fast=fast),
             "-t",
             f"{duration:.3f}",
             "-movflags",
@@ -894,6 +916,18 @@ def render_edit_process(
     text_renderer = "drawtext" if _supports_filter(ffmpeg, "drawtext") else "ass" if _supports_filter(ffmpeg, "ass") else "none"
     build_replay_steps(events, accepted, baseline_hash)
     moments = build_replay_moments(events)
+    # Full exact monitor previews are useful for short edits, but rendering a
+    # complete Kdenlive project for every state in a long trajectory can take
+    # hours.  Keep every event and its semantic state in the report while
+    # switching only the derived visual artifact to a bounded compact mode.
+    compact = len(moments) > 500
+    output_fps = 10 if compact else PROCESS_FPS
+    if compact:
+        preview_warnings = [
+            f"compact replay mode used for {len(moments)} events; exact monitor previews were skipped to keep finalization bounded"
+        ]
+    else:
+        preview_warnings = []
     context = next((event.get("context") for event in events if event.get("event_type") == "project.context"), {})
     numerator = float(context.get("fps_numerator", 25) or 25)
     denominator = float(context.get("fps_denominator", 1) or 1)
@@ -915,16 +949,15 @@ def render_edit_process(
     moment_reports: list[dict[str, Any]] = []
     text_overlay_count = 0
     text_warnings: list[str] = []
-    preview_warnings: list[str] = []
     active_text_renderer = text_renderer
 
-    for moment in moments:
+    def render_moment(moment: dict[str, Any], renderer: str) -> tuple[int, int, str]:
         snapshot = moment["snapshot"]
         state_event = moment.get("state_event")
         preview: Path | None = None
         preview_seek = 0.0
         preview_mode = "semantic_ui_only"
-        if (
+        if not compact and (
             isinstance(state_event, dict)
             and state_reference(state_event) is not None
             and int(snapshot.get("duration_frames", 0) or 0) > 0
@@ -969,43 +1002,67 @@ def render_edit_process(
                 preview_mode = "exact_project_monitor"
 
         scene = scene_dir / f"event-{moment['index'] + 1:03d}.mp4"
-        try:
-            text_overlay_count += _render_scene(
-                ffmpeg,
-                encoder,
-                moment,
-                scene,
-                preview=preview,
-                preview_seek=preview_seek,
-                asset=asset,
-                asset_names=asset_names,
-                maximum_frames=maximum_frames,
-                fps=fps,
-                moment_count=len(moments),
-                text_renderer=active_text_renderer,
-            )
-        except EditPathError as error:
-            if active_text_renderer == "none":
-                raise
-            text_warnings.append(
-                f"{active_text_renderer} labels failed at sequence {moment['sequence']}; replay continued without labels: {error}"
-            )
-            active_text_renderer = "none"
-            _render_scene(
-                ffmpeg,
-                encoder,
-                moment,
-                scene,
-                preview=preview,
-                preview_seek=preview_seek,
-                asset=asset,
-                asset_names=asset_names,
-                maximum_frames=maximum_frames,
-                fps=fps,
-                moment_count=len(moments),
-                text_renderer=active_text_renderer,
-            )
+        count = _render_scene(
+            ffmpeg,
+            encoder,
+            moment,
+            scene,
+            preview=preview,
+            preview_seek=preview_seek,
+            asset=None if compact else asset,
+            asset_names=asset_names,
+            maximum_frames=maximum_frames,
+            fps=fps,
+            moment_count=len(moments),
+            text_renderer=renderer,
+            scene_duration=_scene_duration(moment, compact=compact),
+            output_fps=output_fps,
+            fast=compact,
+        )
+        return moment["index"], count, preview_mode
+
+    render_results: dict[int, tuple[int, str]] = {}
+    if compact and len(moments) > 1:
+        workers = min(4, max(1, os.cpu_count() or 1))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {executor.submit(render_moment, moment, active_text_renderer): moment for moment in moments}
+            failures: list[tuple[dict[str, Any], Exception]] = []
+            for future in concurrent.futures.as_completed(futures):
+                moment = futures[future]
+                try:
+                    index, count, preview_mode = future.result()
+                    render_results[index] = count, preview_mode
+                except Exception as error:  # rerender only failed scenes without labels below
+                    failures.append((moment, error))
+            if failures:
+                for moment, error in failures:
+                    if active_text_renderer == "none":
+                        raise error
+                    text_warnings.append(
+                        f"{active_text_renderer} labels failed at sequence {moment['sequence']}; replay continued without labels: {error}"
+                    )
+                    index, count, preview_mode = render_moment(moment, "none")
+                    render_results[index] = count, preview_mode
+                active_text_renderer = "none"
+    else:
+        for moment in moments:
+            try:
+                index, count, preview_mode = render_moment(moment, active_text_renderer)
+            except EditPathError as error:
+                if active_text_renderer == "none":
+                    raise
+                text_warnings.append(
+                    f"{active_text_renderer} labels failed at sequence {moment['sequence']}; replay continued without labels: {error}"
+                )
+                active_text_renderer = "none"
+                index, count, preview_mode = render_moment(moment, active_text_renderer)
+            render_results[index] = count, preview_mode
+
+    for moment in moments:
+        scene = scene_dir / f"event-{moment['index'] + 1:03d}.mp4"
         scene_paths.append(scene)
+        count, preview_mode = render_results[moment["index"]]
+        text_overlay_count += count
         moment_reports.append(
             {
                 "moment": moment["index"] + 1,
@@ -1013,8 +1070,8 @@ def render_edit_process(
                 "event_id": moment["event"].get("event_id"),
                 "event_type": moment["event_type"],
                 "operation": moment["operation"],
-                "duration_seconds": _scene_duration(moment),
-                "state_sha256": _project_hash(state_event) if isinstance(state_event, dict) else None,
+                "duration_seconds": _scene_duration(moment, compact=compact),
+                "state_sha256": _project_hash(moment.get("state_event")) if isinstance(moment.get("state_event"), dict) else None,
                 "monitor": preview_mode,
             }
         )
@@ -1051,7 +1108,13 @@ def render_edit_process(
     output_probe = probe(output)
     video_streams = [stream for stream in output_probe.get("streams", []) if stream.get("codec_type") == "video"]
     duration = float(output_probe.get("format", {}).get("duration", 0.0))
-    expected_duration = sum(_scene_duration(moment) for moment in moments)
+    # Every independently rendered scene is quantized to a whole output
+    # frame.  Summing the requested fractional durations underestimates a
+    # long replay by up to one frame per moment.
+    expected_duration = sum(
+        math.ceil(_scene_duration(moment, compact=compact) * output_fps) / output_fps
+        for moment in moments
+    )
     if not video_streams or abs(duration - expected_duration) > 0.75:
         raise GateError(
             "edit_process",
@@ -1083,6 +1146,8 @@ def render_edit_process(
         "state_preview_quality": "passed" if not preview_warnings else "degraded",
         "state_preview_warnings": preview_warnings,
         "output": {"sha256": sha256_file(output), "probe": output_probe},
+        "render_mode": "compact_semantic" if compact else "full_exact_monitor",
+        "render_fps": output_fps,
         "events": moment_reports,
     }
     return output, report

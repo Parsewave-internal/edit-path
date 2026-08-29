@@ -225,6 +225,20 @@ if (-not $craftPython -or -not (Test-Path $craftPython) -or -not (Test-Path $cra
     Stop-Build "the Craft Python launcher is incomplete."
 }
 
+# Do not continue if Craft ignored the local source override and resolved its
+# own cached Kdenlive checkout.  That produces a valid-looking package whose
+# EditPath supervisor predates the source tree being tested.
+$craftSource = (& $craftPython $craftScript -q --ci-mode --options "kde/kdemultimedia/kdenlive.srcDir=$sourceRoot" --get "sourceDir()" "kde/kdemultimedia/kdenlive" | Out-String).Trim()
+if ($LASTEXITCODE -ne 0 -or -not $craftSource) {
+    Stop-Build "could not query Craft's resolved Kdenlive source directory."
+}
+$resolvedCraftSource = [IO.Path]::GetFullPath($craftSource).TrimEnd('\')
+$resolvedLocalSource = [IO.Path]::GetFullPath($sourceRoot).TrimEnd('\')
+if (-not [String]::Equals($resolvedCraftSource, $resolvedLocalSource, [StringComparison]::OrdinalIgnoreCase)) {
+    Stop-Build "Craft resolved Kdenlive source to '$resolvedCraftSource' instead of the requested local checkout '$resolvedLocalSource'."
+}
+Write-Host "Craft source verified: $resolvedCraftSource"
+
 $blueprint = Get-ChildItem $CraftRoot -Recurse -Filter kdenlive.py |
     Where-Object { $_.FullName -match 'craft-blueprints-kde.*kdenlive' } |
     Select-Object -First 1
@@ -241,16 +255,32 @@ if ($blueprintText.Contains($oldFilter)) {
 } elseif ($blueprintText.Contains($editPathOnlyFilter)) {
     $blueprintText = $blueprintText.Replace($editPathOnlyFilter, $newFilter)
     [IO.File]::WriteAllText($blueprint.FullName, $blueprintText, $utf8NoBom)
-} elseif (-not $blueprintText.Contains($newFilter)) {
-    Stop-Build "the Craft Kdenlive executable filter changed; update this script before building."
+} else {
+    # Craft periodically reformats this regex (line wrapping, escaping, or
+    # additional retained runtime binaries).  Requiring one exact string
+    # makes otherwise compatible Craft releases fail before the build starts.
+    # Validate the safety properties instead: this must be a bin exclusion
+    # filter and it must retain the executables/data EditPath needs.
+    $hasBinFilter = $blueprintText -match 'bin/\(\?!'
+    $requiredFilterEntries = @('ff', 'kdenlive', 'EditPath', 'kioworker', 'melt', 'data/kdenlive', 'video-path-pilot')
+    $missingFilterEntries = @($requiredFilterEntries | Where-Object { $blueprintText -notmatch [regex]::Escape($_) })
+    if (-not $hasBinFilter -or $missingFilterEntries.Count -gt 0) {
+        $missing = if ($missingFilterEntries.Count) { $missingFilterEntries -join ', ' } else { 'bin exclusion filter' }
+        Stop-Build "the Craft Kdenlive executable filter is incompatible; missing: $missing"
+    }
 }
 
 Write-Host "Building EditPath and all required Kdenlive dependencies..."
-& $craftPython $craftScript --ci-mode --options "kde/kdemultimedia/kdenlive.srcDir=$sourceRoot" kde/kdemultimedia/kdenlive
+# This repository supplies a local Kdenlive/EditPath source tree.  A Craft
+# binary cache can satisfy the package with an older EditPath.exe even though
+# the local source contains newer supervisor UI.  Dependencies remain cached
+# by Craft, but the direct application target must always be compiled from the
+# source checkout passed above.
+& $craftPython $craftScript --ci-mode --no-cache --ignoreInstalled --options "kde/kdemultimedia/kdenlive.srcDir=$sourceRoot" kde/kdemultimedia/kdenlive
 if ($LASTEXITCODE -ne 0) { Stop-Build "Craft compilation failed." }
 
 Write-Host "Creating dependency-complete portable package..."
-& $craftPython $craftScript --ci-mode --options "kde/kdemultimedia/kdenlive.srcDir=$sourceRoot" --package kde/kdemultimedia/kdenlive
+& $craftPython $craftScript --ci-mode --no-cache --ignoreInstalled --options "kde/kdemultimedia/kdenlive.srcDir=$sourceRoot" --package kde/kdemultimedia/kdenlive
 if ($LASTEXITCODE -ne 0) { Stop-Build "Craft packaging failed." }
 
 $archive = Get-ChildItem $CraftRoot -Recurse -File -Filter '*kdenlive*.7z' |
@@ -292,11 +322,62 @@ New-Item -ItemType Directory -Force $portable | Out-Null
 if ($LASTEXITCODE -ne 0) { Stop-Build "could not extract the Craft package." }
 
 $editPath = Get-ChildItem $portable -Recurse -File -Filter EditPath.exe | Select-Object -First 1
+$audioHelper = Get-ChildItem $portable -Recurse -File -Filter EditPathAudio.exe | Select-Object -First 1
 $kdenlive = Get-ChildItem $portable -Recurse -File -Filter kdenlive.exe | Select-Object -First 1
 if (-not $editPath) { Stop-Build "EditPath.exe is missing from the portable package." }
+if (-not $audioHelper) { Stop-Build "EditPathAudio.exe is missing from the portable package." }
 if (-not $kdenlive) { Stop-Build "kdenlive.exe is missing from the portable package." }
-if ($editPath.Directory.FullName -ne $kdenlive.Directory.FullName) {
-    Stop-Build "EditPath.exe and kdenlive.exe were not packaged together."
+if ($editPath.Directory.FullName -ne $kdenlive.Directory.FullName -or $editPath.Directory.FullName -ne $audioHelper.Directory.FullName) {
+    Stop-Build "EditPath.exe, EditPathAudio.exe, and kdenlive.exe were not packaged together."
+}
+
+# Guard against a successful-looking Craft package that silently contains an
+# executable from an earlier cache/image.  QStringLiteral text is embedded as
+# UTF-16; decode both byte alignments so this check is independent of the PE
+# section offset.
+$editPathBytes = [IO.File]::ReadAllBytes($editPath.FullName)
+$editPathTextEven = [Text.Encoding]::Unicode.GetString($editPathBytes)
+$editPathTextOdd = if ($editPathBytes.Length -gt 1) {
+    [Text.Encoding]::Unicode.GetString($editPathBytes, 1, $editPathBytes.Length - 1)
+} else {
+    ""
+}
+$kdenliveBytes = [IO.File]::ReadAllBytes($kdenlive.FullName)
+$kdenliveTextAscii = [Text.Encoding]::ASCII.GetString($kdenliveBytes)
+$kdenliveTextEven = [Text.Encoding]::Unicode.GetString($kdenliveBytes)
+$kdenliveTextOdd = if ($kdenliveBytes.Length -gt 1) {
+    [Text.Encoding]::Unicode.GetString($kdenliveBytes, 1, $kdenliveBytes.Length - 1)
+} else {
+    ""
+}
+$sourceRevision = (& git -C $sourceRoot rev-parse --short HEAD).Trim()
+if (-not $sourceRevision -or
+    (-not $kdenliveTextAscii.Contains($sourceRevision) -and
+     -not $kdenliveTextEven.Contains($sourceRevision) -and
+     -not $kdenliveTextOdd.Contains($sourceRevision))) {
+    Stop-Build "the packaged kdenlive.exe does not contain this checkout's source revision ($sourceRevision); refusing a stale recorder binary."
+}
+foreach ($featureMarker in @(
+    "Configure microphone",
+    "Test microphone and play it back",
+    "Stop Reasoning (recording"
+)) {
+    if (-not $editPathTextEven.Contains($featureMarker) -and -not $editPathTextOdd.Contains($featureMarker)) {
+        Stop-Build "the packaged EditPath.exe is stale; required recorder UI marker is missing: $featureMarker"
+    }
+}
+# These strings live in the instrumented editor, not the supervisor. Checking
+# kdenlive.exe prevents a cached pre-PR8 recorder from passing merely because
+# an independently fresh supervisor has the current button labels.
+foreach ($featureMarker in @(
+    "effect.parameter.change",
+    "keyframe.value.change",
+    "command_registered",
+    "generated."
+)) {
+    if (-not $kdenliveTextEven.Contains($featureMarker) -and -not $kdenliveTextOdd.Contains($featureMarker)) {
+        Stop-Build "the packaged kdenlive.exe is stale; required recorder taxonomy marker is missing: $featureMarker"
+    }
 }
 
 $bin = $editPath.Directory.FullName
@@ -320,7 +401,7 @@ if (-not (Test-Path (Join-Path $packagedEditPath "__main__.py"))) {
 
 $signedFiles = @()
 if ($signingCertificate) {
-    foreach ($binary in @($editPath, $kdenlive)) {
+    foreach ($binary in @($editPath, $audioHelper, $kdenlive)) {
         Sign-And-VerifyWindowsBinary $signToolPath $signingCertificate $binary.FullName
         $signedFiles += $binary.FullName.Substring($portable.Length + 1)
     }
@@ -343,14 +424,13 @@ if (-not $selfTest.passed) {
     Stop-Build "the packaged runtime reported a failed dependency check."
 }
 $portablePrefix = [IO.Path]::GetFullPath($portable).TrimEnd('\') + '\'
-foreach ($checkName in @('application_root', 'edit_path_module', 'ffmpeg', 'ffprobe', 'kdenlive', 'melt', 'pipeline', 'python', 'qt_multimedia_qml', 'validator')) {
+foreach ($checkName in @('application_root', 'audio_helper', 'edit_path_module', 'ffmpeg', 'ffprobe', 'kdenlive', 'melt', 'pipeline', 'python', 'qt_multimedia_qml', 'validator')) {
     $checkPath = [string]$selfTest.checks.$checkName.path
     if (-not $checkPath -or -not [IO.Path]::GetFullPath($checkPath).StartsWith($portablePrefix, [StringComparison]::OrdinalIgnoreCase)) {
         $env:PATH = $savedPath
         Stop-Build "the packaged runtime self-test resolved '$checkName' outside the portable bundle: $checkPath"
     }
 }
-
 $embeddedPython = Join-Path $pythonDirectory "python.exe"
 $savedPythonPath = $env:PYTHONPATH
 $env:PYTHONPATH = "$bin;$sourceRoot"
@@ -415,6 +495,28 @@ Sessions: %USERPROFILE%\Videos\EditPathSessions
 Test instructions: WINDOWS_TEST_PLAN.md in the source repository.
 "@ | Set-Content (Join-Path $portable "START-HERE.txt") -Encoding UTF8
 Copy-Item (Join-Path $sourceRoot "WINDOWS_TEST_PLAN.md") (Join-Path $portable "WINDOWS_TEST_PLAN.md")
+Copy-Item (Join-Path $sourceRoot "packaging\windows\dependency-installer.ps1") (Join-Path $portable "dependency-installer.ps1")
+Copy-Item (Join-Path $sourceRoot "packaging\windows\DependencyInstaller.cs") (Join-Path $portable "DependencyInstaller.cs")
+Copy-Item (Join-Path $sourceRoot "packaging\windows\install-dependencies.bat") (Join-Path $portable "install-dependencies.bat")
+$csc = Get-ChildItem "${env:ProgramFiles}\Microsoft Visual Studio", "${env:ProgramFiles(x86)}\Microsoft Visual Studio" -Recurse -Filter csc.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not $csc) { Stop-Build "C# compiler csc.exe is required to build dependency-installer.exe." }
+$dependencyInstaller = Join-Path $portable "dependency-installer.exe"
+& $csc.FullName /nologo /target:exe /out:$dependencyInstaller (Join-Path $portable "DependencyInstaller.cs")
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path $dependencyInstaller)) { Stop-Build "could not compile dependency-installer.exe." }
+Remove-Item (Join-Path $portable "DependencyInstaller.cs") -Force
+if (-not (Test-Path $dependencyInstaller)) { Stop-Build "dependency-installer.exe is missing from the portable bundle." }
+@"
+EditPath first-run dependency setup
+
+Double-click install-dependencies.bat (internet required for Whisper/model download).
+It launches the bundled dependency-installer.exe and does not change the
+machine or user PowerShell execution policy.
+
+Command-line alternative:
+.\dependency-installer.exe -Model turbo -InstallRoot `"$env:LOCALAPPDATA\EditPath`"
+
+Then start .\bin\EditPath.exe
+"@ | Set-Content (Join-Path $portable "INSTALL-DEPENDENCIES.txt") -Encoding UTF8
 
 $outputZip = Join-Path $OutputDirectory "EditPath-Windows-x64.zip"
 if (Test-Path $outputZip) {
@@ -430,6 +532,7 @@ $manifest = [ordered]@{
     source_commit = (& git -C $sourceRoot rev-parse HEAD).Trim()
     archive = $outputZip
     editpath_exe = $editPath.FullName.Substring($portable.Length + 1)
+    audio_helper_exe = $audioHelper.FullName.Substring($portable.Length + 1)
     kdenlive_exe = $kdenlive.FullName.Substring($portable.Length + 1)
     test_media_included = -not $SkipTestMedia
     code_signed = [bool]$signingCertificate

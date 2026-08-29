@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from edit_path.state import resolve_accepted_branch
+from edit_path.state import operation_name, resolve_accepted_branch
 
 
 ENTITY_PREFIX = {"clip": "clip", "track": "track", "composition": "transition", "mix": "transition", "master_effect": "master"}
@@ -47,34 +47,6 @@ def accepted_commits(events: list[dict]) -> list[dict]:
     return stack
 
 
-def operation_name(diff: dict) -> str:
-    changes = diff.get("changes", [])
-    entities = {c.get("entity") for c in changes}
-    kinds = {c.get("change") for c in changes}
-    if entities == {"clip"}:
-        if kinds == {"added"}: return "clip.insert"
-        if kinds == {"removed"}: return "clip.delete"
-        if "removed" in kinds and "updated" in kinds: return "timeline.ripple_delete"
-        updated = [c for c in changes if c.get("change") == "updated"]
-        fields = set()
-        for change in updated:
-            before, after = change.get("before", {}), change.get("after", {})
-            fields.update(key for key in set(before) | set(after) if before.get(key) != after.get(key))
-        if fields <= {"timeline_start_frame", "track_native_id"}: return "clip.move"
-        if "speed" in fields: return "clip.set_speed"
-        if fields & {"source_start_frame", "source_end_frame", "duration_frames"}: return "clip.trim_or_split"
-        if fields == {"effects"}: return "effect.change"
-    if entities == {"track"}:
-        if kinds == {"added"}: return "track.create"
-        if "removed" in kinds: return "track.delete_or_reorder"
-        return "track.set_state"
-    if entities <= {"mix", "composition"}:
-        if kinds == {"added"}: return "transition.add"
-        if kinds == {"removed"}: return "transition.remove"
-        return "transition.change"
-    return "timeline.change"
-
-
 def event_operation_name(event: dict) -> str:
     """Name every state-changing event without discarding editing history."""
     boundary = event.get("boundary")
@@ -83,6 +55,37 @@ def event_operation_name(event: dict) -> str:
     if boundary == "redo":
         return "history.redo"
     return operation_name(event.get("diff", {}))
+
+
+def effect_intent(event: dict) -> dict | None:
+    """Extract a stable, human-readable intent from an effect state change."""
+    changes = event.get("diff", {}).get("changes", [])
+    for change in changes:
+        if change.get("entity") not in {"clip", "track", "master_effect"}:
+            continue
+        before = change.get("before", {})
+        after = change.get("after", {})
+        before_effects = before.get("effects", [])
+        after_effects = after.get("effects", [])
+        if before_effects == after_effects:
+            continue
+        recorded_intent = event.get("intent") if isinstance(event.get("intent"), dict) else {}
+        result = {
+            "kind": recorded_intent.get("kind") or operation_name({"changes": [change]}),
+            "owner_entity": change.get("entity"),
+            "owner_native_id": change.get("native_id"),
+            "before_effects": before_effects,
+            "after_effects": after_effects,
+            "transaction_id": event.get("transaction_id"),
+            "interaction_id": event.get("interaction_id") or event.get("transaction_id"),
+            "ambiguous": bool(recorded_intent.get("ambiguous", not bool(event.get("interaction_id")))),
+            "attribution": recorded_intent.get("attribution") or ("direct_interaction" if event.get("interaction_id") else "synthetic_state_correlation"),
+            "interaction_scope": event.get("interaction_scope") or recorded_intent.get("interaction_scope"),
+        }
+        if change.get("entity") == "clip":
+            result["clip_native_id"] = change.get("native_id")
+        return result
+    return None
 
 
 def normalized_change(change: dict, ids: dict[tuple[str, str], str], assets: dict[str, str]) -> dict:
@@ -201,14 +204,19 @@ def build_sample(root: Path, metadata: dict) -> dict:
     operations = []
     for index, event in enumerate(normalized_events, 1):
         diff = event.get("diff", {})
-        operations.append({
+        operation = {
             "operation_id": f"op_{index:04d}",
             "operation": event_operation_name(event),
             "changes": [normalized_change(change, ids, asset_refs) for change in diff.get("changes", [])],
             "resulting_state_hash": event.get("after_hash"),
             "evidence": {"raw_event_id": event.get("event_id"), "raw_sequence": event.get("sequence")},
             "extensions": {"kdenlive": {"command_label": event.get("label"), "boundary": event.get("boundary")}},
-        })
+        }
+        intent = effect_intent(event)
+        if intent:
+            operation["intent"] = intent
+            operation["interaction_id"] = intent["interaction_id"]
+        operations.append(operation)
     edit_path = {"time_unit": "frame", "operations": operations}
     if first_checkpoint:
         initial_native = copy.deepcopy(first_checkpoint["snapshot"])

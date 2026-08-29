@@ -45,7 +45,8 @@ class MvpTests(unittest.TestCase):
             self.assertTrue((root / "provenance/editor-project.kdenlive").is_file())
             self.assertIn(b"../inputs/assets/a.mp4", (root / "verification/reconstructed.kdenlive").read_bytes())
             bindings = json.loads((root / "provenance/asset-bindings.json").read_text())
-            self.assertEqual(bindings["bindings"], [{"asset_id": "asset_001", "bin_references": ["4"]}])
+            self.assertEqual(bindings["bindings"], [{"asset_id": "asset_001", "file": "assets/a.mp4",
+                                                       "sha256": "x", "bytes": 5, "bin_references": ["4"]}])
 
     def test_recorder_binds_delayed_actions_before_buffering(self):
         source = (Path(__file__).parents[2] / "src/videopath/videopathrecorder.cpp").read_text(encoding="utf-8")
@@ -56,6 +57,81 @@ class MvpTests(unittest.TestCase):
             record_action.index("addTransactionFields(event, true)"),
             record_action.index("m_pendingActions.append(event)"),
         )
+
+    def test_recorder_effect_intent_uses_canonical_taxonomy(self):
+        source = (Path(__file__).parents[2] / "src/videopath/videopathrecorder.cpp").read_text(encoding="utf-8")
+        for label in (
+            "effect.add", "effect.remove", "effect.reorder", "effect.parameter.change",
+            "keyframe.add", "keyframe.remove", "keyframe.multi_edit", "keyframe.value.change",
+        ):
+            self.assertIn(f'QStringLiteral("{label}")', source)
+        for stale in ("effect.change", "keyframe.update"):
+            self.assertNotIn(f'QStringLiteral("{stale}")', source)
+
+    def test_recorder_effect_acceptance_has_stable_ids_and_property_scope(self):
+        source = (Path(__file__).parents[2] / "src/videopath/videopathrecorder.cpp").read_text(encoding="utf-8")
+        for marker in (
+            'QStringLiteral("effect_id")', 'QStringLiteral("parameter_id")',
+            'QStringLiteral("keyframe_id")', 'QStringLiteral("property_editor")',
+            'QStringLiteral("synthetic_state_correlation")',
+        ):
+            self.assertIn(marker, source)
+
+    def test_supervisor_reasoning_capture_has_mic_test_playback_and_python_bridge(self):
+        root = Path(__file__).parents[2]
+        source = (root / "video-path-pilot/gui/main.cpp").read_text(encoding="utf-8")
+        for marker in (
+            "Configure microphone",
+            "List available microphones",
+            "Test microphone and play it back",
+            "captureMicrophoneTest",
+            "QMediaDevices::audioInputs()",
+            "new QComboBox",
+            "device->currentText()",
+            "EditPathAudio.exe",
+            "native WASAPI",
+            "m_micPlayer->play()",
+            "m_audioCapture.write(\"q\\n\")",
+            "GenericDataLocation",
+            "whisperPythonExecutable",
+            "startWorker(whisperPythonExecutable()",
+            "showWorkProgress",
+            "Working: Whisper transcription is in progress",
+            "QProcess::errorOccurred",
+            "QApplication::processEvents(QEventLoop::ExcludeUserInputEvents)",
+        ):
+            self.assertIn(marker, source)
+        self.assertNotIn("QFileInfo::isFile(", source)
+        installer = (root / "packaging/windows/dependency-installer.ps1").read_text(encoding="utf-8")
+        self.assertIn("installed into EditPath venv", installer)
+        self.assertNotIn("pip install --disable-pip-version-check -U openai-whisper --user", installer)
+        launcher = (root / "packaging/windows/install-dependencies.bat").read_text(encoding="utf-8")
+        self.assertIn("dependency-installer.exe %*", launcher)
+        self.assertIn("ExecutionPolicy bypass", launcher)
+        build = (root / "packaging/windows/build-editpath.ps1").read_text(encoding="utf-8")
+        self.assertIn('install-dependencies.bat', build)
+        self.assertIn('does not contain this checkout\'s source revision', build)
+        self.assertIn('$kdenliveTextEven.Contains($sourceRevision)', build)
+        self.assertIn('$kdenliveTextAscii.Contains($sourceRevision)', build)
+        self.assertIn('$editPathTextEven.Contains($featureMarker)', build)
+        self.assertIn('$kdenliveTextEven.Contains($featureMarker)', build)
+        self.assertIn('"effect.parameter.change"', build)
+        self.assertIn('"keyframe.value.change"', build)
+        self.assertIn('"command_registered"', build)
+        self.assertIn('"generated."', build)
+        whisper = (root / "edit_path/whisper_provider.py").read_text(encoding="utf-8")
+        self.assertIn('sys.executable, "-m", "whisper"', whisper)
+
+    def test_native_audio_helper_is_built_and_packaged(self):
+        root = Path(__file__).parents[2]
+        helper = (root / "video-path-pilot/gui/audio-helper.cpp").read_text(encoding="utf-8")
+        cmake = (root / "video-path-pilot/gui/CMakeLists.txt").read_text(encoding="utf-8")
+        build = (root / "packaging/windows/build-editpath.ps1").read_text(encoding="utf-8")
+        for marker in ("QMediaDevices::audioInputs", "QAudioSource", "WavWriter", "recording_started", "recording_stopped"):
+            self.assertIn(marker, helper)
+        self.assertIn("OUTPUT_NAME EditPathAudio", cmake)
+        self.assertIn("EditPathAudio.exe is missing", build)
+        self.assertIn("@($editPath, $audioHelper, $kdenlive)", build)
 
     def test_supervisor_hardening_contract(self):
         root = Path(__file__).parents[2]
@@ -131,7 +207,10 @@ class MvpTests(unittest.TestCase):
         self.assertIn('-version "[17.0,18.0)"', source)
         self.assertIn('$env:CRAFT_PYTHON', source)
         self.assertIn('"bin\\craft.py"', source)
-        self.assertIn('& $craftPython $craftScript --ci-mode --options "kde/kdemultimedia/kdenlive.srcDir=$sourceRoot"', source)
+        self.assertIn(
+            '& $craftPython $craftScript --ci-mode --no-cache --ignoreInstalled --options "kde/kdemultimedia/kdenlive.srcDir=$sourceRoot"',
+            source,
+        )
         self.assertIn('@("sh.exe", "gcc.exe", "g++.exe", "cpp.exe")', source)
 
     def test_project_asset_binding_requires_path_or_content_identity(self):

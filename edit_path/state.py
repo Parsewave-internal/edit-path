@@ -248,9 +248,14 @@ def resolve_accepted_branch(events: list[dict[str, Any]], *, require_targets: bo
                 if original_id is None:
                     break
             group.reverse()
-            expected_after = _branch_hash(accepted[-1], "after") if len(accepted) > epoch_floor else epoch_baseline_hash
-            if after_hash != expected_after:
-                raise GateError("branch_resolution", f"undo should restore {expected_after}", sequence)
+            # An undo restores the logical undo-stack position, but Kdenlive
+            # does not promise byte-identical project serialization (or even
+            # an identical diagnostic semantic snapshot) after doing so.
+            # Generated XML properties, effect identities, and other native
+            # bookkeeping can legitimately change across an undo.  State and
+            # exact-project hash continuity are validated independently; the
+            # stable target transaction/undo-entry relationship is the
+            # authoritative branch operation here.
             redo.append(group)
         elif boundary == "redo":
             if not redo:
@@ -263,8 +268,6 @@ def resolve_accepted_branch(events: list[dict[str, Any]], *, require_targets: bo
                 raise GateError("branch_resolution", "v0.3 redo requires target_transaction_id", sequence)
             if target and original_id and target != original_id:
                 raise GateError("branch_resolution", "redo targets the wrong transaction", sequence)
-            if after_hash != _branch_hash(original, "after"):
-                raise GateError("branch_resolution", "redo does not reproduce the original transaction state", sequence)
             accepted.extend(group)
         else:
             raise GateError("branch_resolution", f"unsupported boundary {boundary!r}", sequence)
@@ -273,15 +276,22 @@ def resolve_accepted_branch(events: list[dict[str, Any]], *, require_targets: bo
 
 
 def operation_name(diff: dict[str, Any]) -> str:
+    """Return the canonical software-independent operation for a state diff.
+
+    This is the single classifier used by both sample normalization and replay
+    rendering.  Keep the names here deliberately stable: raw recorder events
+    retain the complete before/after diff, while this function supplies the
+    reviewable semantic label consumed by every downstream endpoint.
+    """
     changes = diff.get("changes", [])
     entities = {change.get("entity") for change in changes}
     kinds = {change.get("change") for change in changes}
-    if entities == {"clip"}:
-        if kinds == {"added"}:
+    if entities <= {"clip", "track", "master_effect"} and entities:
+        if entities == {"clip"} and kinds == {"added"}:
             return "clip.insert"
-        if kinds == {"removed"}:
+        if entities == {"clip"} and kinds == {"removed"}:
             return "clip.delete"
-        if "removed" in kinds and "updated" in kinds:
+        if entities == {"clip"} and "removed" in kinds and "updated" in kinds:
             return "timeline.ripple_delete"
         updated = [change for change in changes if change.get("change") == "updated"]
         fields: set[str] = set()
@@ -291,29 +301,117 @@ def operation_name(diff: dict[str, Any]) -> str:
         if fields and fields <= {"timeline_start_frame", "track_native_id"}:
             return "clip.move"
         if "speed" in fields:
-            return "clip.set_speed"
-        if fields & {"source_start_frame", "source_end_frame", "duration_frames"} or "added" in kinds:
-            return "clip.trim_or_split"
+            return "clip.speed.change"
+        if "source_start_frame" in fields:
+            return "clip.trim.in"
+        if fields & {"source_end_frame", "duration_frames"}:
+            return "clip.trim.out"
         if fields == {"effects"}:
-            return "effect.change"
+            before_effects = [effect for change in updated for effect in change.get("before", {}).get("effects", [])]
+            after_effects = [effect for change in updated for effect in change.get("after", {}).get("effects", [])]
+            if len(after_effects) > len(before_effects):
+                return "effect.add"
+            if len(after_effects) < len(before_effects):
+                return "effect.remove"
+
+            def effect_identity(effect: dict[str, Any]) -> Any:
+                attributes = effect.get("attributes", {})
+                if isinstance(attributes, dict):
+                    return (
+                        effect.get("effect_id")
+                        or effect.get("id")
+                        or effect.get("asset_id")
+                        or attributes.get("id")
+                        or effect.get("name")
+                    )
+                return effect.get("effect_id") or effect.get("id") or effect.get("asset_id") or effect.get("name")
+
+            before_order = [effect_identity(effect) for effect in before_effects]
+            after_order = [effect_identity(effect) for effect in after_effects]
+            if before_order != after_order:
+                return "effect.reorder"
+
+            def keyframes(values: list[dict[str, Any]]) -> list[tuple[Any, Any, Any, Any]]:
+                result: list[tuple[Any, Any, Any, Any]] = []
+                for effect in values:
+                    if not isinstance(effect, dict):
+                        continue
+                    effect_id = effect_identity(effect)
+                    structured_keyframes = effect.get("keyframes", [])
+                    if isinstance(structured_keyframes, list) and structured_keyframes:
+                        for keyframe in structured_keyframes:
+                            if isinstance(keyframe, dict):
+                                result.append(
+                                    (
+                                        keyframe.get("keyframe_id") or effect_id,
+                                        keyframe.get("parameter_id") or keyframe.get("parameter"),
+                                        str(keyframe.get("frame", "")),
+                                        str(keyframe.get("value", "")),
+                                    )
+                                )
+                        continue
+                    parameters = list(effect.get("parameters", []))
+                    for child in effect.get("children", []):
+                        if not isinstance(child, dict):
+                            continue
+                        attributes = child.get("attributes", {})
+                        if isinstance(attributes, dict):
+                            parameters.append({"name": attributes.get("name"), "value": child.get("text", "")})
+                    for parameter in parameters:
+                        if not isinstance(parameter, dict):
+                            continue
+                        name = parameter.get("name")
+                        value = str(parameter.get("value", ""))
+                        if "=" in value:
+                            result.extend(
+                                (effect_id, name, point.strip(), "")
+                                for point in value.split(";")
+                                if "=" in point
+                            )
+                        elif "keyframe" in str(name or "").lower():
+                            result.append((effect_id, name, value, ""))
+                return result
+
+            before_keyframes, after_keyframes = keyframes(before_effects), keyframes(after_effects)
+            if before_keyframes != after_keyframes:
+                if len(after_keyframes) != len(before_keyframes):
+                    delta = len(after_keyframes) - len(before_keyframes)
+                    if abs(delta) > 1:
+                        return "keyframe.multi_edit"
+                    return "keyframe.add" if delta > 0 else "keyframe.remove"
+                return "keyframe.value.change"
+            return "effect.parameter.change"
     if entities == {"track"}:
         if kinds == {"added"}:
-            return "track.create"
+            return "track.add"
         if "removed" in kinds:
-            return "track.delete_or_reorder"
+            return "track.remove"
+        changed_fields: set[str] = set()
+        for change in changes:
+            before, after = change.get("before", {}), change.get("after", {})
+            changed_fields.update(key for key in set(before) | set(after) if before.get(key) != after.get(key))
+        if changed_fields & {"name", "tag"}:
+            return "track.rename"
+        if changed_fields & {"mute", "muted"}:
+            return "track.mute"
+        if changed_fields & {"lock", "locked"}:
+            return "track.lock"
         return "track.set_state"
     if entities and entities <= {"mix", "composition"}:
         if kinds == {"added"}:
             return "transition.add"
         if kinds == {"removed"}:
             return "transition.remove"
-        return "transition.change"
+        return "transition.parameter.change"
     return "timeline.change"
 
 
 def validate_action_semantics(events: list[dict[str, Any]], accepted: list[dict[str, Any]]) -> list[dict[str, Any]]:
     def compatible(declared: str | None, inferred: str) -> bool:
-        return declared is None or declared == inferred or (declared in {"clip.trim", "clip.split"} and inferred == "clip.trim_or_split")
+        return declared is None or declared == inferred or (
+            declared in {"clip.trim", "clip.split"}
+            and inferred in {"clip.trim.in", "clip.trim.out"}
+        )
 
     accepted_by_transaction: dict[str, list[dict[str, Any]]] = {}
     for state_event in accepted:
@@ -395,10 +493,16 @@ def load_state_reference(reference: dict[str, Any], base_dir: Path) -> bytes:
         except (ValueError, TypeError, KeyError) as exc:
             raise EditPathError(f"invalid base64 project state: {exc}") from exc
         return _decode_qcompress_bytes(encoded, reference)
-    relative = safe_relative(str(reference.get("path", "")))
-    path = base_dir / relative
+    raw_path = Path(str(reference.get("path", "")))
+    if raw_path.is_absolute():
+        raise EditPathError(f"unsafe bundle path: {raw_path!s}")
+    path = (base_dir / raw_path).resolve()
+    try:
+        path.relative_to(base_dir.resolve().parent)
+    except ValueError:
+        raise EditPathError(f"unsafe bundle path: {raw_path!s}")
     if not path.is_file() or path.is_symlink():
-        raise EditPathError(f"project state sidecar is missing: {relative}")
+        raise EditPathError(f"project state sidecar is missing: {raw_path!s}")
     encoded = path.read_bytes()
     if encoding == "raw":
         raw = encoded

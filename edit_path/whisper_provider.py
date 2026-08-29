@@ -1,0 +1,72 @@
+"""Optional offline Whisper CLI provider.
+
+The provider returns Whisper's literal JSON result unchanged. It never turns
+spoken explanations into inferred editor intent.
+"""
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+from typing import Any
+from .diagnostics import log_event, log_exception
+
+
+def transcribe_with_whisper(audio_file: Path, *, model: str | None = None,
+                            whisper_binary: str | None = None,
+                            language: str | None = None) -> dict[str, Any]:
+    # Recorder audio lives under <session>/EDIT-PATH/reasoning.  Derive the
+    # session from that marker instead of a fixed parent depth so diagnostic
+    # events stay beside the captured evidence even when the workspace is
+    # nested differently (or a test uses a shorter temporary path).
+    session = next(
+        (parent.parent for parent in audio_file.parents if parent.name == "EDIT-PATH"),
+        audio_file.parent,
+    )
+    log_event(session, "transcription_start", audio_file=str(audio_file), model=model or os.environ.get("EDIT_PATH_WHISPER_MODEL", "turbo"))
+    if not audio_file.is_file():
+        log_event(session, "transcription_rejected", reason="audio_missing")
+        raise FileNotFoundError(audio_file)
+    binary = whisper_binary or os.environ.get("EDIT_PATH_WHISPER_BIN") or shutil.which("whisper")
+    if binary:
+        command_prefix = [binary]
+    else:
+        # The Windows portable dependency installer places Whisper in its
+        # dedicated Python environment.  Its `whisper.exe` Scripts shim is
+        # not necessarily on the supervisor's PATH, so invoke the module with
+        # the interpreter that launched reasoning_cli instead of rejecting an
+        # otherwise valid installation.
+        module_probe = subprocess.run(
+            [sys.executable, "-m", "whisper", "--help"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        if module_probe.returncode != 0:
+            log_event(session, "transcription_unavailable", reason="whisper_not_on_path_or_python")
+            raise RuntimeError("offline Whisper is not installed; run the Windows dependency installer before transcribing")
+        command_prefix = [sys.executable, "-m", "whisper"]
+    selected_model = model or os.environ.get("EDIT_PATH_WHISPER_MODEL", "turbo")
+    with tempfile.TemporaryDirectory(prefix="edit-path-whisper-") as directory:
+        command = [*command_prefix, str(audio_file), "--model", selected_model,
+                   "--output_format", "json", "--output_dir", directory,
+                   "--verbose", "False"]
+        if language:
+            command.extend(["--language", language])
+        completed = subprocess.run(command, text=True, capture_output=True)
+        if completed.returncode != 0:
+            detail = (completed.stderr or completed.stdout)[-4000:]
+            log_event(session, "transcription_failed", returncode=completed.returncode, detail=detail)
+            raise RuntimeError(f"Whisper failed ({completed.returncode}): {detail}")
+        result_path = Path(directory) / f"{audio_file.stem}.json"
+        if not result_path.is_file():
+            raise RuntimeError("Whisper completed without producing a JSON transcript")
+        result = json.loads(result_path.read_text(encoding="utf-8"))
+        if not isinstance(result, dict) or not isinstance(result.get("text"), str):
+            raise RuntimeError("Whisper JSON transcript has no literal text field")
+        log_event(session, "transcription_complete", text_length=len(result["text"]))
+        return result

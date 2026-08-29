@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import urllib.parse
@@ -21,7 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from edit_path.pipeline import process_session
+from edit_path.pipeline import preflight_session, process_session
 from edit_path.io import replace_with_retry, write_jsonl
 from edit_path.segments import assemble_segments, discover_segments
 from normalize_sample import accepted_commits, build_sample, read_jsonl
@@ -430,8 +431,13 @@ def organize_dataset_item(bundle: Path, output_suffix: str) -> None:
         manifest = json.loads(bindings_path.read_text(encoding="utf-8"))
         bindings = []
         for asset in manifest.get("assets", []):
+            # Keep the complete portable binding.  The native bin reference and
+            # asset ID are not sufficient to identify media outside the editor;
+            # consumers also need the shipped path, original name, and digest.
             binding = {"asset_id": asset.get("asset_id")}
-            for key in ("bin_reference", "bin_references", "license_status"):
+            for key in ("file", "original_filename", "original_path", "source",
+                        "sha256", "bytes", "bin_reference", "bin_references",
+                        "license_status"):
                 if key in asset:
                     binding[key] = asset[key]
             bindings.append(binding)
@@ -453,6 +459,28 @@ def organize_dataset_item(bundle: Path, output_suffix: str) -> None:
             if isinstance(proxy, dict) and isinstance(proxy.get("path"), str):
                 proxy["path"] = proxy["path"].replace("checkpoint_refs/", "verification/checkpoints/", 1)
         write_jsonl(events_path, events)
+
+
+def burn_reasoning_captions(bundle: Path) -> bool:
+    """Burn literal WebVTT reasoning captions into the visual replay."""
+    replay = bundle / "edit-path" / "replay.mp4"
+    captions = bundle / "reasoning" / "captions.vtt"
+    if not replay.is_file() or not captions.is_file() or not captions.read_text(encoding="utf-8").strip():
+        return False
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        candidate = Path(sys.executable).with_name("ffmpeg.exe")
+        ffmpeg = str(candidate) if candidate.is_file() else None
+    if not ffmpeg:
+        raise GateError("reasoning", "captions were requested but ffmpeg is unavailable")
+    temporary = replay.with_suffix(".captioned.mp4")
+    subtitle_path = str(captions).replace("\\", "/").replace(":", "\\:")
+    command = [ffmpeg, "-y", "-i", str(replay), "-vf", f"subtitles='{subtitle_path}'", "-c:a", "copy", str(temporary)]
+    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    if result.returncode != 0 or not temporary.is_file():
+        raise GateError("reasoning", f"caption rendering failed: {result.stderr[-1000:]}")
+    os.replace(temporary, replay)
+    return True
 
 
 def finalize_session(session: Path, project: Path, output: Path, job: dict, *, source_root: Path | None = None) -> Path:
@@ -504,10 +532,24 @@ def finalize_session(session: Path, project: Path, output: Path, job: dict, *, s
     if result["status"] != "accepted":
         raise ValueError(f"production reconstruction rejected at {result.get('gate')}: {result.get('message')}")
     source_bundle = Path(result["path"])
+    # Publish all recoverable evidence, but make an incomplete portable bundle
+    # explicit instead of aborting finalization and hiding the useful artifacts.
+    delivery_issues = []
+    if not (source_bundle / "states").is_dir() or not any((source_bundle / "states").glob("*.kdenlive.zst")):
+        delivery_issues.append("missing_state_sidecars")
+    if not (source_bundle / "asset-manifest.json").is_file():
+        delivery_issues.append("missing_asset_manifest")
     completed = session / "completed-sample"
     if completed.exists(): raise ValueError(f"completed sample already exists: {completed}")
     replace_with_retry(source_bundle, completed)
     organize_dataset_item(completed, output.suffix.lower())
+    if (completed / "reasoning" / "captions.vtt").is_file():
+        burn_reasoning_captions(completed)
+    dump(completed / "delivery-status.json", {
+        "schema": "video-path/delivery-status@1",
+        "complete": not delivery_issues,
+        "issues": delivery_issues,
+    })
 
     sample_path = completed / "sample.json"
     sample = json.loads(sample_path.read_text(encoding="utf-8"))
@@ -531,6 +573,8 @@ def finalize_session(session: Path, project: Path, output: Path, job: dict, *, s
     media_accepted = report.get("final", {}).get("accepted") and report.get("delivery", {}).get("accepted")
     sample["quality"]["media_reconstruction"] = "passed" if media_accepted else "degraded"
     sample["quality"]["media_reconstruction_warnings"] = report.get("quality_warnings", [])
+    sample["quality"]["delivery_complete"] = not delivery_issues
+    sample["quality"]["delivery_issues"] = delivery_issues
     sample["quality"]["edit_process_replay"] = (
         report.get("edit_process", {}).get("training_ui_quality", "degraded")
         if report.get("edit_process", {}).get("accepted")
@@ -540,6 +584,7 @@ def finalize_session(session: Path, project: Path, output: Path, job: dict, *, s
         sample["quality"]["canonical_reconstruction"] == "passed"
         and sample["quality"]["edit_process_replay"] in {"passed", "degraded"}
         and bool(sample["task"].get("prompt"))
+        and not delivery_issues
     )
     dump(sample_path, sample)
     errors = validate_sample(sample_path, check_files=True)
@@ -598,6 +643,22 @@ def attach_prompt(args: argparse.Namespace) -> int:
     return 0
 
 
+def coverage_command(args: argparse.Namespace) -> int:
+    """Emit the acceptance-phase mapped/ambiguous attribution report."""
+    preflight = preflight_session(
+        args.session_dir,
+        require_complete=not args.allow_incomplete,
+        require_stable_effect_ids=args.require_stable_effect_ids,
+    )
+    report = preflight["attribution_coverage"]
+    encoded = json.dumps(report, indent=2, ensure_ascii=False) + "\n"
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(encoded, encoding="utf-8")
+    print(encoded, end="")
+    return 0
+
+
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description=__doc__); sub = result.add_subparsers(dest="command", required=True)
     create = sub.add_parser("create-job"); create.add_argument("job_dir", type=Path); create.add_argument("--job-id", required=True)
@@ -611,6 +672,12 @@ def parser() -> argparse.ArgumentParser:
     freeform.add_argument("--project", type=Path); freeform.add_argument("--output", type=Path); freeform.set_defaults(function=finalize_freeform)
     prompt = sub.add_parser("attach-prompt"); prompt.add_argument("sample_dir", type=Path); prompt.add_argument("--prompt", required=True)
     prompt.set_defaults(function=attach_prompt)
+    coverage = sub.add_parser("coverage", help="report mapped versus ambiguous effect/keyframe attribution")
+    coverage.add_argument("session_dir", type=Path)
+    coverage.add_argument("--output", type=Path)
+    coverage.add_argument("--allow-incomplete", action="store_true")
+    coverage.add_argument("--require-stable-effect-ids", action="store_true")
+    coverage.set_defaults(function=coverage_command)
     return result
 
 

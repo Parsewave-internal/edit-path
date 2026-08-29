@@ -7,7 +7,8 @@ import unittest
 from pathlib import Path
 
 from edit_path.errors import GateError
-from edit_path.segments import assemble_segments
+from edit_path.io import find_trajectory
+from edit_path.segments import assemble_segments, discover_segments
 from edit_path.state import canonical_hash
 
 
@@ -49,6 +50,11 @@ def write_events(path: Path, events: list[dict]) -> None:
 
 
 class SegmentAssemblyTests(unittest.TestCase):
+    def test_discover_segments_accepts_recorder_edit_path_layout(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td); (root / "EDIT-PATH").mkdir()
+            (root / "EDIT-PATH/events-001.jsonl").write_text('{}\n', encoding='utf-8')
+            self.assertEqual([root / "EDIT-PATH/events-001.jsonl"], discover_segments(root))
     def make_segments(self, root: Path, *, break_continuity: bool = False) -> None:
         empty = {"timeline_id": "timeline", "duration_frames": 0, "tracks": [], "clips": [], "compositions": [], "mixes": [], "master_effects": []}
         inserted = {**empty, "duration_frames": 25, "clips": [{"native_id": 1, "entity_id": "clip", "asset_id": "asset", "track_native_id": 2}]}
@@ -99,6 +105,39 @@ class SegmentAssemblyTests(unittest.TestCase):
             self.assertEqual(sum(event["event_type"] == "project.context" for event in events), 1)
             self.assertEqual(sum(event["event_type"] == "session.recovered" for event in events), 1)
             self.assertTrue(all(event["session_id"] == "collection" for event in events))
+
+    def test_edit_path_relative_sidecars_are_rebased_in_canonical_trajectory(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.make_segments(root)
+            edit_path = root / "EDIT-PATH"
+            edit_path.mkdir()
+            events = [
+                json.loads(line)
+                for line in (root / "raw-events-001.jsonl").read_text(encoding="utf-8").splitlines()
+            ]
+            for value in events:
+                for field in ("project_state", "reference_proxy"):
+                    reference = value.get(field)
+                    if isinstance(reference, dict):
+                        reference.pop("base", None)
+                        reference["path"] = "../" + reference["path"]
+            events.append(envelope(len(events) + 1, "session.end", "segment-a", state_sidecars_complete=True))
+            write_events(edit_path / "events-001.jsonl", events)
+            write_events(root / "trajectory.jsonl", events)
+            (root / "raw-events-001.jsonl").unlink()
+            (root / "raw-events-002.jsonl").unlink()
+
+            trajectory = find_trajectory(root)
+            assembled_events = [
+                json.loads(line)
+                for line in trajectory.read_text(encoding="utf-8").splitlines()
+            ]
+            assembled = next(event for event in assembled_events if event["event_type"] == "state.checkpoint")
+            self.assertEqual(assembled["project_state"]["base"], "session")
+            self.assertEqual(assembled["project_state"]["path"], "states/a.zst")
+            self.assertEqual(assembled["reference_proxy"]["base"], "session")
+            self.assertEqual(assembled["reference_proxy"]["path"], "states/checkpoint_refs/a.mp4")
 
     def test_recovery_rejects_discontinuous_state(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

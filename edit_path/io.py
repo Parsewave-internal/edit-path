@@ -99,6 +99,17 @@ def event_sequence(event: dict[str, Any]) -> int | None:
     return value if isinstance(value, int) else None
 
 
+def _has_parent_file_reference(events: list[dict[str, Any]]) -> bool:
+    """Return whether a root-level trajectory still uses recorder paths."""
+    for event in events:
+        for field in ("project_state", "state_ref", "state", "reference_proxy"):
+            reference = event.get(field)
+            path = reference.get("path") if isinstance(reference, dict) else None
+            if isinstance(path, str) and ".." in Path(path).parts:
+                return True
+    return False
+
+
 def find_trajectory(session_dir: Path) -> Path:
     if session_dir.is_file() and session_dir.suffix == ".jsonl":
         return session_dir
@@ -110,6 +121,16 @@ def find_trajectory(session_dir: Path) -> Path:
     )
     for candidate in candidates:
         if candidate.is_file():
+            # A failed finalization can leave a root trajectory assembled by
+            # an older build while the durable EDIT-PATH segment remains the
+            # authoritative source. Refresh only when the canonical file
+            # visibly contains the recorder's parent-relative paths; this
+            # avoids reassembling an active, still-incomplete recording.
+            if candidate == session_dir / "trajectory.jsonl" and _has_parent_file_reference(read_jsonl(candidate)):
+                numbered = sorted((session_dir / "EDIT-PATH").glob("events-*.jsonl"))
+                if numbered:
+                    from .segments import assemble_segments
+                    assemble_segments(session_dir, candidate)
             return candidate
     # Crash-recovered sessions retain numbered JSONL segments.  Prefer the
     # canonical assembled trajectory when present, but make the multi-file
@@ -120,14 +141,10 @@ def find_trajectory(session_dir: Path) -> Path:
     if numbered:
         from .segments import assemble_segments
         assembled = session_dir / "trajectory.jsonl"
-        # The assembler accepts the session root convention; mirror the
-        # durable EDIT-PATH journal into its expected names when necessary.
-        if numbered[0].parent.name == "EDIT-PATH":
-            import shutil
-            for source in numbered:
-                target = session_dir / source.name.replace("events-", "raw-events-")
-                if not target.exists():
-                    shutil.copyfile(source, target)
+        # assemble_segments understands both the legacy root-level journals
+        # and the recorder's durable EDIT-PATH layout.  Do not mirror
+        # EDIT-PATH files into the root: doing so changes the reference base
+        # before assembly and turns valid ``../states`` paths into stale ones.
         assemble_segments(session_dir, assembled)
         return assembled
     raise EditPathError(f"no trajectory JSONL found under {session_dir}")

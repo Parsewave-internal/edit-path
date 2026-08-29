@@ -41,10 +41,11 @@ from edit_path.process_video import (
 )
 from edit_path.reconstruct import render_project, select_video_encoder
 from edit_path.runtime import runtime_fingerprint
-from edit_path.state import canonical_hash, load_state_reference, resolve_accepted_branch, validate_action_semantics
+from edit_path.state import canonical_hash, load_state_reference, operation_name, resolve_accepted_branch, validate_action_semantics
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "video-path-pilot"))
 from job_pipeline import finalize_session
+from normalize_sample import operation_name as normalized_operation_name
 
 
 def event(sequence: int, event_type: str, **values: object) -> dict:
@@ -105,6 +106,40 @@ class BranchResolutionTests(unittest.TestCase):
         self.assertEqual(resolve_accepted_branch([checkpoint, first, merged, undo], require_targets=True).accepted, [])
         self.assertEqual(resolve_accepted_branch([checkpoint, first, merged, undo, redo], require_targets=True).accepted, [first, merged])
 
+    def test_undo_allows_equivalent_state_to_be_reserialized(self) -> None:
+        p0, p1, p0_reserialized = ("a" * 64, "b" * 64, "c" * 64)
+        checkpoint = event(
+            1,
+            "state.checkpoint",
+            state_hash="d" * 64,
+            snapshot={},
+            project_state={"sha256": p0},
+        )
+        commit = event(
+            2,
+            "state.diff",
+            boundary="commit",
+            transaction_id="tx",
+            undo_entry_id="entry",
+            project_before_hash=p0,
+            project_after_hash=p1,
+        )
+        undo = event(
+            3,
+            "state.diff",
+            boundary="undo",
+            transaction_id="undo",
+            undo_entry_id="entry",
+            target_transaction_id="tx",
+            project_before_hash=p1,
+            project_after_hash=p0_reserialized,
+        )
+
+        branch = resolve_accepted_branch([checkpoint, commit, undo], require_targets=True)
+
+        self.assertEqual(branch.accepted, [])
+        self.assertEqual(branch.final_hash, p0_reserialized)
+
     def test_wrong_undo_target_is_rejected(self) -> None:
         p0, p1, p0_again = (character * 64 for character in "aba")
         checkpoint = event(1, "state.checkpoint", state_hash="d" * 64, snapshot={}, project_state={"sha256": p0})
@@ -128,6 +163,81 @@ class BranchResolutionTests(unittest.TestCase):
         self.assertEqual(reports[0]["declared"], "clip.insert")
         self.assertEqual(reports[0]["attribution"], "recovered_post_push")
         self.assertIsNone(reports[1]["declared"])
+
+
+class OperationTaxonomyTests(unittest.TestCase):
+    def test_all_consumers_use_the_new_canonical_taxonomy(self) -> None:
+        def diff(*changes: dict) -> dict:
+            return {"changes": list(changes)}
+
+        effect = {"id": "effect", "index": 0, "parameters": []}
+        keyframe_one = {"id": "effect", "index": 0, "parameters": [{"name": "level", "value": "0=0"}]}
+        keyframe = {"id": "effect", "index": 0, "parameters": [{"name": "level", "value": "0=0;10=1"}]}
+        cases = {
+            "clip.insert": {"entity": "clip", "change": "added", "native_id": 1, "after": {}},
+            "clip.delete": {"entity": "clip", "change": "removed", "native_id": 1, "before": {}},
+            "clip.move": {"entity": "clip", "change": "updated", "native_id": 1,
+                           "before": {"timeline_start_frame": 0}, "after": {"timeline_start_frame": 10}},
+            "clip.speed.change": {"entity": "clip", "change": "updated", "native_id": 1,
+                                   "before": {"speed": 1}, "after": {"speed": 2}},
+            "clip.trim.in": {"entity": "clip", "change": "updated", "native_id": 1,
+                              "before": {"source_start_frame": 0}, "after": {"source_start_frame": 10}},
+            "clip.trim.out": {"entity": "clip", "change": "updated", "native_id": 1,
+                               "before": {"source_end_frame": 20}, "after": {"source_end_frame": 10}},
+            "effect.add": {"entity": "clip", "change": "updated", "native_id": 1,
+                            "before": {"effects": []}, "after": {"effects": [effect]}},
+            "effect.remove": {"entity": "clip", "change": "updated", "native_id": 1,
+                               "before": {"effects": [effect]}, "after": {"effects": []}},
+            "effect.reorder": {"entity": "clip", "change": "updated", "native_id": 1,
+                                "before": {"effects": [{**effect, "index": 0}, {"id": "other", "index": 1, "parameters": []}]},
+                                "after": {"effects": [{"id": "other", "index": 0, "parameters": []}, {**effect, "index": 1}]}},
+            "effect.parameter.change": {"entity": "clip", "change": "updated", "native_id": 1,
+                                         "before": {"effects": [{**effect, "parameters": [{"name": "level", "value": "1"}]}]},
+                                         "after": {"effects": [{**effect, "parameters": [{"name": "level", "value": "2"}]}]}},
+            "keyframe.value.change": {"entity": "clip", "change": "updated", "native_id": 1,
+                                       "before": {"effects": [{**keyframe, "parameters": [{"name": "level", "value": "0=0;10=1"}]}]},
+                                       "after": {"effects": [{**keyframe, "parameters": [{"name": "level", "value": "0=0;10=2"}]}]}},
+            "keyframe.add": {"entity": "clip", "change": "updated", "native_id": 1,
+                              "before": {"effects": [{**effect, "parameters": []}]},
+                              "after": {"effects": [{**keyframe_one}]}},
+            "keyframe.remove": {"entity": "clip", "change": "updated", "native_id": 1,
+                                 "before": {"effects": [{**keyframe_one}]}, "after": {"effects": [{**effect, "parameters": []}]}},
+            "keyframe.multi_edit": {"entity": "clip", "change": "updated", "native_id": 1,
+                                    "before": {"effects": [{**effect, "parameters": []}]},
+                                    "after": {"effects": [{"id": "effect", "index": 0, "parameters": [
+                                        {"name": "a", "value": "0=0"}, {"name": "b", "value": "0=1"}]}]}},
+            "track.add": {"entity": "track", "change": "added", "native_id": 1, "after": {}},
+            "track.remove": {"entity": "track", "change": "removed", "native_id": 1, "before": {}},
+            "track.rename": {"entity": "track", "change": "updated", "native_id": 1,
+                              "before": {"name": "A"}, "after": {"name": "B"}},
+            "track.mute": {"entity": "track", "change": "updated", "native_id": 1,
+                            "before": {"muted": False}, "after": {"muted": True}},
+            "track.lock": {"entity": "track", "change": "updated", "native_id": 1,
+                            "before": {"locked": False}, "after": {"locked": True}},
+            "track.set_state": {"entity": "track", "change": "updated", "native_id": 1,
+                                 "before": {"hidden": False}, "after": {"hidden": True}},
+            "transition.add": {"entity": "composition", "change": "added", "native_id": 1, "after": {}},
+            "transition.remove": {"entity": "mix", "change": "removed", "native_id": 1, "before": {}},
+            "transition.parameter.change": {"entity": "composition", "change": "updated", "native_id": 1,
+                                              "before": {"x": 1}, "after": {"x": 2}},
+            "timeline.change": {"entity": "unknown", "change": "updated", "native_id": 1,
+                                 "before": {"x": 1}, "after": {"x": 2}},
+        }
+        for expected, change in cases.items():
+            with self.subTest(expected=expected):
+                value = diff(change)
+                self.assertEqual(operation_name(value), expected)
+                self.assertEqual(normalized_operation_name(value), expected)
+
+    def test_replay_event_endpoint_uses_the_same_classifier(self) -> None:
+        from edit_path.process_video import _event_operation
+
+        event = {
+            "event_type": "state.diff",
+            "diff": {"changes": [{"entity": "clip", "change": "updated", "native_id": 1,
+                                   "before": {"speed": 1}, "after": {"speed": 2}}]},
+        }
+        self.assertEqual(_event_operation(event, None), "clip.speed.change")
 
 
 class StateTests(unittest.TestCase):
@@ -184,6 +294,65 @@ class StateTests(unittest.TestCase):
         self.assertEqual(report["state_preview_quality"], "degraded")
         self.assertEqual(report["events"][0]["monitor"], "semantic_ui_only")
         self.assertIn("semantic editor state used instead", report["state_preview_warnings"][0])
+
+    def test_large_replay_uses_bounded_compact_mode_without_exact_renders(self) -> None:
+        moments = [
+            {
+                "index": index,
+                "sequence": index + 1,
+                "event": {"event_id": f"event-{index}", "event_type": "ui.command"},
+                "event_type": "ui.command",
+                "operation": "command.play",
+                "snapshot": {"duration_frames": 0, "clips": [], "compositions": []},
+                "state_event": None,
+            }
+            for index in range(501)
+        ]
+        rendered: list[dict[str, object]] = []
+
+        def fake_scene(*args: object, **kwargs: object) -> int:
+            Path(args[3]).write_bytes(b"scene")
+            rendered.append(dict(kwargs))
+            return 1
+
+        def fake_run(command: list[str], _label: str, **_kwargs: object) -> None:
+            Path(command[-1]).write_bytes(b"replay")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with (
+                mock.patch("edit_path.process_video.shutil.which", return_value="ffmpeg"),
+                mock.patch("edit_path.process_video.select_video_encoder", return_value="libx264"),
+                mock.patch("edit_path.process_video._supports_filter", return_value=True),
+                mock.patch("edit_path.process_video.build_replay_steps", return_value=[]),
+                mock.patch("edit_path.process_video.build_replay_moments", return_value=moments),
+                mock.patch("edit_path.process_video._asset_lookup", return_value=({}, [])),
+                mock.patch("edit_path.process_video.render_event") as exact_render,
+                mock.patch("edit_path.process_video._render_scene", side_effect=fake_scene),
+                mock.patch("edit_path.process_video._run", side_effect=fake_run),
+                mock.patch(
+                    "edit_path.process_video.probe",
+                    return_value={"format": {"duration": "200.4"}, "streams": [{"codec_type": "video"}]},
+                ),
+            ):
+                output, report = render_edit_process(
+                    root,
+                    [],
+                    [],
+                    "a" * 64,
+                    root / "replay.mp4",
+                    root / "work",
+                )
+                output_exists = output.is_file()
+
+        self.assertTrue(output_exists)
+        exact_render.assert_not_called()
+        self.assertEqual(len(rendered), len(moments))
+        self.assertTrue(all(value["output_fps"] == 10 and value["fast"] is True for value in rendered))
+        self.assertEqual(report["render_mode"], "compact_semantic")
+        self.assertEqual(report["render_fps"], 10)
+        self.assertEqual(report["state_preview_quality"], "degraded")
+        self.assertIn("exact monitor previews were skipped", report["state_preview_warnings"][0])
 
     def test_replay_label_failure_falls_back_to_degraded_unlabeled_video(self) -> None:
         moment = {
@@ -448,6 +617,45 @@ class AtomicReplaceTests(unittest.TestCase):
 
 
 class PublicationTests(unittest.TestCase):
+    def test_reasoning_evidence_is_published_with_the_sample(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "session"
+            work = Path(temporary) / "work"
+            output = Path(temporary) / "dataset" / "accepted"
+            reasoning = root / "EDIT-PATH" / "reasoning"
+            reasoning.mkdir(parents=True)
+            work.mkdir(parents=True)
+            (reasoning / "audio-001.flac").write_bytes(b"flac")
+            (reasoning / "transcript-audio-001.json").write_text('{"text":"spoken"}\n', encoding="utf-8")
+            (reasoning / "captions.vtt").write_text("WEBVTT\n", encoding="utf-8")
+            (reasoning / "reasoning.json").write_text('{"segments":[]}\n', encoding="utf-8")
+            manifest = {"schema": "video-path/assets@2", "assets": []}
+            write_json(root / "asset-manifest.json", manifest)
+            project = work / "reconstructed.kdenlive"
+            project.write_text("<mlt/>", encoding="utf-8")
+            final = work / "final.mp4"
+            final.write_bytes(b"video")
+            report = work / "report.json"
+            write_json(report, {"quality_status": "passed", "quality_warnings": []})
+            raw = root / "trajectory.jsonl"
+            events = [event(1, "session.start"), event(2, "session.end", state_sidecars_complete=True)]
+            write_jsonl(raw, events)
+
+            bundle = publish_bundle(
+                root,
+                output,
+                "session-test",
+                {"final_video": final, "project": project, "report": report, "raw_trajectory": raw, "manifest_path": root / "asset-manifest.json"},
+                events,
+                [],
+                manifest,
+            )
+
+            self.assertEqual((bundle / "reasoning/audio-001.flac").read_bytes(), b"flac")
+            self.assertIn("spoken", (bundle / "reasoning/transcript-audio-001.json").read_text(encoding="utf-8"))
+            self.assertTrue((bundle / "reasoning/captions.vtt").is_file())
+            self.assertTrue((bundle / "reasoning/reasoning.json").is_file())
+
     def test_unmanifested_reconstruction_asset_falls_back_to_editor_project(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / "session"

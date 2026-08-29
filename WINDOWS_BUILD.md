@@ -66,9 +66,10 @@ run the strict signing build with its thumbprint:
 The thumbprint can instead be supplied through
 `EDIT_PATH_SIGNING_CERT_THUMBPRINT`. The strict build stops during preflight if
 the certificate, private key, Windows SDK signing tool, or trust chain is not
-usable. It SHA-256 signs and RFC 3161 timestamps both `EditPath.exe` and the
-packaged editor executable, then verifies both with the Windows Authenticode
-policy before creating the archive. A self-signed certificate is suitable only
+usable. It SHA-256 signs and RFC 3161 timestamps `EditPath.exe`,
+`EditPathAudio.exe`, and the packaged editor executable, then verifies all
+three with the Windows Authenticode policy before creating the archive. A
+self-signed certificate is suitable only
 for internal testing and must not be presented as a trusted client release.
 
 Prefer a short checkout path such as `C:\src\edit-path`; long or space-heavy

@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from edit_path.audio_capture import AudioCapture
@@ -21,3 +22,32 @@ class AudioCaptureTests(unittest.TestCase):
             self.assertIsNone(capture.start_segment())
             self.assertTrue((Path(td) / "EDIT-PATH/reasoning/capture-error.json").is_file())
 
+    def test_resumed_session_uses_next_reasoning_filename(self):
+        with tempfile.TemporaryDirectory() as td:
+            reasoning = Path(td) / "EDIT-PATH" / "reasoning"
+            reasoning.mkdir(parents=True)
+            (reasoning / "audio-001.flac").write_bytes(b"old")
+            (reasoning / "audio-004.flac").write_bytes(b"old")
+            process = mock.Mock()
+            process.poll.return_value = 0
+            popen = mock.Mock(return_value=process)
+            capture = AudioCapture(Path(td), popen=popen)
+            output = capture.start_segment()
+            self.assertEqual(output, reasoning / "audio-005.flac")
+            self.assertEqual(Path(popen.call_args.args[0][-1]), output)
+
+    def test_native_helper_writes_wav_and_receives_stop_command(self):
+        with tempfile.TemporaryDirectory() as td, mock.patch.dict("os.environ", {"EDIT_PATH_AUDIO_HELPER": str(Path(td) / "EditPathAudio.exe")}):
+            helper = Path(td) / "EditPathAudio.exe"
+            helper.write_bytes(b"helper")
+            process = mock.Mock()
+            process.poll.return_value = None
+            process.stdin = mock.Mock()
+            popen = mock.Mock(return_value=process)
+            capture = AudioCapture(Path(td), popen=popen)
+            output = capture.start_segment()
+            assert output is not None
+            self.assertEqual(output.suffix, ".wav")
+            self.assertEqual(Path(popen.call_args.args[0][0]), helper)
+            capture.stop()
+            process.stdin.write.assert_called_once_with(b"q\n")

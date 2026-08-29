@@ -61,27 +61,35 @@ def operation_name(diff: dict) -> str:
             before, after = change.get("before", {}), change.get("after", {})
             fields.update(key for key in set(before) | set(after) if before.get(key) != after.get(key))
         if fields <= {"timeline_start_frame", "track_native_id"}: return "clip.move"
-        if "speed" in fields: return "clip.set_speed"
-        if fields & {"source_start_frame", "source_end_frame", "duration_frames"}: return "clip.trim_or_split"
+        if "speed" in fields: return "clip.speed.change"
+        if fields & {"source_start_frame"}: return "clip.trim.in"
+        if fields & {"source_end_frame", "duration_frames"}: return "clip.trim.out"
         if fields == {"effects"}:
             before = [e for c in updated for e in c.get("before", {}).get("effects", [])]
             after = [e for c in updated for e in c.get("after", {}).get("effects", [])]
             if len(after) > len(before): return "effect.add"
             if len(after) < len(before): return "effect.remove"
+            if {e.get("index") for e in before} != {e.get("index") for e in after}: return "effect.reorder"
             def keyframes(values):
                 return [(e.get("id") or e.get("asset_id"), p.get("name"), p.get("value"))
                         for e in values if isinstance(e, dict) for p in e.get("parameters", []) if isinstance(p, dict) and ("=" in str(p.get("value", "")) or "keyframe" in str(p.get("name", "")).lower())]
             bk, ak = keyframes(before), keyframes(after)
-            if bk != ak: return "keyframe.value.change"
+            if bk != ak:
+                if len(ak) != len(bk): return "keyframe.multi_edit" if abs(len(ak)-len(bk)) > 1 else ("keyframe.add" if len(ak) > len(bk) else "keyframe.remove")
+                return "keyframe.value.change"
             return "effect.parameter.change"
     if entities == {"track"}:
-        if kinds == {"added"}: return "track.create"
-        if "removed" in kinds: return "track.delete_or_reorder"
+        if kinds == {"added"}: return "track.add"
+        if "removed" in kinds: return "track.remove"
+        fields = {k for c in changes for side in ("before", "after") for k in c.get(side, {})}
+        if "name" in fields: return "track.rename"
+        if "mute" in fields: return "track.mute"
+        if "lock" in fields: return "track.lock"
         return "track.set_state"
     if entities <= {"mix", "composition"}:
         if kinds == {"added"}: return "transition.add"
         if kinds == {"removed"}: return "transition.remove"
-        return "transition.change"
+        return "transition.parameter.change"
     return "timeline.change"
 
 

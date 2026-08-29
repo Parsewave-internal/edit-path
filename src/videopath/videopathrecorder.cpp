@@ -1117,6 +1117,12 @@ void VideoPathRecorder::writeSessionEnd()
     }
     m_sessionEnded = true;
     flushPendingActions(false);
+    for (QJsonObject &command : m_pendingCommands) {
+        command.insert(QStringLiteral("mapping_status"), QStringLiteral("unmapped_no_transaction"));
+        command.insert(QStringLiteral("ambiguous"), true);
+        writeEvent(command);
+    }
+    m_pendingCommands.clear();
     captureTimelineCheckpoint(QStringLiteral("session.final"));
     QJsonObject event;
     event.insert(QStringLiteral("event_type"), QStringLiteral("session.end"));

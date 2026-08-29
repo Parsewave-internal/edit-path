@@ -90,6 +90,11 @@ class MvpTests(unittest.TestCase):
         installer = (root / "packaging/windows/dependency-installer.ps1").read_text(encoding="utf-8")
         self.assertIn("installed into EditPath venv", installer)
         self.assertNotIn("pip install --disable-pip-version-check -U openai-whisper --user", installer)
+        launcher = (root / "packaging/windows/install-dependencies.bat").read_text(encoding="utf-8")
+        self.assertIn("dependency-installer.exe %*", launcher)
+        self.assertIn("ExecutionPolicy bypass", launcher)
+        build = (root / "packaging/windows/build-editpath.ps1").read_text(encoding="utf-8")
+        self.assertIn('install-dependencies.bat', build)
         whisper = (root / "edit_path/whisper_provider.py").read_text(encoding="utf-8")
         self.assertIn('sys.executable, "-m", "whisper"', whisper)
 

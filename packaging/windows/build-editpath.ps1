@@ -427,6 +427,7 @@ Test instructions: WINDOWS_TEST_PLAN.md in the source repository.
 Copy-Item (Join-Path $sourceRoot "WINDOWS_TEST_PLAN.md") (Join-Path $portable "WINDOWS_TEST_PLAN.md")
 Copy-Item (Join-Path $sourceRoot "packaging\windows\dependency-installer.ps1") (Join-Path $portable "dependency-installer.ps1")
 Copy-Item (Join-Path $sourceRoot "packaging\windows\DependencyInstaller.cs") (Join-Path $portable "DependencyInstaller.cs")
+Copy-Item (Join-Path $sourceRoot "packaging\windows\install-dependencies.bat") (Join-Path $portable "install-dependencies.bat")
 $csc = Get-ChildItem "${env:ProgramFiles}\Microsoft Visual Studio", "${env:ProgramFiles(x86)}\Microsoft Visual Studio" -Recurse -Filter csc.exe -ErrorAction SilentlyContinue | Select-Object -First 1
 if (-not $csc) { Stop-Build "C# compiler csc.exe is required to build dependency-installer.exe." }
 $dependencyInstaller = Join-Path $portable "dependency-installer.exe"
@@ -437,9 +438,13 @@ if (-not (Test-Path $dependencyInstaller)) { Stop-Build "dependency-installer.ex
 @"
 EditPath first-run dependency setup
 
-Run this once from PowerShell (internet required for Whisper/model download):
-Set-ExecutionPolicy -Scope Process Bypass -Force
-.\dependency-installer.ps1 -InstallRoot `"$env:LOCALAPPDATA\EditPath`"
+Double-click install-dependencies.bat (internet required for Whisper/model download).
+It launches the bundled dependency-installer.exe and does not change the
+machine or user PowerShell execution policy.
+
+Command-line alternative:
+.\dependency-installer.exe -Model turbo -InstallRoot `"$env:LOCALAPPDATA\EditPath`"
+
 Then start .\bin\EditPath.exe
 "@ | Set-Content (Join-Path $portable "INSTALL-DEPENDENCIES.txt") -Encoding UTF8
 

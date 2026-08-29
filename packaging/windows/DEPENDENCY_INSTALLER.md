@@ -14,6 +14,11 @@ Set-ExecutionPolicy -Scope Process Bypass -Force
 .\dependency-installer.ps1 -Model turbo -InstallRoot "$env:LOCALAPPDATA\EditPath"
 ```
 
+For a one-click setup, double-click `install-dependencies.bat` in the portable
+folder. It invokes the bundled `dependency-installer.exe`, which applies the
+same process-scoped bypass without changing the machine or user policy. The
+executable and batch launcher are included in every Windows ZIP.
+
 The final portable Windows build should package this script or wrap it with a
 small signed launcher. Whisper model files are downloaded and verified during
 installation instead of bloating every EditPath ZIP.

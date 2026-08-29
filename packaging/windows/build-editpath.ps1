@@ -342,25 +342,38 @@ $editPathTextOdd = if ($editPathBytes.Length -gt 1) {
 } else {
     ""
 }
+$kdenliveBytes = [IO.File]::ReadAllBytes($kdenlive.FullName)
+$kdenliveTextEven = [Text.Encoding]::Unicode.GetString($kdenliveBytes)
+$kdenliveTextOdd = if ($kdenliveBytes.Length -gt 1) {
+    [Text.Encoding]::Unicode.GetString($kdenliveBytes, 1, $kdenliveBytes.Length - 1)
+} else {
+    ""
+}
 $sourceRevision = (& git -C $sourceRoot rev-parse --short HEAD).Trim()
 if (-not $sourceRevision -or
-    (-not $editPathTextEven.Contains($sourceRevision) -and -not $editPathTextOdd.Contains($sourceRevision))) {
-    Stop-Build "the packaged EditPath.exe does not contain this checkout's source revision ($sourceRevision); refusing a stale binary."
+    (-not $kdenliveTextEven.Contains($sourceRevision) -and -not $kdenliveTextOdd.Contains($sourceRevision))) {
+    Stop-Build "the packaged kdenlive.exe does not contain this checkout's source revision ($sourceRevision); refusing a stale recorder binary."
 }
 foreach ($featureMarker in @(
     "Configure microphone",
     "Test microphone and play it back",
-    "Stop Reasoning (recording",
-    # These strings are emitted only by the post-taxonomy recorder. Checking
-    # them in the PE prevents a cached pre-PR8 Kdenlive binary from looking
-    # current merely because it has the same recorder button labels.
+    "Stop Reasoning (recording"
+)) {
+    if (-not $editPathTextEven.Contains($featureMarker) -and -not $editPathTextOdd.Contains($featureMarker)) {
+        Stop-Build "the packaged EditPath.exe is stale; required recorder UI marker is missing: $featureMarker"
+    }
+}
+# These strings live in the instrumented editor, not the supervisor. Checking
+# kdenlive.exe prevents a cached pre-PR8 recorder from passing merely because
+# an independently fresh supervisor has the current button labels.
+foreach ($featureMarker in @(
     "effect.parameter.change",
     "keyframe.value.change",
     "command_registered",
     "generated."
 )) {
-    if (-not $editPathTextEven.Contains($featureMarker) -and -not $editPathTextOdd.Contains($featureMarker)) {
-        Stop-Build "the packaged EditPath.exe is stale; required recorder UI marker is missing: $featureMarker"
+    if (-not $kdenliveTextEven.Contains($featureMarker) -and -not $kdenliveTextOdd.Contains($featureMarker)) {
+        Stop-Build "the packaged kdenlive.exe is stale; required recorder taxonomy marker is missing: $featureMarker"
     }
 }
 

@@ -81,6 +81,10 @@ class MvpTests(unittest.TestCase):
             "GenericDataLocation",
             "whisperPythonExecutable",
             "startWorker(whisperPythonExecutable()",
+            "showWorkProgress",
+            "Working: Whisper transcription is in progress",
+            "QProcess::errorOccurred",
+            "QApplication::processEvents(QEventLoop::ExcludeUserInputEvents)",
         ):
             self.assertIn(marker, source)
         installer = (root / "packaging/windows/dependency-installer.ps1").read_text(encoding="utf-8")

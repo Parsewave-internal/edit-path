@@ -85,6 +85,13 @@ and the transcription bridge uses the reusable `%LOCALAPPDATA%\\EditPath\\python
 venv where Whisper is installed. `WINDOWS_TEST_PLAN.md` contains the manual
 acceptance steps and expected reasoning artifacts.
 
+The post-prompt UX is also explicit: choosing **Yes** shows an indeterminate
+progress bar and a “Whisper transcription is in progress” phase before the
+packaging phase; choosing **No** immediately shows the packaging phase. The
+worker-start failure path advances from unavailable transcription to packaging
+when safe, and finalization failures stop the spinner and expose a retryable
+technical error rather than leaving the window apparently hung.
+
 Recovery remains session-owned: the supervisor writes `recovery_available`
 when Kdenlive exits abnormally, keeps the saved `edit.kdenlive`, and offers
 **Resume Editing**. Resuming increments the journal segment and relaunches

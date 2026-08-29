@@ -449,6 +449,25 @@ private:
         connect(&m_worker, &QProcess::readyReadStandardOutput, this, &RecorderWindow::readWorker);
         connect(&m_worker, &QProcess::readyReadStandardError, this, &RecorderWindow::readWorker);
         connect(&m_worker, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this, &RecorderWindow::workerFinished);
+        connect(&m_worker, &QProcess::errorOccurred, this, [this](QProcess::ProcessError error) {
+            if (error != QProcess::FailedToStart || m_workerPurpose.isEmpty()) return;
+            const QString detail = m_worker.errorString().isEmpty() ? QStringLiteral("worker_failed_to_start") : m_worker.errorString();
+            m_activity->appendPlainText(QStringLiteral("Background worker could not start: %1").arg(detail));
+            if (m_workerPurpose == QStringLiteral("transcribe")) {
+                m_transcriptionFailed = true;
+                m_workerPurpose = QStringLiteral("finalize");
+                m_title->setText(QStringLiteral("<h1>Creating your dataset sample…</h1><p>Transcription could not start, so EditPath is continuing without captions.</p>"));
+                setStatus(QStringLiteral("Working: packaging continues without captions. Keep EditPath open until completion."));
+                startWorker(pythonExecutable(), {m_repoRoot + QStringLiteral("/video-path-pilot/job_pipeline.py"), QStringLiteral("finalize-freeform"), m_session});
+            } else {
+                m_launchProgress->setVisible(false);
+                m_finish->setEnabled(true);
+                m_instructions->setVisible(true);
+                m_workerPurpose.clear();
+                m_title->setText(QStringLiteral("<h1>We couldn't start the dataset worker</h1><p>Your project and rendered video were not changed.</p>"));
+                setStatus(QStringLiteral("EditPath could not start its background worker. Open technical details and try again."), true);
+            }
+        });
         connect(&m_reasoningWorker, &QProcess::readyReadStandardOutput, this, [this] { m_activity->appendPlainText(QString::fromUtf8(m_reasoningWorker.readAllStandardOutput()).trimmed()); });
         connect(&m_reasoningWorker, &QProcess::readyReadStandardError, this, [this] { m_activity->appendPlainText(QString::fromUtf8(m_reasoningWorker.readAllStandardError()).trimmed()); });
         connect(&m_audioCapture, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this, [this] {
@@ -512,6 +531,20 @@ private:
                                   {QStringLiteral("timestamp_utc"), QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)}};
         const QByteArray encoded = QJsonDocument(payload).toJson(QJsonDocument::Indented);
         if (file.open(QIODevice::WriteOnly | QIODevice::Text) && file.write(encoded) == encoded.size()) file.commit();
+    }
+
+    void showWorkProgress(const QString &title, const QString &status, const QString &activity)
+    {
+        m_launchProgress->setRange(0, 0);
+        m_launchProgress->setVisible(true);
+        m_title->setText(title);
+        setStatus(status);
+        if (!activity.isEmpty()) m_activity->appendPlainText(activity);
+        showCompletionWindow();
+        // Give Qt one turn to paint the indeterminate bar before a worker is
+        // started. Without this, Windows can display the old completion view
+        // until the first subprocess output arrives, which looks hung.
+        QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
     }
 
     void startWorker(const QString &program, const QStringList &arguments)
@@ -904,22 +937,36 @@ private:
         m_workerPurpose = QStringLiteral("finalize");
         m_workerTranscript.clear();
         m_instructions->setVisible(false);
-        m_title->setText(
-            QStringLiteral("<h1>Creating your dataset sample…</h1><p>You can leave the files where they are. EditPath is doing the packaging and checks.</p>"));
-        setStatus(QStringLiteral("This can take several minutes for a long edit. Keep EditPath open until it finishes."));
+        m_transcriptionFailed = false;
+        showWorkProgress(
+            m_reasoningRequested ? QStringLiteral("<h1>Preparing transcription…</h1><p>EditPath is checking your recorded audio before packaging.</p>")
+                                 : QStringLiteral("<h1>Creating your dataset sample…</h1><p>EditPath is packaging your edit and running validation.</p>"),
+            m_reasoningRequested ? QStringLiteral("Working: Whisper transcription will run before dataset packaging. Keep EditPath open.")
+                                 : QStringLiteral("Working: creating the dataset sample and running validation. Keep EditPath open."),
+            m_reasoningRequested ? QStringLiteral("Audio transcription requested. Looking for a recorded reasoning segment…")
+                                 : QStringLiteral("Audio transcription skipped. Starting dataset packaging…"));
         if (m_reasoningRequested) {
             const QDir reasoningDir(QDir(m_session).filePath(QStringLiteral("EDIT-PATH/reasoning")));
             const QStringList recordings = reasoningDir.entryList({QStringLiteral("audio-*.flac")}, QDir::Files, QDir::Name);
             if (recordings.isEmpty()) {
-                setStatus(QStringLiteral("No reasoning audio was recorded; continuing without transcription."), true);
+                setStatus(QStringLiteral("No reasoning audio was recorded. Continuing with dataset creation without transcription."));
+                m_activity->appendPlainText(QStringLiteral("No audio segment found; transcription skipped and packaging continues."));
                 m_reasoningRequested = false;
             } else {
                 m_workerPurpose = QStringLiteral("transcribe");
+                m_title->setText(QStringLiteral("<h1>Transcribing reasoning…</h1><p>Whisper is processing your recorded audio. This may take a few minutes.</p>"));
+                setStatus(QStringLiteral("Working: Whisper transcription is in progress. The window is active; do not start another sample."));
+                m_activity->appendPlainText(QStringLiteral("Whisper started for %1. The transcript and captions will be written into the reasoning folder.").arg(recordings.constLast()));
+                QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
                 startWorker(whisperPythonExecutable(), {QStringLiteral("-m"), QStringLiteral("edit_path.reasoning_cli"), m_session,
                                                         reasoningDir.filePath(recordings.constLast()), QStringLiteral("--install")});
                 return;
             }
         }
+        m_title->setText(QStringLiteral("<h1>Creating your dataset sample…</h1><p>EditPath is rendering the replay and running final checks.</p>"));
+        setStatus(QStringLiteral("Working: packaging and validation are in progress. Keep EditPath open until it says the sample is ready."));
+        m_activity->appendPlainText(QStringLiteral("Dataset packaging worker started."));
+        QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
         startWorker(pythonExecutable(), {m_repoRoot + QStringLiteral("/video-path-pilot/job_pipeline.py"), QStringLiteral("finalize-freeform"), m_session});
     }
 
@@ -943,10 +990,20 @@ private:
     {
         readWorker();
         if (m_workerPurpose == QLatin1String("transcribe")) {
-            if (status != QProcess::NormalExit || exitCode != 0) {
-                setStatus(QStringLiteral("Reasoning transcription failed; continuing without audio reasoning."), true);
+            const bool transcribed = m_workerTranscript.contains(QStringLiteral("\"transcribed\": 1"));
+            if (status != QProcess::NormalExit || exitCode != 0 || !transcribed) {
+                m_transcriptionFailed = true;
+                setStatus(QStringLiteral("Whisper did not produce a transcript. Continuing to create the dataset sample without captions."));
+                m_activity->appendPlainText(QStringLiteral("Transcription was unavailable or returned no transcript; the original audio remains safe."));
+            } else {
+                setStatus(QStringLiteral("Whisper transcription finished. Continuing with dataset packaging…"));
+                m_activity->appendPlainText(QStringLiteral("Transcript JSON and captions were written; starting dataset packaging."));
             }
             m_workerPurpose = QStringLiteral("finalize");
+            m_title->setText(QStringLiteral("<h1>Creating your dataset sample…</h1><p>EditPath is rendering the replay and running final checks.</p>"));
+            setStatus(m_transcriptionFailed ? QStringLiteral("Working: packaging continues without captions. Keep EditPath open until completion.")
+                                             : QStringLiteral("Working: packaging and validation are in progress. Keep EditPath open until completion."));
+            QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
             startWorker(pythonExecutable(), {m_repoRoot + QStringLiteral("/video-path-pilot/job_pipeline.py"), QStringLiteral("finalize-freeform"), m_session});
             return;
         }
@@ -974,6 +1031,7 @@ private:
                     true);
             }
         } else if (m_workerPurpose == QStringLiteral("finalize")) {
+            m_launchProgress->setVisible(false);
             if (success) {
                 writeManifest(QStringLiteral("packaged"));
                 m_openCompleted->setEnabled(true);
@@ -991,7 +1049,9 @@ private:
                                       .toBool();
                 m_title->setText(
                     QStringLiteral("<h1>Your dataset sample is ready</h1><p>EditPath saved the complete item and verified the recreated video.</p>"));
-                setStatus(mediaPassed ? QStringLiteral("Done. You can open the dataset sample below or start a new edit.")
+                setStatus(mediaPassed ? (m_transcriptionFailed
+                                             ? QStringLiteral("Done. The dataset sample is ready; audio was saved, but Whisper produced no captions.")
+                                             : QStringLiteral("Done. You can open the dataset sample below or start a new edit."))
                                       : QStringLiteral("The sample was created, but the recreated video needs technical review. Your original edit is safe."),
                           !mediaPassed);
             } else {
@@ -1054,7 +1114,7 @@ private:
     QMediaPlayer *m_micPlayer{};
     QAudioOutput *m_micAudioOutput{};
     QTimer m_heartbeat, m_readyPoll;
-    bool m_showExistingCompletion{false}, m_lastEditorExitCrashed{false}, m_confirmNewSession{false};
+    bool m_showExistingCompletion{false}, m_lastEditorExitCrashed{false}, m_confirmNewSession{false}, m_transcriptionFailed{false};
     QLabel *m_title{}, *m_instructions{}, *m_status{}, *m_sessionLabel{};
     QPushButton *m_start{}, *m_recover{}, *m_finish{}, *m_recordReasoning{}, *m_stopReasoning{}, *m_openSession{}, *m_openCompleted{}, *m_toggleDetails{};
     QPlainTextEdit *m_activity{};

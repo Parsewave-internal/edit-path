@@ -219,6 +219,65 @@ class StateTests(unittest.TestCase):
         self.assertEqual(report["events"][0]["monitor"], "semantic_ui_only")
         self.assertIn("semantic editor state used instead", report["state_preview_warnings"][0])
 
+    def test_large_replay_uses_bounded_compact_mode_without_exact_renders(self) -> None:
+        moments = [
+            {
+                "index": index,
+                "sequence": index + 1,
+                "event": {"event_id": f"event-{index}", "event_type": "ui.command"},
+                "event_type": "ui.command",
+                "operation": "command.play",
+                "snapshot": {"duration_frames": 0, "clips": [], "compositions": []},
+                "state_event": None,
+            }
+            for index in range(501)
+        ]
+        rendered: list[dict[str, object]] = []
+
+        def fake_scene(*args: object, **kwargs: object) -> int:
+            Path(args[3]).write_bytes(b"scene")
+            rendered.append(dict(kwargs))
+            return 1
+
+        def fake_run(command: list[str], _label: str, **_kwargs: object) -> None:
+            Path(command[-1]).write_bytes(b"replay")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with (
+                mock.patch("edit_path.process_video.shutil.which", return_value="ffmpeg"),
+                mock.patch("edit_path.process_video.select_video_encoder", return_value="libx264"),
+                mock.patch("edit_path.process_video._supports_filter", return_value=True),
+                mock.patch("edit_path.process_video.build_replay_steps", return_value=[]),
+                mock.patch("edit_path.process_video.build_replay_moments", return_value=moments),
+                mock.patch("edit_path.process_video._asset_lookup", return_value=({}, [])),
+                mock.patch("edit_path.process_video.render_event") as exact_render,
+                mock.patch("edit_path.process_video._render_scene", side_effect=fake_scene),
+                mock.patch("edit_path.process_video._run", side_effect=fake_run),
+                mock.patch(
+                    "edit_path.process_video.probe",
+                    return_value={"format": {"duration": "200.4"}, "streams": [{"codec_type": "video"}]},
+                ),
+            ):
+                output, report = render_edit_process(
+                    root,
+                    [],
+                    [],
+                    "a" * 64,
+                    root / "replay.mp4",
+                    root / "work",
+                )
+                output_exists = output.is_file()
+
+        self.assertTrue(output_exists)
+        exact_render.assert_not_called()
+        self.assertEqual(len(rendered), len(moments))
+        self.assertTrue(all(value["output_fps"] == 10 and value["fast"] is True for value in rendered))
+        self.assertEqual(report["render_mode"], "compact_semantic")
+        self.assertEqual(report["render_fps"], 10)
+        self.assertEqual(report["state_preview_quality"], "degraded")
+        self.assertIn("exact monitor previews were skipped", report["state_preview_warnings"][0])
+
     def test_replay_label_failure_falls_back_to_degraded_unlabeled_video(self) -> None:
         moment = {
             "index": 0,

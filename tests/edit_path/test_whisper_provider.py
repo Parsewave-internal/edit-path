@@ -19,6 +19,26 @@ class WhisperProviderTests(unittest.TestCase):
                 result = transcribe_with_whisper(audio, whisper_binary="whisper")
             self.assertEqual(result["text"], "I'm cutting this clip because it feels too slow.")
 
+    def test_diagnostics_are_written_to_the_recording_session(self):
+        with tempfile.TemporaryDirectory() as td:
+            session = Path(td) / "nested" / "session"
+            audio = session / "EDIT-PATH" / "reasoning" / "reasoning.flac"
+            audio.parent.mkdir(parents=True)
+            audio.touch()
+
+            def fake_run(command, **_):
+                out = Path(command[command.index("--output_dir") + 1]) / "reasoning.json"
+                out.write_text(json.dumps({"text": "literal words"}), encoding="utf-8")
+                return mock.Mock(returncode=0, stdout="", stderr="")
+
+            with (
+                mock.patch("edit_path.whisper_provider.subprocess.run", side_effect=fake_run),
+                mock.patch("edit_path.whisper_provider.log_event") as log_event,
+            ):
+                transcribe_with_whisper(audio, whisper_binary="whisper")
+
+            self.assertEqual(log_event.call_args_list[0].args[:2], (session, "transcription_start"))
+
     def test_provider_failure_is_actionable(self):
         with tempfile.TemporaryDirectory() as td:
             audio = Path(td) / "reasoning.flac"; audio.touch()

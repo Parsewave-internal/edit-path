@@ -18,7 +18,14 @@ from .diagnostics import log_event, log_exception
 def transcribe_with_whisper(audio_file: Path, *, model: str | None = None,
                             whisper_binary: str | None = None,
                             language: str | None = None) -> dict[str, Any]:
-    session = audio_file.parents[3] if len(audio_file.parents) >= 4 else audio_file.parent
+    # Recorder audio lives under <session>/EDIT-PATH/reasoning.  Derive the
+    # session from that marker instead of a fixed parent depth so diagnostic
+    # events stay beside the captured evidence even when the workspace is
+    # nested differently (or a test uses a shorter temporary path).
+    session = next(
+        (parent.parent for parent in audio_file.parents if parent.name == "EDIT-PATH"),
+        audio_file.parent,
+    )
     log_event(session, "transcription_start", audio_file=str(audio_file), model=model or os.environ.get("EDIT_PATH_WHISPER_MODEL", "turbo"))
     if not audio_file.is_file():
         log_event(session, "transcription_rejected", reason="audio_missing")

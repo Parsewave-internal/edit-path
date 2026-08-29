@@ -353,8 +353,15 @@ private:
     void startReasoning()
     {
         if (m_session.isEmpty() || m_audioCapture.state() != QProcess::NotRunning) return;
-        const QString output = QDir(m_session).filePath(QStringLiteral("EDIT-PATH/reasoning/audio-%1.flac").arg(++m_audioIndex, 3, 10, QLatin1Char('0')));
-        QDir().mkpath(QFileInfo(output).absolutePath());
+        const QString reasoningDir = QDir(m_session).filePath(QStringLiteral("EDIT-PATH/reasoning"));
+        QDir().mkpath(reasoningDir);
+        // The supervisor can be restarted while resuming a session.  Pick an
+        // unused name so a fresh in-memory counter never overwrites an earlier
+        // think-aloud segment.
+        QString output;
+        do {
+            output = QDir(reasoningDir).filePath(QStringLiteral("audio-%1.flac").arg(++m_audioIndex, 3, 10, QLatin1Char('0')));
+        } while (QFileInfo::exists(output));
         QString ffmpeg = QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("ffmpeg.exe"));
         if (!QFileInfo::exists(ffmpeg)) ffmpeg = QStandardPaths::findExecutable(QStringLiteral("ffmpeg"));
         if (ffmpeg.isEmpty()) { setStatus(QStringLiteral("FFmpeg was not found; reasoning audio was not started."), true); return; }

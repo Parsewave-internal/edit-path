@@ -30,8 +30,18 @@ class AudioCapture:
     def start_segment(self) -> Path | None:
         if self.process is not None and self.process.poll() is None:
             return None
-        self.index += 1
-        output = self.session / "EDIT-PATH" / "reasoning" / f"audio-{self.index:03d}.flac"
+        # A resumed GUI process starts with a fresh counter.  Never reuse an
+        # existing filename: doing so would silently destroy an earlier
+        # think-aloud segment from the same session.
+        reasoning_dir = self.session / "EDIT-PATH" / "reasoning"
+        reasoning_dir.mkdir(parents=True, exist_ok=True)
+        existing = {
+            int(path.stem.removeprefix("audio-"))
+            for path in reasoning_dir.glob("audio-*.flac")
+            if path.stem.removeprefix("audio-").isdigit()
+        }
+        self.index = max(self.index, max(existing, default=0)) + 1
+        output = reasoning_dir / f"audio-{self.index:03d}.flac"
         output.parent.mkdir(parents=True, exist_ok=True)
         try:
             self.process = self._popen(self.command(output), stdin=subprocess.DEVNULL,

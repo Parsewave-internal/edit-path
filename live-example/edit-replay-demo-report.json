@@ -1,0 +1,205 @@
+{
+  "schema": "edit-path/process-video@2",
+  "accepted": true,
+  "source": "raw_ui_commands_gestures_and_exact_states",
+  "training_view": {
+    "layout": "full_nonlinear_editor",
+    "panels": [
+      "project_bin",
+      "project_monitor",
+      "effects_properties",
+      "multitrack_timeline",
+      "transport",
+      "status"
+    ],
+    "interaction_feedback": [
+      "pointer_motion",
+      "keyboard_shortcuts",
+      "command_cards",
+      "selected_clips",
+      "semantic_apply_cards"
+    ]
+  },
+  "moments": 7,
+  "states": 2,
+  "accepted_edits": 0,
+  "event_counts": {
+    "session.end": 1,
+    "session.recovered": 0,
+    "session.start": 1,
+    "state.checkpoint": 1,
+    "state.diff": 1,
+    "ui.command": 1,
+    "ui.gesture": 1,
+    "ui.shortcut": 1
+  },
+  "duration_seconds": 11.4,
+  "audio": "omitted_training_visualization",
+  "text_overlays": "ass",
+  "text_overlay_count": 339,
+  "training_ui_quality": "passed",
+  "training_ui_warnings": [],
+  "state_preview_quality": "passed",
+  "state_preview_warnings": [],
+  "output": {
+    "sha256": "f755cce9db0887d9165e9b67df958e5370b19a231d17b9c90a2edbeed575caec",
+    "probe": {
+      "streams": [
+        {
+          "index": 0,
+          "codec_name": "h264",
+          "codec_long_name": "H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10",
+          "profile": "High",
+          "codec_type": "video",
+          "codec_tag_string": "avc1",
+          "codec_tag": "0x31637661",
+          "width": 1920,
+          "height": 1080,
+          "coded_width": 1920,
+          "coded_height": 1080,
+          "closed_captions": 0,
+          "film_grain": 0,
+          "has_b_frames": 2,
+          "sample_aspect_ratio": "1:1",
+          "display_aspect_ratio": "16:9",
+          "pix_fmt": "yuv420p",
+          "level": 40,
+          "chroma_location": "left",
+          "field_order": "progressive",
+          "refs": 1,
+          "is_avc": "true",
+          "nal_length_size": "4",
+          "id": "0x1",
+          "r_frame_rate": "30/1",
+          "avg_frame_rate": "30/1",
+          "time_base": "1/15360",
+          "start_pts": 0,
+          "start_time": "0.000000",
+          "duration_ts": 175104,
+          "duration": "11.400000",
+          "bit_rate": "161461",
+          "bits_per_raw_sample": "8",
+          "nb_frames": "342",
+          "extradata_size": 47,
+          "disposition": {
+            "default": 1,
+            "dub": 0,
+            "original": 0,
+            "comment": 0,
+            "lyrics": 0,
+            "karaoke": 0,
+            "forced": 0,
+            "hearing_impaired": 0,
+            "visual_impaired": 0,
+            "clean_effects": 0,
+            "attached_pic": 0,
+            "timed_thumbnails": 0,
+            "non_diegetic": 0,
+            "captions": 0,
+            "descriptions": 0,
+            "metadata": 0,
+            "dependent": 0,
+            "still_image": 0
+          },
+          "tags": {
+            "language": "und",
+            "handler_name": "VideoHandler",
+            "vendor_id": "[0][0][0][0]",
+            "encoder": "Lavc61.3.100 libx264"
+          }
+        }
+      ],
+      "format": {
+        "filename": "/home/tripl/edit-path/live-example/edit-replay-demo.mp4",
+        "nb_streams": 1,
+        "nb_programs": 0,
+        "nb_stream_groups": 0,
+        "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+        "format_long_name": "QuickTime / MOV",
+        "start_time": "0.000000",
+        "duration": "11.400000",
+        "size": "234845",
+        "bit_rate": "164803",
+        "probe_score": 100,
+        "tags": {
+          "major_brand": "isom",
+          "minor_version": "512",
+          "compatible_brands": "isomiso2avc1mp41",
+          "encoder": "Lavf61.1.100"
+        }
+      }
+    }
+  },
+  "events": [
+    {
+      "moment": 1,
+      "sequence": 1,
+      "event_id": "start",
+      "event_type": "session.start",
+      "operation": "session.start",
+      "duration_seconds": 2.0,
+      "state_sha256": null,
+      "monitor": "semantic_ui_only"
+    },
+    {
+      "moment": 2,
+      "sequence": 2,
+      "event_id": "cp",
+      "event_type": "state.checkpoint",
+      "operation": "timeline.checkpoint",
+      "duration_seconds": 1.35,
+      "state_sha256": null,
+      "monitor": "semantic_ui_only"
+    },
+    {
+      "moment": 3,
+      "sequence": 3,
+      "event_id": "drag",
+      "event_type": "ui.gesture",
+      "operation": "pointer.drag",
+      "duration_seconds": 1.5,
+      "state_sha256": null,
+      "monitor": "semantic_ui_only"
+    },
+    {
+      "moment": 4,
+      "sequence": 4,
+      "event_id": "diff",
+      "event_type": "state.diff",
+      "operation": "timeline.change",
+      "duration_seconds": 1.8,
+      "state_sha256": null,
+      "monitor": "semantic_ui_only"
+    },
+    {
+      "moment": 5,
+      "sequence": 5,
+      "event_id": "shortcut",
+      "event_type": "ui.shortcut",
+      "operation": "history.undo",
+      "duration_seconds": 1.35,
+      "state_sha256": null,
+      "monitor": "semantic_ui_only"
+    },
+    {
+      "moment": 6,
+      "sequence": 6,
+      "event_id": "command",
+      "event_type": "ui.command",
+      "operation": "command.render",
+      "duration_seconds": 1.35,
+      "state_sha256": null,
+      "monitor": "semantic_ui_only"
+    },
+    {
+      "moment": 7,
+      "sequence": 7,
+      "event_id": "end",
+      "event_type": "session.end",
+      "operation": "session.end",
+      "duration_seconds": 2.0,
+      "state_sha256": null,
+      "monitor": "semantic_ui_only"
+    }
+  ]
+}

@@ -617,6 +617,45 @@ class AtomicReplaceTests(unittest.TestCase):
 
 
 class PublicationTests(unittest.TestCase):
+    def test_reasoning_evidence_is_published_with_the_sample(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "session"
+            work = Path(temporary) / "work"
+            output = Path(temporary) / "dataset" / "accepted"
+            reasoning = root / "EDIT-PATH" / "reasoning"
+            reasoning.mkdir(parents=True)
+            work.mkdir(parents=True)
+            (reasoning / "audio-001.flac").write_bytes(b"flac")
+            (reasoning / "transcript-audio-001.json").write_text('{"text":"spoken"}\n', encoding="utf-8")
+            (reasoning / "captions.vtt").write_text("WEBVTT\n", encoding="utf-8")
+            (reasoning / "reasoning.json").write_text('{"segments":[]}\n', encoding="utf-8")
+            manifest = {"schema": "video-path/assets@2", "assets": []}
+            write_json(root / "asset-manifest.json", manifest)
+            project = work / "reconstructed.kdenlive"
+            project.write_text("<mlt/>", encoding="utf-8")
+            final = work / "final.mp4"
+            final.write_bytes(b"video")
+            report = work / "report.json"
+            write_json(report, {"quality_status": "passed", "quality_warnings": []})
+            raw = root / "trajectory.jsonl"
+            events = [event(1, "session.start"), event(2, "session.end", state_sidecars_complete=True)]
+            write_jsonl(raw, events)
+
+            bundle = publish_bundle(
+                root,
+                output,
+                "session-test",
+                {"final_video": final, "project": project, "report": report, "raw_trajectory": raw, "manifest_path": root / "asset-manifest.json"},
+                events,
+                [],
+                manifest,
+            )
+
+            self.assertEqual((bundle / "reasoning/audio-001.flac").read_bytes(), b"flac")
+            self.assertIn("spoken", (bundle / "reasoning/transcript-audio-001.json").read_text(encoding="utf-8"))
+            self.assertTrue((bundle / "reasoning/captions.vtt").is_file())
+            self.assertTrue((bundle / "reasoning/reasoning.json").is_file())
+
     def test_unmanifested_reconstruction_asset_falls_back_to_editor_project(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / "session"

@@ -63,7 +63,17 @@ def operation_name(diff: dict) -> str:
         if fields <= {"timeline_start_frame", "track_native_id"}: return "clip.move"
         if "speed" in fields: return "clip.set_speed"
         if fields & {"source_start_frame", "source_end_frame", "duration_frames"}: return "clip.trim_or_split"
-        if fields == {"effects"}: return "effect.change"
+        if fields == {"effects"}:
+            before = [e for c in updated for e in c.get("before", {}).get("effects", [])]
+            after = [e for c in updated for e in c.get("after", {}).get("effects", [])]
+            if len(after) > len(before): return "effect.add"
+            if len(after) < len(before): return "effect.remove"
+            def keyframes(values):
+                return [(e.get("id") or e.get("asset_id"), p.get("name"), p.get("value"))
+                        for e in values if isinstance(e, dict) for p in e.get("parameters", []) if isinstance(p, dict) and ("=" in str(p.get("value", "")) or "keyframe" in str(p.get("name", "")).lower())]
+            bk, ak = keyframes(before), keyframes(after)
+            if bk != ak: return "keyframe.value.change"
+            return "effect.parameter.change"
     if entities == {"track"}:
         if kinds == {"added"}: return "track.create"
         if "removed" in kinds: return "track.delete_or_reorder"

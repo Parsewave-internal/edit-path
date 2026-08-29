@@ -109,6 +109,10 @@ class MvpTests(unittest.TestCase):
         self.assertIn("ExecutionPolicy bypass", launcher)
         build = (root / "packaging/windows/build-editpath.ps1").read_text(encoding="utf-8")
         self.assertIn('install-dependencies.bat', build)
+        self.assertIn('"effect.parameter.change"', build)
+        self.assertIn('"keyframe.value.change"', build)
+        self.assertIn('"command_registered"', build)
+        self.assertIn('"generated."', build)
         whisper = (root / "edit_path/whisper_provider.py").read_text(encoding="utf-8")
         self.assertIn('sys.executable, "-m", "whisper"', whisper)
 

@@ -1038,7 +1038,13 @@ void VideoPathRecorder::captureTimelineChange(const QString &label, const QStrin
         if (entity != QLatin1String("clip") && entity != QLatin1String("track") && entity != QLatin1String("master_effect")) continue;
         const QJsonObject beforeClip = change.value(QStringLiteral("before")).toObject();
         const QJsonObject afterClip = change.value(QStringLiteral("after")).toObject();
-        if (beforeClip.value(QStringLiteral("effects")) != afterClip.value(QStringLiteral("effects"))) {
+        // Added/removed entities may omit the effects property while the
+        // canonical snapshot represents an empty stack as []. Normalize both
+        // sides before comparing so a plain clip insertion is not mislabeled
+        // as an effect or keyframe operation.
+        const QJsonArray beforeEffects = beforeClip.value(QStringLiteral("effects")).toArray();
+        const QJsonArray afterEffects = afterClip.value(QStringLiteral("effects")).toArray();
+        if (beforeEffects != afterEffects) {
             effectChange = true;
             effectOperation = effectOperationName(beforeClip, afterClip);
             break;

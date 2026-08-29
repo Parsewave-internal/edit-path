@@ -345,7 +345,14 @@ $editPathTextOdd = if ($editPathBytes.Length -gt 1) {
 foreach ($featureMarker in @(
     "Configure microphone",
     "Test microphone and play it back",
-    "Stop Reasoning (recording"
+    "Stop Reasoning (recording",
+    # These strings are emitted only by the post-taxonomy recorder. Checking
+    # them in the PE prevents a cached pre-PR8 Kdenlive binary from looking
+    # current merely because it has the same recorder button labels.
+    "effect.parameter.change",
+    "keyframe.value.change",
+    "command_registered",
+    "generated."
 )) {
     if (-not $editPathTextEven.Contains($featureMarker) -and -not $editPathTextOdd.Contains($featureMarker)) {
         Stop-Build "the packaged EditPath.exe is stale; required recorder UI marker is missing: $featureMarker"
